@@ -126,6 +126,7 @@ import {
   updateAdminBuiltinPipelineConfig,
 } from "./admin-builtin-pipelines.mjs";
 import { readAdminStorageConfig, writeAdminStorageConfig } from "./admin-storage-config.mjs";
+import { ensureReleaseProjectsFileSeeded, readAdminReleaseProjectsConfig, writeAdminReleaseProjectsConfig } from "./admin-release-projects.mjs";
 import { readAdminRunDetail } from "./admin-run-detail.mjs";
 import {
   deleteWorkspaceCollaborationById,
@@ -155,6 +156,7 @@ import {
 } from "./prd-workflow-server.mjs";
 import { handlePrdWorkflowRoutes } from "./prd-workflow-routes.mjs";
 import { json, readBody } from "./http-util.mjs";
+import { createReleaseQueued, listReleases, PROJECTS as RELEASE_PROJECTS, PLATFORMS as RELEASE_PLATFORMS } from "./release-registry.mjs";
 
 // 从 ui-server 拆出去的 Workspace 子系统；路由仍在下面的 startUiServer 里
 import {
@@ -2300,6 +2302,14 @@ export function startUiServer({
     for (const item of summary.needsDecision) log.warn(`[storage-migration] needs decision: ${item}`);
     for (const item of summary.failed) log.warn(`[storage-migration] failed: ${item}`);
   }
+  // 用户需求点: 线上首次启动自动种子 release-projects.json；已有文件不覆盖。
+  try {
+    const seeded = ensureReleaseProjectsFileSeeded(process.env);
+    if (seeded.created) log.info(`[release-projects] seeded ${seeded.path}`);
+    else if (seeded.path) log.info(`[release-projects] ${seeded.reason}: ${seeded.path}`);
+  } catch (error) {
+    log.warn(`[release-projects] seed failed: ${error?.message || String(error)}`);
+  }
   // Repository discovery is derived data. Reconcile it off the request path so a missing or stale
   // index delays startup work, not the first person opening the repository page.
   markRepositoryIndexDirty(root);
@@ -3055,6 +3065,44 @@ export function startUiServer({
       return;
     }
 
+    // 用户需求点: 发版页面必须使用后端持久化数据，并支持固定项目/平台筛选和新建版本。
+    if (url.pathname === "/api/releases" || url.pathname === "/api/release/projects") {
+      if (req.method === "GET") {
+        if (url.pathname === "/api/release/projects") {
+          json(res, 200, { projects: RELEASE_PROJECTS, platforms: RELEASE_PLATFORMS });
+          return;
+        }
+        json(res, 200, {
+          releases: listReleases({
+            project: url.searchParams.get("project"),
+            platform: url.searchParams.get("platform"),
+            query: url.searchParams.get("query"),
+            userId: userCtx.userId,
+            isAdmin: Boolean(authUser?.isAdmin),
+          }),
+        });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/releases") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        const result = await createReleaseQueued({ ...(payload || {}), ownerId: userCtx.userId });
+        if (result.error) {
+          json(res, result.status || 400, { error: result.error });
+          return;
+        }
+        json(res, 201, { ok: true, release: result.release });
+        return;
+      }
+      json(res, 405, { error: "Method not allowed" });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/teams/me") {
       const team = getTeamForUser(userCtx.userId);
       json(res, 200, { team: teamSummaryWithUsers(team) });
@@ -3188,6 +3236,33 @@ export function startUiServer({
         try {
           const config = writeAdminStorageConfig(payload?.config || payload || {});
           clearSkillRegistryCache();
+          json(res, 200, { ok: true, config });
+        } catch (e) {
+          json(res, 400, { error: (e && e.message) || String(e) });
+        }
+        return;
+      }
+    }
+
+    if (url.pathname === "/api/admin/release-projects") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      if (req.method === "GET") {
+        json(res, 200, { config: readAdminReleaseProjectsConfig() });
+        return;
+      }
+      if (req.method === "POST") {
+        let payload;
+        try {
+          payload = JSON.parse(await readBody(req));
+        } catch {
+          json(res, 400, { error: "Invalid JSON body" });
+          return;
+        }
+        try {
+          const config = writeAdminReleaseProjectsConfig(payload?.config || payload || {});
           json(res, 200, { ok: true, config });
         } catch (e) {
           json(res, 400, { error: (e && e.message) || String(e) });

@@ -296,6 +296,15 @@ export default function SettingsPage({ authUser }) {
   const [storageLoading, setStorageLoading] = useState(false);
   const [storageSaving, setStorageSaving] = useState(false);
   const [storageErr, setStorageErr] = useState("");
+  const [releaseProjectsConfig, setReleaseProjectsConfig] = useState(null);
+  const [releaseProjectsDraft, setReleaseProjectsDraft] = useState([]);
+  const [releaseOperatorsDraft, setReleaseOperatorsDraft] = useState({
+    likeeAndroid: "",
+    likeeIos: "",
+  });
+  const [releaseProjectsLoading, setReleaseProjectsLoading] = useState(false);
+  const [releaseProjectsSaving, setReleaseProjectsSaving] = useState(false);
+  const [releaseProjectsErr, setReleaseProjectsErr] = useState("");
   /** 与服务器（或首次加载的本地回退）已同步的 Provider，用于防抖保存时去重 */
   const lastSyncedOpencode = useRef(/** @type {string | null} */ (null));
   const opencodeConfigReady = useRef(false);
@@ -461,6 +470,79 @@ export default function SettingsPage({ authUser }) {
     }
   }, [authUser?.isAdmin, dataRootDraft, skillsRootDraft]);
 
+  const applyReleaseProjectsConfig = useCallback((config) => {
+    const document = config?.document && typeof config.document === "object" ? config.document : {};
+    const projects = Array.isArray(document.projects) ? document.projects : [];
+    setReleaseProjectsConfig(config || null);
+    setReleaseProjectsDraft(projects.map((entry, index) => ({
+      key: `${entry?.id || "project"}-${index}`,
+      id: String(entry?.id || ""),
+      businessLine: String(entry?.businessLine || "likee"),
+      platform: String(entry?.platform || "android"),
+      workspaceRoot: String(entry?.workspaceRoot || ""),
+      skillRootsText: Array.isArray(entry?.skillRoots) ? entry.skillRoots.join("\n") : "",
+    })));
+    const likee = document.operators?.likee || {};
+    setReleaseOperatorsDraft({
+      likeeAndroid: Array.isArray(likee.android) ? likee.android.join(", ") : "",
+      likeeIos: Array.isArray(likee.ios) ? likee.ios.join(", ") : "",
+    });
+  }, []);
+
+  const loadReleaseProjectsConfig = useCallback(async () => {
+    if (!authUser?.isAdmin) return;
+    setReleaseProjectsLoading(true);
+    setReleaseProjectsErr("");
+    try {
+      const r = await fetch("/api/admin/release-projects");
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      applyReleaseProjectsConfig(j.config && typeof j.config === "object" ? j.config : {});
+    } catch (e) {
+      setReleaseProjectsErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setReleaseProjectsLoading(false);
+    }
+  }, [applyReleaseProjectsConfig, authUser?.isAdmin]);
+
+  const saveReleaseProjectsConfig = useCallback(async () => {
+    if (!authUser?.isAdmin) return;
+    setReleaseProjectsSaving(true);
+    setReleaseProjectsErr("");
+    try {
+      const splitUsers = (value) => String(value || "").split(/[,，\s]+/).map((item) => item.trim()).filter(Boolean);
+      const document = {
+        projects: releaseProjectsDraft.map((entry) => ({
+          id: entry.id.trim(),
+          businessLine: entry.businessLine.trim() || "likee",
+          platform: entry.platform.trim() || "android",
+          workspaceRoot: entry.workspaceRoot.trim(),
+          skillRoots: String(entry.skillRootsText || "").split(/\n+/).map((item) => item.trim()).filter(Boolean),
+        })),
+        operators: {
+          likee: {
+            android: splitUsers(releaseOperatorsDraft.likeeAndroid),
+            ios: splitUsers(releaseOperatorsDraft.likeeIos),
+          },
+          bigolive: { android: [], ios: [] },
+          hello: { android: [], ios: [] },
+        },
+      };
+      const r = await fetch("/api/admin/release-projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ document }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(typeof j.error === "string" ? j.error : "HTTP " + r.status);
+      applyReleaseProjectsConfig(j.config && typeof j.config === "object" ? j.config : {});
+    } catch (e) {
+      setReleaseProjectsErr(String(/** @type {{ message?: string }} */ (e).message || e));
+    } finally {
+      setReleaseProjectsSaving(false);
+    }
+  }, [applyReleaseProjectsConfig, authUser?.isAdmin, releaseOperatorsDraft, releaseProjectsDraft]);
+
   const saveUserEnv = useCallback(async (rows) => {
     const normalized = parseEnvRows(rows);
     const personalRows = normalized.filter((row) => row.scope !== "global");
@@ -561,6 +643,7 @@ export default function SettingsPage({ authUser }) {
       void loadUserAllowlist();
       void loadAuthUsers();
       void loadStorageConfig();
+      void loadReleaseProjectsConfig();
       void (async () => {
         try {
           const r = await fetch("/api/agentflow-config");
@@ -589,7 +672,7 @@ export default function SettingsPage({ authUser }) {
       setWorkspaceRoot("");
       opencodeConfigReady.current = false;
     }
-  }, [authUser?.isAdmin, loadAuthUsers, loadContext, loadLists, loadStorageConfig, loadUserAllowlist, loadUserEnv]);
+  }, [authUser?.isAdmin, loadAuthUsers, loadContext, loadLists, loadReleaseProjectsConfig, loadStorageConfig, loadUserAllowlist, loadUserEnv]);
 
   useEffect(() => {
     if (!envConfigReady.current) return;
@@ -1594,6 +1677,145 @@ export default function SettingsPage({ authUser }) {
                   <p className="af-set-hint">
                     SkillHub 新安装、更新和卸载都作用于 Skills Root；普通用户只通过 Workspace 的 Load Skills 使用。
                     {dataRootConfig?.skillsEnvLocked ? " 当前设置了 AGENTFLOW_SKILLS_ROOT，需要改环境变量才能生效。" : ""}
+                  </p>
+                </section>
+              ) : null}
+
+              {authUser?.isAdmin ? (
+                <section className="af-set-card af-set-card--wide af-set-card--low">
+                  <div className="af-set-env-head">
+                    <div className="af-set-card-head">
+                      <div className="af-set-env-icon-wrap">
+                        <span className="material-symbols-outlined af-set-icon--primary">rocket_launch</span>
+                      </div>
+                      <div>
+                        <h2 className="af-set-h2">发版工程</h2>
+                        <p className="af-set-card-subtitle">配置 Likee Android / iOS 产品工程路径、release-skills 根目录与写权限名单。保存到 Data Root 下的 release-projects.json。</p>
+                      </div>
+                    </div>
+                    <span className={"af-set-badge" + (releaseProjectsConfig?.envLocked ? " af-set-badge--err" : " af-set-badge--ok")}>
+                      {releaseProjectsConfig?.envLocked ? "Env locked" : "Configurable"}
+                    </span>
+                    <button
+                      type="button"
+                      className="af-set-btn-outline af-set-btn-outline--compact"
+                      onClick={() => void loadReleaseProjectsConfig()}
+                      disabled={releaseProjectsLoading || releaseProjectsSaving}
+                    >
+                      {releaseProjectsLoading ? "刷新中..." : "刷新"}
+                    </button>
+                    <button
+                      type="button"
+                      className="af-set-btn-add af-set-btn-outline--compact"
+                      onClick={() => void saveReleaseProjectsConfig()}
+                      disabled={releaseProjectsSaving || Boolean(releaseProjectsConfig?.envLocked)}
+                    >
+                      {releaseProjectsSaving ? "保存中..." : "保存"}
+                    </button>
+                  </div>
+                  {releaseProjectsErr ? <p className="af-err af-set-hint af-set-hint--inline">{releaseProjectsErr}</p> : null}
+                  <p className="af-set-hint">
+                    配置文件：<code>{releaseProjectsConfig?.configPath || "-"}</code>
+                    {releaseProjectsConfig?.source ? <>；来源：<code>{releaseProjectsConfig.source}</code></> : null}
+                    {releaseProjectsConfig?.envLocked ? "。当前被 AGENTFLOW_RELEASE_PROJECTS_JSON / _FILE 锁定，需先清空环境变量才能用本页保存。" : ""}
+                  </p>
+                  <div className="af-set-account-list">
+                    {releaseProjectsDraft.map((project, index) => (
+                      <div key={project.key} className="af-set-account-row is-editing" style={{ flexDirection: "column", alignItems: "stretch", gap: "0.5rem" }}>
+                        <div className="af-set-account-main" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                          <input
+                            className="af-set-input af-set-input--sm af-set-input--mono"
+                            value={project.id}
+                            disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                            onChange={(e) => setReleaseProjectsDraft((rows) => rows.map((row, i) => (i === index ? { ...row, id: e.target.value } : row)))}
+                            placeholder="likee-android-prod"
+                            aria-label="工程 id"
+                          />
+                          <input
+                            className="af-set-input af-set-input--sm"
+                            value={project.businessLine}
+                            disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                            onChange={(e) => setReleaseProjectsDraft((rows) => rows.map((row, i) => (i === index ? { ...row, businessLine: e.target.value } : row)))}
+                            placeholder="likee"
+                            aria-label="业务线"
+                          />
+                          <input
+                            className="af-set-input af-set-input--sm"
+                            value={project.platform}
+                            disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                            onChange={(e) => setReleaseProjectsDraft((rows) => rows.map((row, i) => (i === index ? { ...row, platform: e.target.value } : row)))}
+                            placeholder="android / ios"
+                            aria-label="平台"
+                          />
+                          <button
+                            type="button"
+                            className="af-set-btn-outline af-set-btn-outline--compact"
+                            disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                            onClick={() => setReleaseProjectsDraft((rows) => rows.filter((_, i) => i !== index))}
+                          >
+                            删除
+                          </button>
+                        </div>
+                        <label className="af-set-label-sm">产品工程路径（workspaceRoot）</label>
+                        <input
+                          className="af-set-input af-set-input--mono"
+                          value={project.workspaceRoot}
+                          disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                          onChange={(e) => setReleaseProjectsDraft((rows) => rows.map((row, i) => (i === index ? { ...row, workspaceRoot: e.target.value } : row)))}
+                          placeholder="/data1/services/mengmai/workspace/repos/likee_android"
+                        />
+                        <label className="af-set-label-sm">Skill 根目录（每行一个 skillRoots）</label>
+                        <textarea
+                          className="af-set-input af-set-input--mono"
+                          rows={2}
+                          value={project.skillRootsText}
+                          disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                          onChange={(e) => setReleaseProjectsDraft((rows) => rows.map((row, i) => (i === index ? { ...row, skillRootsText: e.target.value } : row)))}
+                          placeholder="/data1/services/mengmai/agentflow/workspaces/repos/ws_xxx"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <button
+                    type="button"
+                    className="af-set-btn-outline af-set-btn-outline--compact"
+                    style={{ marginTop: "0.75rem" }}
+                    disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                    onClick={() => setReleaseProjectsDraft((rows) => [...rows, {
+                      key: `project-${Date.now()}`,
+                      id: "",
+                      businessLine: "likee",
+                      platform: "android",
+                      workspaceRoot: "",
+                      skillRootsText: "",
+                    }])}
+                  >
+                    添加工程
+                  </button>
+                  <label className="af-set-label-sm" htmlFor="af-release-ops-android" style={{ marginTop: "1rem" }}>
+                    Likee Android 写权限（OA 用户名，逗号分隔）
+                  </label>
+                  <input
+                    id="af-release-ops-android"
+                    className="af-set-input"
+                    value={releaseOperatorsDraft.likeeAndroid}
+                    disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                    onChange={(e) => setReleaseOperatorsDraft((prev) => ({ ...prev, likeeAndroid: e.target.value }))}
+                    placeholder="duanfengyuan, suruijia, wangfang"
+                  />
+                  <label className="af-set-label-sm" htmlFor="af-release-ops-ios">
+                    Likee iOS 写权限（OA 用户名，逗号分隔）
+                  </label>
+                  <input
+                    id="af-release-ops-ios"
+                    className="af-set-input"
+                    value={releaseOperatorsDraft.likeeIos}
+                    disabled={Boolean(releaseProjectsConfig?.envLocked) || releaseProjectsSaving}
+                    onChange={(e) => setReleaseOperatorsDraft((prev) => ({ ...prev, likeeIos: e.target.value }))}
+                    placeholder="liangjiajian, yangcaimu"
+                  />
+                  <p className="af-set-hint">
+                    同一用户名只能归属一个业务线×平台。深链使用工程 id，例如 workspaceId=likee-android-prod。
                   </p>
                 </section>
               ) : null}

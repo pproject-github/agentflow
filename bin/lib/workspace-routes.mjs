@@ -73,11 +73,17 @@ import { mergeWorkspaceGraphs, workspaceDesignRevision, workspaceRuntimeRevision
 import { DEFAULT_WORKSPACE_PREVIEW_TTL_MS, createWorkspacePreviewId, normalizeWorkspacePreviewTtlMs, readWorkspacePreviewMetadata, workspaceSharedPreviewFlowDir, writeWorkspacePreviewMetadata } from "./workspace-preview.mjs";
 import { DEFAULT_WORKSPACE_DRAFT_TTL_MS, createWorkspaceDraftId, normalizeWorkspaceDraftTtlMs, readWorkspaceDraftMetadata, workspaceDraftFlowDir, writeWorkspaceDraftMetadata } from "./workspace-draft.mjs";
 import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession, listWorkspaceRunLogs, readWorkspaceRunLogEvents } from "./workspace-run-logs.mjs";
+import { createWorkspaceRunController, resolveWorkspaceRunTimeoutMs } from "./workspace-run-controller.mjs";
 import { readWorkspaceRunState, readWorkspaceRunStateEvents, readWorkspaceRunStateHistory } from "./workspace-run-state.mjs";
 import { listWorkspaceInterrupts, readWorkspaceInterrupt } from "./workspace-interrupt.mjs";
 import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, readWorkspaceRunManifest, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
+import { discoverReleaseActions, discoverReleaseCompositeActions, filterReleaseActionsForWorkflow, normalizeReleaseAgentResult, releaseAgentResultFromWorkspaceRun, releaseContextKey } from "./release-runtime.mjs";
+import { buildCompositeReleaseRunGraph, buildReleaseRunGraph, bootstrapReleasePrepareContext, confirmationFingerprint, previewReleaseAction, releaseExecutionInputs, releaseFailureFromResult, releasePreviousResultForAgent, releaseTimingFromResult, resolveReleaseApprovalOperator, stopReleaseAction } from "./release-runtime-executor.mjs";
+import { filterDismissedReleasePending, isCustomReleasePendingItem, readReleaseState, reconcileReleaseState, releasePendingDismissalKey, writeReleaseState } from "./release-runtime-store.mjs";
+import { releaseSkillRoots, resolveReleaseWorkspace, assertReleaseSkillRootsConfigured, assertReleaseWriteAccess, buildReleaseAccessPayload } from "../../shared/release-deployment-config.js";
+import { readReleaseDeploymentConfigWithDataRoot } from "./admin-release-projects.mjs";
 import busboy from "busboy";
 import crypto from "crypto";
 import fs from "fs";
@@ -1153,6 +1159,197 @@ function paginateMarketplaceResources(items, url, defaultLimit = 24) {
   };
 }
 
+function releaseRuntimeRoots(workspacePath = "", deploymentConfig = {}, project = null) {
+  const checked = assertReleaseSkillRootsConfigured(deploymentConfig, project, workspacePath);
+  return checked.ok ? checked.roots : [];
+}
+
+function releaseContextFromUrl(url) {
+  return {
+    businessLine: String(url.searchParams.get("businessLine") || "likee").trim().toLowerCase() || "likee",
+    platform: /ios|iphone/i.test(String(url.searchParams.get("platform") || "")) ? "ios" : "android",
+    version: String(url.searchParams.get("version") || "1.0.0").trim() || "1.0.0",
+    batch: String(url.searchParams.get("batch") || "initial").trim().toLowerCase() || "initial",
+  };
+}
+
+function releaseWorkspaceIdentity(url, payload = {}) {
+  return String(payload.workspaceId || url.searchParams.get("workspaceId") || "release-workspace").trim() || "release-workspace";
+}
+
+function releaseWriteGate(authUser, context = {}) {
+  const deployment = readReleaseDeploymentConfigWithDataRoot();
+  const username = authUser?.username || authUser?.userId || "";
+  return assertReleaseWriteAccess(username, context, deployment);
+}
+
+function releaseAccessForRequest(authUser, context = {}) {
+  const deployment = readReleaseDeploymentConfigWithDataRoot();
+  const username = authUser?.username || authUser?.userId || "";
+  return buildReleaseAccessPayload(username, context, deployment);
+}
+
+/**
+ * 用户需求点: 发版工程和 Skill 根目录必须由服务端统一解析；请求中的 workspacePath 不能绕过业务线+平台 allowlist。
+ */
+function resolveReleaseRequestWorkspace(url, payload = {}, root, userWorkspaces = []) {
+  const deployment = readReleaseDeploymentConfigWithDataRoot();
+  const localProjects = !deployment.production && !deployment.projects.length
+    ? (Array.isArray(userWorkspaces) ? userWorkspaces.map((entry) => ({
+      id: String(entry?.id || entry?.path || "").trim(),
+      businessLine: String(entry?.businessLine || entry?.business || "").trim().toLowerCase(),
+      platform: /ios|iphone/i.test(String(entry?.platform || "")) ? "ios" : String(entry?.platform || "").trim().toLowerCase(),
+      workspaceRoot: entry?.path || entry?.workspaceRoot || entry?.repositoryRoot || "",
+    })).filter((entry) => entry.id && entry.businessLine && entry.platform && entry.workspaceRoot) : [])
+    : [];
+  const effectiveDeployment = localProjects.length ? { ...deployment, projects: localProjects } : deployment;
+  const context = releaseRequestContext(url, payload);
+  const workspaceId = releaseWorkspaceIdentity(url, payload);
+  const requestedPath = String(payload.workspacePath || url.searchParams.get("workspacePath") || "").trim();
+  const resolution = resolveReleaseWorkspace(effectiveDeployment, context, workspaceId === "release-workspace" ? "" : workspaceId, requestedPath, root);
+  if (!resolution.ok) return { ...resolution, context, workspaceId };
+  // 用户需求点: 测试模式可用显式 Skill 根目录驱动临时服务，即使测试用的 server fallback workspace 尚未落盘也不能在 allowlist 阶段误报不可用。
+  const isServerFallback = !resolution.project && deployment.allowServerWorkspace && path.resolve(resolution.workspaceRoot) === path.resolve(root);
+  if ((!fs.existsSync(resolution.workspaceRoot) || !fs.statSync(resolution.workspaceRoot).isDirectory()) && !isServerFallback) {
+    return { ok: false, status: 503, code: "RELEASE_WORKSPACE_UNAVAILABLE", error: "配置的发版工程目录不存在或不可读", context, workspaceId };
+  }
+  const roots = releaseRuntimeRoots(resolution.workspaceRoot, effectiveDeployment, resolution.project);
+  const skillCheck = assertReleaseSkillRootsConfigured(effectiveDeployment, resolution.project, resolution.workspaceRoot);
+  if (!skillCheck.ok) {
+    return { ...skillCheck, context, workspaceId };
+  }
+  const availableRoots = skillCheck.roots.filter((entry) => {
+    try { return fs.existsSync(entry) && fs.statSync(entry).isDirectory(); } catch { return false; }
+  });
+  if (!availableRoots.length) {
+    return { ok: false, status: 503, code: "RELEASE_SKILLS_NOT_CONFIGURED", error: "配置的 release-skills 根目录不存在或不可读", context, workspaceId };
+  }
+  return {
+    ok: true,
+    context,
+    workspaceId: resolution.workspaceId || workspaceId,
+    workspacePath: resolution.workspaceRoot,
+    project: resolution.project,
+    roots: availableRoots,
+  };
+}
+
+// 用户需求点: 发版页需要按业务线+平台选择服务端配置的项目，但不能把 Skill 根目录等内部配置泄露给浏览器。
+function releaseConfiguredWorkspaceEntries() {
+  const deployment = readReleaseDeploymentConfigWithDataRoot();
+  return deployment.projects.map((entry) => ({
+    id: entry.id,
+    label: `${entry.businessLine} ${entry.platform} 发版工程`,
+    businessLine: entry.businessLine,
+    platform: entry.platform,
+    builtin: true,
+    release: true,
+    enabled: true,
+  }));
+}
+
+const activeReleaseRuns = new Map();
+
+function releasePendingNodeId(action, payload = {}, existing = {}) {
+  const itemId = String(payload.itemId || existing.id || "").trim();
+  const existingNodeId = String(existing.nodeId || "").trim();
+  if (itemId.startsWith("custom-")) return itemId;
+  if (existingNodeId.startsWith("custom-")) return existingNodeId;
+  if (existingNodeId) return existingNodeId;
+  return String(action?.id || itemId || "").trim();
+}
+
+/** 自定义实例（含助手触发）必须带回 catalog 预置 id，否则页面 knownIds 过滤会丢掉时间线条目。 */
+function releaseSourcePresetId(action, payload = {}, existing = {}) {
+  const existingPreset = String(existing.sourcePresetId || "").trim();
+  if (existingPreset) return existingPreset;
+  const itemId = String(payload.itemId || existing.id || "").trim();
+  if (itemId.startsWith("custom-")) return String(action?.id || "").trim();
+  return String(action?.id || "").trim();
+}
+
+function readReleaseStateForRequest(stateRoot, context, workspaceId, workspacePath, skillRoots = []) {
+  const state = readReleaseState(stateRoot, context, workspaceId, workspacePath);
+  const activeRunIds = [...activeReleaseRuns.entries()]
+    .filter(([, run]) => run?.workspaceId === workspaceId && releaseContextKey(run.context || {}) === releaseContextKey(context))
+    .map(([runId]) => runId);
+  const reconciled = reconcileReleaseState(workspacePath || stateRoot, context, workspaceId, state, { activeRunIds });
+  const bootstrapped = bootstrapReleasePrepareContext(reconciled.state, context, skillRoots);
+  const finalState = bootstrapped.changed ? bootstrapped.state : reconciled.state;
+  const changed = reconciled.changed || bootstrapped.changed;
+  if (changed) writeReleaseState(stateRoot, context, workspaceId, finalState);
+  return finalState;
+}
+
+// 用户需求点: 发版节点不能长时间无响应；Agent 卡住时必须在有限时间内停止并把失败原因返回页面。
+// 多语言下载等节点含 archive 轮询（可达 20min）+ apply/commit/MR，测试模式默认放宽至 120min。
+const releaseRunTimeoutFallbackMs = process.env.AGENTFLOW_RELEASE_TEST_MODE === "1" ? 120 * 60 * 1000 : 40 * 60 * 1000;
+const releaseRunTimeoutMs = resolveWorkspaceRunTimeoutMs(process.env.AGENTFLOW_RELEASE_RUN_TIMEOUT_MS, releaseRunTimeoutFallbackMs);
+
+function releaseCompositeDetails(action, result, options = {}) {
+  if (action?.kind !== "composite") return undefined;
+  if (!Array.isArray(action.actions)) {
+    const normalized = releaseAgentResultFromWorkspaceRun(result, { repositoryRoot: options.repositoryRoot || "" })
+      || normalizeReleaseAgentResult({ status: "failed", summary: "发版 Agent 未返回结构化结果" });
+    return { steps: normalized.steps, records: normalized.records, artifacts: normalized.artifacts, summary: normalized.summary, status: normalized.status, ...(normalized.waiting ? { waiting: normalized.waiting } : {}) };
+  }
+  const runResult = result && typeof result === "object" ? result : {};
+  const graph = runResult.graph || runResult.result?.graph || null;
+  const events = Array.isArray(runResult.events) ? runResult.events : Array.isArray(runResult.result?.events) ? runResult.result.events : [];
+  const steps = action.actions.map((entry, index) => {
+    const stepId = String(entry?.stepId || `step-${index + 1}`);
+    const nodeId = `composite_${stepId}`;
+    const stepEvents = events.filter((event) => String(event?.nodeId || "") === nodeId);
+    const started = stepEvents.find((event) => event?.type === "node-start" || event?.type === "script-start");
+    const finished = [...stepEvents].reverse().find((event) => event?.type === "node-done" || event?.type === "script-finish");
+    const scriptFinish = [...stepEvents].reverse().find((event) => event?.type === "script-finish");
+    const stdout = String(scriptFinish?.stdout || "");
+    const preflightFailed = /(?:^|\n)status:\s*(?:preflight_failed|failed|error)\b/m.test(stdout);
+    const failed = preflightFailed || scriptFinish?.status === "error" || scriptFinish?.status === "cancelled";
+    const completed = !failed && stepEvents.some((event) => event?.type === "node-done");
+    const instance = graph?.instances?.[nodeId] || {};
+    const output = Array.isArray(instance.output)
+      ? Object.fromEntries(instance.output
+        .filter((slot) => slot?.type !== "node" && slot?.name)
+        .map((slot) => [String(slot.name), slot.value ?? slot.default ?? ""]))
+      : undefined;
+    const error = failed
+      ? (String(scriptFinish?.stderr || "").trim() || (stdout.match(/(?:^|\n)\s*error:\s*(.+?)(?:\n|$)/m)?.[1] || "执行失败").trim())
+      : "";
+    const startedAt = Number(started?.ts || started?.startedAt);
+    const completedAt = Number(finished?.ts || finished?.completedAt);
+    return {
+      stepId,
+      actionId: String(entry?.id || ""),
+      title: entry?.title || entry?.atomic?.title || entry?.id || stepId,
+      status: failed ? "failed" : completed ? "completed" : "pending",
+      ...(Number.isFinite(startedAt) ? { startedAt } : {}),
+      ...(Number.isFinite(completedAt) ? { completedAt } : {}),
+      ...(Number.isFinite(startedAt) && Number.isFinite(completedAt) ? { durationMs: Math.max(0, completedAt - startedAt) } : {}),
+      ...(output && Object.keys(output).length ? { output } : {}),
+      ...(error ? { error } : { error: "" }),
+      // 步骤日志只放 runs；写进 details 会被重试摘要误带进 Agent prompt。
+      logCount: stepEvents.length,
+    };
+  });
+  return { steps };
+}
+
+function releaseRunId() {
+  return `release-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`;
+}
+
+function releaseRequestContext(url, payload = {}) {
+  const source = payload && typeof payload === "object" ? payload : {};
+  return {
+    businessLine: String(source.businessLine || url.searchParams.get("businessLine") || "likee").trim().toLowerCase() || "likee",
+    platform: /ios|iphone/i.test(String(source.platform || url.searchParams.get("platform") || "")) ? "ios" : "android",
+    version: String(source.version || url.searchParams.get("version") || "1.0.0").trim() || "1.0.0",
+    batch: String(source.batch || url.searchParams.get("batch") || "initial").trim().toLowerCase() || "initial",
+    ...(source.batchIndex != null || url.searchParams.get("batchIndex") != null ? { batchIndex: Number(source.batchIndex ?? url.searchParams.get("batchIndex") ?? 0) || 0 } : {}),
+  };
+}
+
 /**
  * @param {import('http').IncomingMessage} req
  * @param {import('http').ServerResponse} res
@@ -1160,6 +1357,546 @@ function paginateMarketplaceResources(items, url, defaultLimit = 24) {
  */
 async function workspaceRoutes(req, res, ctx) {
   const { url, authUser, userCtx, root, host, MIME, adminWorkspaceRequestedUserContext, broadcastWorkspaceCollaborationEvent, findWorkspaceShareUser, isValidFlowSourceRead, readUserWorkspaces, requestPublicBaseUrl, resolveWorkspaceScopeRoot, teamSummaryWithUsers, listConfiguredWorkspaces } = ctx;
+
+  if (url.pathname.startsWith("/api/release/")) {
+    if (!authUser) {
+      json(res, 401, { error: "Authentication required" });
+      return;
+    }
+    const isNodeExecutionRequest = req.method === "POST"
+      && (url.pathname === "/api/release/nodes/preview" || url.pathname === "/api/release/nodes/run");
+    // 用户需求点: /api/release/access 仅做 operators 归属查询，不解析发版工程目录。
+    const requiresWorkspaceResolution = !isNodeExecutionRequest
+      && url.pathname !== "/api/release/runs/stop"
+      && url.pathname !== "/api/release/access";
+    const resolvedRequest = requiresWorkspaceResolution ? resolveReleaseRequestWorkspace(url, {}, root, readUserWorkspaces(userCtx)) : null;
+    if (resolvedRequest && !resolvedRequest.ok) {
+      json(res, resolvedRequest.status || 503, { error: resolvedRequest.error, code: resolvedRequest.code });
+      return;
+    }
+    const context = resolvedRequest?.context || releaseRequestContext(url);
+    const workspaceId = resolvedRequest?.workspaceId || releaseWorkspaceIdentity(url);
+    const workspacePath = resolvedRequest?.workspacePath || "";
+    const roots = resolvedRequest?.roots || [];
+    try {
+      if (req.method === "GET" && url.pathname === "/api/release/access") {
+        const releaseAccess = releaseAccessForRequest(authUser, {});
+        const projects = releaseConfiguredWorkspaceEntries().filter((entry) => (
+          releaseAccess.membership
+          && entry.businessLine === releaseAccess.membership.businessLine
+          && entry.platform === releaseAccess.membership.platform
+        ));
+        json(res, 200, {
+          ok: true,
+          releaseAccess,
+          projects,
+          ...(releaseAccess.operable ? {} : { code: "RELEASE_OPERATOR_FORBIDDEN", error: releaseAccess.message || "无法操作" }),
+        });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/release/catalog") {
+        const discoveredNodes = await discoverReleaseActions({ roots, ...context });
+        const atomicNodes = filterReleaseActionsForWorkflow(discoveredNodes, context);
+        const compositeNodes = discoverReleaseCompositeActions(context, atomicNodes);
+        // 复合能力是默认发版入口；原子 Action 仅在没有能力配置时作为兼容回退，避免自定义阶段暴露冗余原子节点。
+        const nodes = compositeNodes.length ? compositeNodes : atomicNodes;
+        json(res, 200, { ok: true, context, workspaceId, nodes, releaseAccess: releaseAccessForRequest(authUser, context) });
+        return;
+      }
+      if (req.method === "GET" && url.pathname === "/api/release/state") {
+        const state = readReleaseStateForRequest(root, context, workspaceId, workspacePath, roots);
+        json(res, 200, { ok: true, context, workspaceId, state, releaseAccess: releaseAccessForRequest(authUser, context) });
+        return;
+      }
+      if (req.method === "PATCH" && url.pathname.startsWith("/api/release/pending/")) {
+        const writeAccess = releaseWriteGate(authUser, context);
+        if (!writeAccess.ok) {
+          json(res, writeAccess.status || 403, { error: writeAccess.error, code: writeAccess.code, releaseAccess: releaseAccessForRequest(authUser, context) });
+          return;
+        }
+        const itemId = decodeURIComponent(url.pathname.slice("/api/release/pending/".length));
+        const payload = JSON.parse(await readBody(req));
+        const state = readReleaseStateForRequest(root, context, workspaceId, workspacePath, roots);
+        const item = state.pending.find((entry) => entry.id === itemId);
+        if (!item) { json(res, 404, { error: "Pending release node not found" }); return; }
+        if (item.nodeId === "release-initialization" || item.status === "completed") { json(res, 409, { error: "Completed initialization cannot be edited" }); return; }
+        item.inputs = payload.inputs && typeof payload.inputs === "object" ? payload.inputs : item.inputs || {};
+        writeReleaseState(root, context, workspaceId, state);
+        json(res, 200, { ok: true, item, state, releaseAccess: releaseAccessForRequest(authUser, context) });
+        return;
+      }
+      if (req.method === "DELETE" && url.pathname.startsWith("/api/release/pending/")) {
+        const writeAccess = releaseWriteGate(authUser, context);
+        if (!writeAccess.ok) {
+          json(res, writeAccess.status || 403, { error: writeAccess.error, code: writeAccess.code, releaseAccess: releaseAccessForRequest(authUser, context) });
+          return;
+        }
+        const itemId = decodeURIComponent(url.pathname.slice("/api/release/pending/".length));
+        const state = readReleaseStateForRequest(root, context, workspaceId, workspacePath, roots);
+        const item = state.pending.find((entry) => entry.id === itemId);
+        if (!item) { json(res, 404, { error: "Pending release node not found" }); return; }
+        const activeRun = [...activeReleaseRuns.values()].find((run) => (
+          run?.itemId === itemId
+          && run?.workspaceId === workspaceId
+          && releaseContextKey(run.context || {}) === releaseContextKey(context)
+        ));
+        if (activeRun || ["running", "previewing", "awaiting_confirmation", "ready", "blocked"].includes(String(item.status || "").toLowerCase())) {
+          json(res, 409, { error: "正在执行的节点不可删除，请先取消执行", code: "RELEASE_NODE_RUNNING" });
+          return;
+        }
+        const dismissed = new Set(Array.isArray(state.dismissedNodeIds) ? state.dismissedNodeIds : []);
+        const dismissalId = releasePendingDismissalKey(item);
+        if (dismissalId) dismissed.add(dismissalId);
+        state.dismissedNodeIds = [...dismissed].filter(Boolean);
+        const runningStatuses = new Set(["running", "previewing", "awaiting_confirmation", "ready", "blocked"]);
+        state.pending = state.pending.filter((entry) => {
+          if (entry.id === itemId) return false;
+          if (isCustomReleasePendingItem(item)) return true;
+          if (!dismissalId || releasePendingDismissalKey(entry) !== dismissalId) return true;
+          return runningStatuses.has(String(entry.status || "").toLowerCase());
+        });
+        writeReleaseState(root, context, workspaceId, state);
+        json(res, 200, { ok: true, removed: item, state, releaseAccess: releaseAccessForRequest(authUser, context) });
+        return;
+      }
+      if (req.method === "POST" && (url.pathname === "/api/release/nodes/preview" || url.pathname === "/api/release/nodes/run")) {
+        const payload = JSON.parse(await readBody(req));
+        const requestContext = releaseRequestContext({ searchParams: new URLSearchParams() }, payload);
+        const writeAccess = releaseWriteGate(authUser, requestContext);
+        if (!writeAccess.ok) {
+          json(res, writeAccess.status || 403, { error: writeAccess.error, code: writeAccess.code, releaseAccess: releaseAccessForRequest(authUser, requestContext) });
+          return;
+        }
+        const requestResolution = resolveReleaseRequestWorkspace(url, payload, root, readUserWorkspaces(userCtx));
+        if (!requestResolution.ok) {
+          json(res, requestResolution.status || 503, { error: requestResolution.error, code: requestResolution.code });
+          return;
+        }
+        const requestWorkspaceId = requestResolution.workspaceId;
+        const requestWorkspacePath = requestResolution.workspacePath;
+        const requestRoots = requestResolution.roots;
+        const expectedScopeKey = releaseContextKey(requestContext);
+        const requestedScopeKey = String(payload.scopeKey || "").trim();
+        // 用户需求点: 前端传入的节点范围必须与初始化上下文一致，避免跨业务/平台/版本执行。
+        if (requestedScopeKey && requestedScopeKey !== expectedScopeKey) {
+          json(res, 409, { error: "节点不属于当前业务、平台、版本和批次上下文", code: "RELEASE_SCOPE_MISMATCH" });
+          return;
+        }
+        const actionId = String(payload.actionId || payload.nodeId || "").trim();
+        const discoveredNodes = await discoverReleaseActions({ roots: requestRoots, ...requestContext });
+        const atomicNodes = filterReleaseActionsForWorkflow(discoveredNodes, requestContext);
+        const compositeNodes = discoverReleaseCompositeActions(requestContext, atomicNodes);
+        const nodes = compositeNodes.length ? [...compositeNodes, ...atomicNodes] : atomicNodes;
+        const action = nodes.find((node) => node.id === actionId);
+        // 用户需求点: 状态机配置不仅用于推荐，也必须阻止未纳入当前业务/平台流程的节点被执行。
+        if (!action) {
+          if (actionId.startsWith("composite:") || (discoveredNodes.some((node) => node.id === actionId) && nodes.length !== discoveredNodes.length)) {
+            json(res, 409, { error: "节点未纳入当前业务、平台和批次的发版流程", code: "RELEASE_WORKFLOW_NODE_NOT_ALLOWED" });
+            return;
+          }
+          json(res, 404, { error: "Release action not found" });
+          return;
+        }
+        if (action.scopeKey && action.scopeKey !== expectedScopeKey) {
+          json(res, 409, { error: "节点不属于当前业务、平台、版本和批次上下文", code: "RELEASE_SCOPE_MISMATCH" });
+          return;
+        }
+        // 用户需求点: 助手/CLI 未传 itemId 时生成 custom 实例 id，写入时间线且不与同能力其它卡片互相覆盖。
+        if (!String(payload.itemId || "").trim()) {
+          payload.itemId = `custom-${action.id}-${Date.now().toString(36)}-${crypto.randomBytes(2).toString("hex")}`;
+        }
+        const requestedProcessId = String(payload.processId || "").trim().toLowerCase();
+        const actionProcessId = String(action.processId || "other").trim().toLowerCase();
+        // 自由 Agent 可挂到任意发版阶段；允许请求 processId 与能力默认 stage 不同。
+        if (requestedProcessId && requestedProcessId !== actionProcessId && action.insertableInAnyStage !== true) {
+          json(res, 409, { error: "节点不属于请求的发版流程", code: "RELEASE_PROCESS_MISMATCH" });
+          return;
+        }
+        const effectiveProcessId = action.insertableInAnyStage === true && requestedProcessId
+          ? String(payload.processId || "").trim()
+          : (action.processId || "other");
+        const effectiveProcessTitle = action.insertableInAnyStage === true && requestedProcessId
+          ? String(payload.processTitle || action.processTitle || effectiveProcessId || "other")
+          : (action.processTitle || action.processId || "other");
+        const inputs = payload.inputs && typeof payload.inputs === "object" ? payload.inputs : {};
+        const executionInputs = releaseExecutionInputs(action, requestContext, inputs);
+        const runId = String(payload.runId || releaseRunId());
+        const authOperator = resolveReleaseApprovalOperator(authUser.username, userCtx.userId);
+        // 审核单 / 全量：提审人始终用 AgentFlow 登录名注入（须为 OA 拼音）。
+        if (/submit-approval|full-rollout/.test(String(action.id || ""))) {
+          if (!authOperator) {
+            json(res, 400, {
+              error: "审核申请人须为 OA 拼音账号（如 yangcaimu）；当前 AgentFlow 登录名不可用",
+              code: "RELEASE_APPROVAL_OPERATOR_INVALID",
+              operator: String(authUser.username || userCtx.userId || ""),
+            });
+            return;
+          }
+          executionInputs.operator = authOperator;
+        }
+        const runInputs = action.requiresConfirmation && payload.confirmationFingerprint
+          ? { ...executionInputs, __release_confirmation_fingerprint: String(payload.confirmationFingerprint) }
+          : executionInputs;
+        const priorStateForAgent = action.kind === "composite"
+          ? readReleaseStateForRequest(root, requestContext, requestWorkspaceId, requestWorkspacePath, requestRoots)
+          : null;
+        const priorItemForAgent = priorStateForAgent?.pending?.find((item) => item.id === payload.itemId)
+          || priorStateForAgent?.pending?.find((item) => (
+            item.sourcePresetId === action.id
+            && ["failed", "completed", "waiting"].includes(String(item.status || "").toLowerCase())
+          ))
+          || priorStateForAgent?.runs?.[String(payload.runId || "")]
+          || null;
+        const graph = action.kind === "composite"
+          ? buildCompositeReleaseRunGraph(
+            action,
+            atomicNodes,
+            { ...requestContext, repositoryRoot: requestWorkspacePath, skillRoots: requestRoots, operator: authOperator },
+            runInputs,
+            { skillRoots: requestRoots, previousResult: releasePreviousResultForAgent(priorItemForAgent), operator: authOperator },
+          )
+          : buildReleaseRunGraph(action, requestContext, runInputs);
+        // 用户需求点: 已取消 AgentFlow 侧续跑；忽略 resumeFromStep，始终整图重跑。
+        void payload.resumeFromStep;
+        const graphRunNodeId = action.kind === "composite" ? Object.keys(graph.instances || {})[0] : "release_action";
+        if (action.requiresConfirmation && !String(payload.confirmationFingerprint || "").trim()) {
+          const previewResult = action.kind === "composite"
+            ? { status: "preview", graph }
+            : await runWorkspaceGraph(root, requestWorkspacePath, {
+              flowId: `release-${requestWorkspaceId}`,
+              flowSource: "user",
+            runNodeId: graphRunNodeId,
+            graph,
+            inputs: runInputs,
+            ignoreCache: true,
+          }, userCtx, { runId: `${runId}-preview`, releaseRuntime: true });
+          const preview = await previewReleaseAction(action, { ...requestContext, repositoryRoot: requestWorkspacePath, skillRoots: requestRoots }, executionInputs, { atomicNodes, skillRoots: requestRoots });
+          json(res, 200, { ok: true, status: "preview", runId, preview: previewResult, confirmationFingerprint: preview.confirmationFingerprint });
+          return;
+        }
+        if (action.requiresConfirmation && String(payload.confirmationFingerprint || "") !== confirmationFingerprint(action, requestContext, executionInputs)) {
+          json(res, 409, { error: "确认指纹已失效，请重新预览", code: "RELEASE_CONFIRMATION_MISMATCH" });
+          return;
+        }
+        // 用户需求点: 发版 Agent 可能卡在 MCP/hook 初始化，必须绑定实际子进程并支持超时终止。
+        const runController = createWorkspaceRunController({ timeoutMs: releaseRunTimeoutMs });
+        const executionStartedAt = Date.now();
+        const runEvents = [];
+        const releaseItemId = String(payload.itemId || "").trim();
+        let lastReleaseHeartbeatAt = 0;
+        const persistReleaseHeartbeat = (event, force = false) => {
+          if (!releaseItemId) return;
+          const now = Date.now();
+          if (!force && now - lastReleaseHeartbeatAt < 2_000) return;
+          lastReleaseHeartbeatAt = now;
+          const state = readReleaseStateForRequest(root, requestContext, requestWorkspaceId, requestWorkspacePath, requestRoots);
+          const existing = state.pending.find((item) => item.id === releaseItemId) || {};
+          const runningItem = {
+            ...existing,
+            id: releaseItemId,
+            nodeId: releasePendingNodeId(action, payload, existing),
+            title: action.title,
+            description: action.description,
+            category: action.category,
+            processId: effectiveProcessId,
+            processOrder: action.processOrder,
+            processTitle: effectiveProcessTitle,
+            workflowId: action.workflowId || existing.workflowId || "",
+            kind: action.kind || existing.kind || "",
+            compositeId: action.compositeId || existing.compositeId || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
+            scopeKey: requestedScopeKey || expectedScopeKey,
+            contextSnapshot: { ...requestContext },
+            status: "running",
+            progress: 0,
+            inputs,
+            runId,
+            operator: authUser.username || userCtx.userId || "未记录",
+            startedAt: existing.startedAt || executionStartedAt,
+            lastEventAt: now,
+            lastEvent: event?.type || "run-start",
+            error: "",
+            failedAt: undefined,
+            completedAt: undefined,
+          };
+          state.pending = [...state.pending.filter((item) => item.id !== releaseItemId), runningItem];
+          state.runs[runId] = { ...runningItem, logs: runEvents.slice(-50) };
+          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+        };
+        persistReleaseHeartbeat({ type: "run-start" }, true);
+        const runPromise = runWorkspaceGraph(root, requestWorkspacePath, {
+          flowId: `release-${requestWorkspaceId}`,
+          flowSource: "user",
+          runNodeId: graphRunNodeId,
+          graph,
+          inputs: runInputs,
+          ignoreCache: true,
+        }, userCtx, {
+          signal: runController.abortController.signal,
+          runId,
+          releaseRuntime: true,
+          onActiveChild: (child) => runController.setChild(child, { processGroup: true }),
+          onEvent: (event) => {
+            runEvents.push(event);
+            persistReleaseHeartbeat(event);
+          },
+        });
+        void runPromise.then(
+          () => runController.finish("finished"),
+          () => runController.finish("failed"),
+        );
+        activeReleaseRuns.set(runId, { controller: runController, promise: runPromise, context: requestContext, workspaceId: requestWorkspaceId, itemId: String(payload.itemId || ""), action, inputs });
+        if (url.pathname.endsWith("/preview") && action.requiresConfirmation) {
+          const result = await runPromise;
+          activeReleaseRuns.delete(runId);
+          const preview = await previewReleaseAction(action, { ...requestContext, repositoryRoot: requestWorkspacePath, skillRoots: requestRoots }, executionInputs, { atomicNodes, skillRoots: requestRoots });
+          json(res, 200, { ok: true, status: "preview", runId, preview: result, confirmationFingerprint: preview.confirmationFingerprint });
+          return;
+        }
+        let result;
+        try {
+          result = await runPromise;
+        } catch (error) {
+          activeReleaseRuns.delete(runId);
+          const failedState = readReleaseStateForRequest(root, requestContext, requestWorkspaceId, requestWorkspacePath, requestRoots);
+          const failedTiming = releaseTimingFromResult({ events: runEvents }, executionStartedAt);
+          const failedDetails = releaseCompositeDetails(action, { events: runEvents, graph }, { repositoryRoot: requestWorkspacePath });
+          const existing = failedState.pending.find((item) => item.id === payload.itemId) || {};
+          const scriptFailure = releaseFailureFromResult({ events: runEvents });
+          const timedOut = runController.timedOut === true;
+          const failureCode = timedOut ? "RELEASE_RUN_TIMEOUT" : scriptFailure ? "RELEASE_PREFLIGHT_FAILED" : "RELEASE_EXECUTION_FAILED";
+          const failureMessage = timedOut
+            ? `发版 Agent 执行超时（${Math.round(releaseRunTimeoutMs / 1000)} 秒），已终止执行`
+            : scriptFailure || String(error?.message || error || "执行失败");
+          const failedItem = {
+            ...existing,
+            id: String(payload.itemId || existing.id || `${action.id}-${runId}`),
+            nodeId: releasePendingNodeId(action, payload, existing),
+            title: action.title,
+            description: action.description,
+            category: action.category,
+            processId: effectiveProcessId,
+            processOrder: action.processOrder,
+            processTitle: effectiveProcessTitle,
+            workflowId: action.workflowId || existing.workflowId || "",
+            kind: action.kind || existing.kind || "",
+            compositeId: action.compositeId || existing.compositeId || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
+            scopeKey: requestedScopeKey || expectedScopeKey,
+            contextSnapshot: { ...requestContext },
+            status: "failed",
+            progress: 0,
+            inputs,
+            runId,
+            operator: authUser.username || userCtx.userId || "未记录",
+            ...failedTiming,
+            failedAt: failedTiming.completedAt,
+            error: failureMessage,
+            // 用户需求点: pending.output 只保留失败摘要；完整 events 曾被重试逻辑塞进 Agent prompt，轻易超过数十万字符。
+            output: { status: "failed", summary: failureMessage, eventCount: runEvents.length },
+            ...(failedDetails ? { details: failedDetails } : {}),
+          };
+          failedState.pending = [...failedState.pending.filter((item) => item.id !== failedItem.id), failedItem];
+          failedState.runs[runId] = { ...failedItem, logs: runEvents.slice(-200) };
+          writeReleaseState(root, requestContext, requestWorkspaceId, failedState);
+          json(res, 422, { ok: false, status: "failed", code: failureCode, error: failedItem.error, runId, result: failedItem.output, ...(failedDetails ? { details: failedDetails } : {}), state: failedState });
+          return;
+        }
+        activeReleaseRuns.delete(runId);
+        const state = readReleaseStateForRequest(root, requestContext, requestWorkspaceId, requestWorkspacePath, requestRoots);
+        const timing = releaseTimingFromResult(result);
+        const timelineNodeId = releasePendingNodeId(action, payload, state.pending.find((item) => item.id === payload.itemId) || {});
+        const agentResult = action.kind === "composite"
+          ? releaseAgentResultFromWorkspaceRun(result, { repositoryRoot: requestWorkspacePath })
+          : null;
+        const failure = releaseFailureFromResult(result) || (agentResult?.status === "failed" ? (agentResult.summary || "发版 Agent 执行失败") : "");
+        const details = releaseCompositeDetails(action, result, { repositoryRoot: requestWorkspacePath });
+        if (action.kind === "composite" && !agentResult) {
+          const existing = state.pending.find((item) => item.id === payload.itemId) || {};
+          const failedItem = {
+            ...existing,
+            id: String(payload.itemId || existing.id || `${action.id}-${runId}`),
+            nodeId: timelineNodeId,
+            title: action.title,
+            description: action.description,
+            category: action.category,
+            processId: effectiveProcessId,
+            processOrder: action.processOrder,
+            processTitle: effectiveProcessTitle,
+            workflowId: action.workflowId || existing.workflowId || "",
+            kind: action.kind || existing.kind || "",
+            compositeId: action.compositeId || existing.compositeId || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
+            scopeKey: requestedScopeKey || expectedScopeKey,
+            contextSnapshot: { ...requestContext },
+            status: "failed",
+            progress: 0,
+            inputs,
+            runId,
+            operator: authUser.username || userCtx.userId || "未记录",
+            ...timing,
+            failedAt: timing.completedAt,
+            error: "发版 Agent 未返回结构化结果",
+            output: { status: "failed", summary: "发版 Agent 未返回结构化结果", eventCount: Array.isArray(result?.events) ? result.events.length : 0 },
+            ...(details ? { details } : {}),
+          };
+          state.pending = [...state.pending.filter((item) => item.id !== failedItem.id), failedItem];
+          state.runs[runId] = { ...failedItem, logs: Array.isArray(result?.events) ? result.events.slice(-200) : [] };
+          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+          json(res, 422, { ok: false, status: "failed", code: "RELEASE_AGENT_EMPTY_RESULT", error: failedItem.error, runId, result, ...(details ? { details } : {}), state });
+          return;
+        }
+        if (agentResult?.status === "waiting") {
+          // 用户需求点: waiting 无交互续跑——按成功写入时间线，待办另述；重试=整图重跑。
+          const existing = state.pending.find((item) => item.id === payload.itemId) || {};
+          const waitingMatter = agentResult.waiting || { reason: agentResult.summary || "待人工处理" };
+          const successItem = {
+            ...existing,
+            id: String(payload.itemId || existing.id || `${action.id}-${runId}`),
+            nodeId: timelineNodeId,
+            title: action.title,
+            description: action.description,
+            category: action.category,
+            processId: effectiveProcessId,
+            processOrder: action.processOrder,
+            processTitle: effectiveProcessTitle,
+            workflowId: action.workflowId || existing.workflowId || "",
+            kind: action.kind || existing.kind || "",
+            compositeId: action.compositeId || existing.compositeId || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
+            scopeKey: requestedScopeKey || expectedScopeKey,
+            contextSnapshot: { ...requestContext },
+            status: "completed",
+            progress: 100,
+            inputs,
+            runId,
+            operator: authUser.username || userCtx.userId || "未记录",
+            ...timing,
+            error: "",
+            failedAt: undefined,
+            waiting: waitingMatter,
+            message: agentResult.summary || "已成功",
+            output: { status: "waiting", summary: agentResult.summary || "待人工处理", waiting: waitingMatter },
+            ...(details ? { details } : {}),
+          };
+          state.pending = state.pending.filter((item) => item.id !== successItem.id);
+          state.timeline = [...state.timeline.filter((item) => item.id !== successItem.id && item.nodeId !== successItem.nodeId), successItem];
+          state.runs[runId] = {
+            ...successItem,
+            status: "waiting",
+            logs: Array.isArray(result?.events) ? result.events.slice(-200) : [],
+          };
+          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+          json(res, 200, { ok: true, status: "waiting", runId, result, ...(details ? { details } : {}), state });
+          return;
+        }
+        if (failure) {
+          const existing = state.pending.find((item) => item.id === payload.itemId) || {};
+          const failedItem = {
+            ...existing,
+            id: String(payload.itemId || existing.id || `${action.id}-${runId}`),
+            nodeId: timelineNodeId,
+            title: action.title,
+            description: action.description,
+            category: action.category,
+            processId: effectiveProcessId,
+            processOrder: action.processOrder,
+            processTitle: effectiveProcessTitle,
+            workflowId: action.workflowId || existing.workflowId || "",
+            kind: action.kind || existing.kind || "",
+            compositeId: action.compositeId || existing.compositeId || "",
+            sourcePresetId: releaseSourcePresetId(action, payload, existing),
+            scopeKey: requestedScopeKey || expectedScopeKey,
+            contextSnapshot: { ...requestContext },
+            status: "failed",
+            progress: 0,
+            inputs,
+            runId,
+            operator: authUser.username || userCtx.userId || "未记录",
+            ...timing,
+            failedAt: timing.completedAt,
+            error: failure,
+            output: { status: "failed", summary: failure, eventCount: Array.isArray(result?.events) ? result.events.length : 0 },
+            ...(details ? { details } : {}),
+          };
+          state.pending = [...state.pending.filter((item) => item.id !== failedItem.id), failedItem];
+          state.runs[runId] = { ...failedItem, logs: Array.isArray(result?.events) ? result.events.slice(-200) : [] };
+          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+          json(res, 422, { ok: false, status: "failed", code: "RELEASE_PREFLIGHT_FAILED", error: failure, runId, result, ...(details ? { details } : {}), state });
+          return;
+        }
+        const completedItem = {
+          id: String(payload.itemId || `${action.id}-${timing.completedAt}`),
+          nodeId: timelineNodeId,
+          title: action.title,
+          description: action.description,
+          category: action.category,
+          processId: effectiveProcessId,
+          processOrder: action.processOrder,
+          processTitle: effectiveProcessTitle,
+          workflowId: action.workflowId || "",
+          kind: action.kind || "",
+          compositeId: action.compositeId || "",
+          sourcePresetId: releaseSourcePresetId(action, payload, {}),
+          scopeKey: requestedScopeKey || expectedScopeKey,
+          contextSnapshot: { ...requestContext },
+          status: "completed",
+          progress: 100,
+          inputs,
+          runId,
+          operator: authUser.username || userCtx.userId || "未记录",
+          startedAt: timing.startedAt,
+          completedAt: timing.completedAt,
+          durationMs: timing.durationMs,
+          output: agentResult
+            ? { status: agentResult.status || "completed", summary: agentResult.summary || "", records: agentResult.records || [], artifacts: agentResult.artifacts || [] }
+            : { status: "completed", summary: action.title || "completed" },
+          ...(details ? { details } : {}),
+        };
+        // The manifest is finalized before runWorkspaceGraph resolves. A
+        // state read immediately above may therefore already have projected
+        // this run into the timeline; replace that projection instead of
+        // appending a duplicate card.
+        state.timeline = [
+          ...state.timeline.filter((entry) => entry?.id !== completedItem.id && entry?.runId !== runId),
+          completedItem,
+        ];
+        state.pending = state.pending.filter((item) => item.id !== completedItem.id);
+        state.runs[runId] = { ...completedItem, logs: Array.isArray(result?.events) ? result.events.slice(-200) : [] };
+        writeReleaseState(root, requestContext, requestWorkspaceId, state);
+        json(res, 200, { ok: true, status: "completed", runId, result, ...(details ? { details } : {}), state });
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/api/release/runs/stop") {
+        const payload = JSON.parse(await readBody(req));
+        const stopContext = releaseRequestContext({ searchParams: new URLSearchParams() }, payload);
+        const writeAccess = releaseWriteGate(authUser, stopContext);
+        if (!writeAccess.ok) {
+          json(res, writeAccess.status || 403, { error: writeAccess.error, code: writeAccess.code, releaseAccess: releaseAccessForRequest(authUser, stopContext) });
+          return;
+        }
+        const runId = String(payload.runId || "").trim();
+        const active = activeReleaseRuns.get(runId);
+        if (!active) { json(res, 404, { error: "Release run not found" }); return; }
+        await stopReleaseAction(runId, { stopRun: async () => ({ ...(await active.controller.stop()), runId }) });
+        json(res, 200, { ok: true, stopped: true, runId });
+        return;
+      }
+      const runMatch = url.pathname.match(/^\/api\/release\/runs\/([^/]+)(?:\/logs)?$/);
+      if (req.method === "GET" && runMatch) {
+        const runId = decodeURIComponent(runMatch[1]);
+        const state = readReleaseStateForRequest(root, context, workspaceId, workspacePath, roots);
+        const run = state.runs[runId];
+        if (!run) { json(res, 404, { error: "Release run not found" }); return; }
+        json(res, 200, { ok: true, run, logs: run.logs || [] });
+        return;
+      }
+      json(res, 404, { error: "Not found" });
+    } catch (error) {
+      json(res, 500, { error: String(error?.message || error) });
+    }
+    return;
+  }
 
     if (req.method === "GET" && (url.pathname === "/api/workspace/my-approvals" || url.pathname === "/api/v1/approvals")) {
       const identity = new Set([
@@ -2171,6 +2908,8 @@ async function workspaceRoutes(req, res, ctx) {
           path: workspacesPath(),
           workspaces: listConfiguredWorkspaces(root, scopedRoot, userCtx),
           customWorkspaces: readUserWorkspaces(userCtx),
+          releaseWorkspaces: releaseConfiguredWorkspaceEntries(),
+          releaseAccess: releaseAccessForRequest(authUser, releaseContextFromUrl(url)),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
@@ -2186,6 +2925,7 @@ async function workspaceRoutes(req, res, ctx) {
           path: workspacesPath(),
           workspaces: listConfiguredWorkspaces(root, root, userCtx),
           customWorkspaces,
+          releaseWorkspaces: releaseConfiguredWorkspaceEntries(),
         });
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });

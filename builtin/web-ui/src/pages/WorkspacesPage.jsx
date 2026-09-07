@@ -133,7 +133,6 @@ export default function WorkspacesPage() {
   const [tokenDraft, setTokenDraft] = useState("");
   const [envRows, setEnvRows] = useState([]);
   const [selectedKey, setSelectedKey] = useState("");
-
   const selectedCustomIndex = useMemo(() => custom.findIndex((item, index) => workspaceKey(item, index) === selectedKey), [custom, selectedKey]);
   const selectedBuiltin = useMemo(() => builtins.find((item, index) => workspaceKey(item, index) === selectedKey) || null, [builtins, selectedKey]);
   const editingReadonly = Boolean(selectedBuiltin);
@@ -346,170 +345,170 @@ export default function WorkspacesPage() {
           </header>
 
           <section className="af-workspaces-summary">
-            <div>
-              <span>内置</span>
-              <strong>{builtins.length}</strong>
-            </div>
-            <div>
-              <span>自定义</span>
-              <strong>{custom.length}</strong>
-            </div>
-            <div>
-              <span>Git</span>
-              <strong>{custom.filter((item) => item.kind === "git").length}</strong>
-            </div>
+                <div>
+                  <span>内置</span>
+                  <strong>{builtins.length}</strong>
+                </div>
+                <div>
+                  <span>自定义</span>
+                  <strong>{custom.length}</strong>
+                </div>
+                <div>
+                  <span>Git</span>
+                  <strong>{custom.filter((item) => item.kind === "git").length}</strong>
+                </div>
           </section>
 
           <div className="af-workspaces-layout">
-            <section className="af-workspaces-list">
-              <div className="af-workspaces-section-head">
-                <h2>自定义知识库</h2>
-                <button type="button" onClick={startCreate}>
-                  <span className="material-symbols-outlined">add</span>
-                  新增
-                </button>
-              </div>
-              {custom.length ? custom.map((item, index) => (
-                <WorkspaceCard
-                  key={workspaceKey(item, index)}
-                  item={item}
-                  selected={workspaceKey(item, index) === selectedKey}
-                  onClick={() => selectCustom(item, index)}
-                />
-              )) : (
-                <div className="af-workspaces-empty">暂无自定义知识库。新增 Git 或本地目录后，画布里的加载知识库和一键任务就可以选择它。</div>
-              )}
-
-              <div className="af-workspaces-section-head af-workspaces-section-head--sub">
-                <h2>内置知识库</h2>
-              </div>
-              {builtins.map((item, index) => (
-                <WorkspaceCard
-                  key={workspaceKey(item, index)}
-                  item={item}
-                  selected={workspaceKey(item, index) === selectedKey}
-                  onClick={() => selectBuiltin(item, index)}
-                  readOnly
-                />
-              ))}
-            </section>
-
-            <section className="af-workspaces-editor">
-              <div className="af-workspaces-editor__head">
-                <div>
-                  <h2>{editingReadonly ? "查看内置知识库" : selectedCustomIndex >= 0 ? "编辑知识库" : "新增知识库"}</h2>
-                  <p>{editingReadonly ? "内置项由当前运行环境提供，不能在这里修改。" : "本地路径用于读取上下文，Git 字段用于后续同步和上下文挂载。"}</p>
-                </div>
-                <label className="af-workspaces-switch">
-                  <input type="checkbox" checked={draft.enabled !== false} disabled={editingReadonly} onChange={(e) => patchDraft({ enabled: e.target.checked })} />
-                  <span>启用</span>
-                </label>
-              </div>
-
-              <div className="af-workspaces-kind">
-                <button type="button" className={draft.kind === "git" ? "active" : ""} disabled={editingReadonly} onClick={() => patchDraft({ kind: "git", type: draft.type === "local" ? "code" : draft.type })}>
-                  <span className="material-symbols-outlined">account_tree</span>
-                  Git
-                </button>
-                <button type="button" className={draft.kind === "local" ? "active" : ""} disabled={editingReadonly} onClick={() => patchDraft({ kind: "local", type: "local" })}>
-                  <span className="material-symbols-outlined">folder_open</span>
-                  本地目录
-                </button>
-              </div>
-
-              <div className="af-workspaces-form">
-                <label>
-                  <span>名称</span>
-                  <input value={draft.label} disabled={editingReadonly} onChange={(e) => patchDraft({ label: e.target.value })} placeholder="Likee Android" />
-                </label>
-                <label>
-                  <span>类型</span>
-                  <select value={draft.type} disabled={editingReadonly} onChange={(e) => patchDraft({ type: e.target.value })}>
-                    <option value="code">code</option>
-                    <option value="docs">docs</option>
-                    <option value="analytics">analytics</option>
-                    <option value="config">config</option>
-                    <option value="local">local</option>
-                    <option value="other">other</option>
-                  </select>
-                </label>
-                <label className="af-workspaces-form__wide">
-                  <span>本地路径</span>
-                  <input value={draft.path} disabled={editingReadonly} onChange={(e) => patchDraft({ path: e.target.value })} placeholder={draft.kind === "git" ? "可空，默认保存到全局资源目录/repos/<仓库名>" : "/Users/.../project"} />
-                </label>
-                {draft.kind === "git" ? (
-                  <>
-                    <label className="af-workspaces-form__wide">
-                      <span>Git URL</span>
-                      <input
-                        value={draft.repoUrl}
-                        disabled={editingReadonly}
-                        onChange={(e) => {
-                          const nextRepoUrl = e.target.value;
-                          const previousSuggestion = suggestMountPathFromRepoUrl(draft.repoUrl);
-                          const currentMountPath = String(draft.mountPath || "").trim();
-                          const shouldUpdateMountPath = !currentMountPath || currentMountPath === previousSuggestion;
-                          patchDraft({
-                            repoUrl: nextRepoUrl,
-                            ...(shouldUpdateMountPath ? { mountPath: suggestMountPathFromRepoUrl(nextRepoUrl) } : {}),
-                          });
-                        }}
-                        placeholder="https://git.example.com/group/repo.git"
-                      />
-                    </label>
-                    <label>
-                      <span>分支</span>
-                      <input value={draft.branch} disabled={editingReadonly} onChange={(e) => patchDraft({ branch: e.target.value })} placeholder="master" />
-                    </label>
-                    <label>
-                      <span>挂载目录</span>
-                      <input value={draft.mountPath} disabled={editingReadonly} onChange={(e) => patchDraft({ mountPath: e.target.value })} placeholder={suggestMountPathFromRepoUrl(draft.repoUrl) || "repo_name"} />
-                    </label>
-                    <label className="af-workspaces-form__wide">
-                      <span>凭证环境变量</span>
-                      <input value={draft.credentialRef} disabled={editingReadonly} onChange={(e) => patchDraft({ credentialRef: e.target.value })} placeholder="LIKEE_GIT_READONLY_TOKEN" />
-                    </label>
-                    <label className="af-workspaces-form__wide">
-                      <span>Token</span>
-                      <input
-                        type="password"
-                        value={tokenDraft}
-                        disabled={editingReadonly}
-                        onChange={(e) => setTokenDraft(e.target.value)}
-                        placeholder={credentialEnvExists ? "已在个人环境变量中配置；留空则不修改" : "保存到个人环境变量，不写入 workspace 配置"}
-                      />
-                      <small>保存后只在知识库配置中保留 credentialRef，token 会写入当前用户的个人环境变量。</small>
-                    </label>
-                  </>
-                ) : null}
-                <label className="af-workspaces-form__wide">
-                  <span>说明</span>
-                  <textarea value={draft.description} disabled={editingReadonly} onChange={(e) => patchDraft({ description: e.target.value })} placeholder="这个知识库包含哪些代码、文档或需求上下文" />
-                </label>
-              </div>
-
-              <div className="af-workspaces-actions">
-                {!editingReadonly && selectedCustomIndex >= 0 ? (
-                  <button type="button" className="af-workspaces-danger" onClick={deleteDraft} disabled={saving || syncing}>
-                    <span className="material-symbols-outlined">delete</span>
-                    删除
-                  </button>
-                ) : <span />}
-                <div>
-                  {draft.kind === "git" && selectedCustomIndex >= 0 ? (
-                    <button type="button" onClick={syncDraft} disabled={editingReadonly || saving || syncing}>
-                      <span className="material-symbols-outlined">{syncing ? "sync" : "download"}</span>
-                      {syncing ? "拉取中" : "拉取更新"}
+                <section className="af-workspaces-list">
+                  <div className="af-workspaces-section-head">
+                    <h2>自定义知识库</h2>
+                    <button type="button" onClick={startCreate}>
+                      <span className="material-symbols-outlined">add</span>
+                      新增
                     </button>
-                  ) : null}
-                  <button type="button" onClick={startCreate} disabled={saving || syncing}>重置</button>
-                  <button type="button" className="af-workspaces-primary" onClick={saveDraft} disabled={editingReadonly || saving || syncing}>
-                    <span className="material-symbols-outlined">save</span>
-                    {saving ? "保存中" : "保存"}
-                  </button>
-                </div>
-              </div>
-            </section>
+                  </div>
+                  {custom.length ? custom.map((item, index) => (
+                    <WorkspaceCard
+                      key={workspaceKey(item, index)}
+                      item={item}
+                      selected={workspaceKey(item, index) === selectedKey}
+                      onClick={() => selectCustom(item, index)}
+                    />
+                  )) : (
+                    <div className="af-workspaces-empty">暂无自定义知识库。新增 Git 或本地目录后，画布里的加载知识库和一键任务就可以选择它。</div>
+                  )}
+
+                  <div className="af-workspaces-section-head af-workspaces-section-head--sub">
+                    <h2>内置知识库</h2>
+                  </div>
+                  {builtins.map((item, index) => (
+                    <WorkspaceCard
+                      key={workspaceKey(item, index)}
+                      item={item}
+                      selected={workspaceKey(item, index) === selectedKey}
+                      onClick={() => selectBuiltin(item, index)}
+                      readOnly
+                    />
+                  ))}
+                </section>
+
+                <section className="af-workspaces-editor">
+                  <div className="af-workspaces-editor__head">
+                    <div>
+                      <h2>{editingReadonly ? "查看内置知识库" : selectedCustomIndex >= 0 ? "编辑知识库" : "新增知识库"}</h2>
+                      <p>{editingReadonly ? "内置项由当前运行环境提供，不能在这里修改。" : "本地路径用于读取上下文，Git 字段用于后续同步和上下文挂载。"}</p>
+                    </div>
+                    <label className="af-workspaces-switch">
+                      <input type="checkbox" checked={draft.enabled !== false} disabled={editingReadonly} onChange={(e) => patchDraft({ enabled: e.target.checked })} />
+                      <span>启用</span>
+                    </label>
+                  </div>
+
+                  <div className="af-workspaces-kind">
+                    <button type="button" className={draft.kind === "git" ? "active" : ""} disabled={editingReadonly} onClick={() => patchDraft({ kind: "git", type: draft.type === "local" ? "code" : draft.type })}>
+                      <span className="material-symbols-outlined">account_tree</span>
+                      Git
+                    </button>
+                    <button type="button" className={draft.kind === "local" ? "active" : ""} disabled={editingReadonly} onClick={() => patchDraft({ kind: "local", type: "local" })}>
+                      <span className="material-symbols-outlined">folder_open</span>
+                      本地目录
+                    </button>
+                  </div>
+
+                  <div className="af-workspaces-form">
+                    <label>
+                      <span>名称</span>
+                      <input value={draft.label} disabled={editingReadonly} onChange={(e) => patchDraft({ label: e.target.value })} placeholder="Likee Android" />
+                    </label>
+                    <label>
+                      <span>类型</span>
+                      <select value={draft.type} disabled={editingReadonly} onChange={(e) => patchDraft({ type: e.target.value })}>
+                        <option value="code">code</option>
+                        <option value="docs">docs</option>
+                        <option value="analytics">analytics</option>
+                        <option value="config">config</option>
+                        <option value="local">local</option>
+                        <option value="other">other</option>
+                      </select>
+                    </label>
+                    <label className="af-workspaces-form__wide">
+                      <span>本地路径</span>
+                      <input value={draft.path} disabled={editingReadonly} onChange={(e) => patchDraft({ path: e.target.value })} placeholder={draft.kind === "git" ? "可空，默认保存到全局资源目录/repos/<仓库名>" : "/Users/.../project"} />
+                    </label>
+                    {draft.kind === "git" ? (
+                      <>
+                        <label className="af-workspaces-form__wide">
+                          <span>Git URL</span>
+                          <input
+                            value={draft.repoUrl}
+                            disabled={editingReadonly}
+                            onChange={(e) => {
+                              const nextRepoUrl = e.target.value;
+                              const previousSuggestion = suggestMountPathFromRepoUrl(draft.repoUrl);
+                              const currentMountPath = String(draft.mountPath || "").trim();
+                              const shouldUpdateMountPath = !currentMountPath || currentMountPath === previousSuggestion;
+                              patchDraft({
+                                repoUrl: nextRepoUrl,
+                                ...(shouldUpdateMountPath ? { mountPath: suggestMountPathFromRepoUrl(nextRepoUrl) } : {}),
+                              });
+                            }}
+                            placeholder="https://git.example.com/group/repo.git"
+                          />
+                        </label>
+                        <label>
+                          <span>分支</span>
+                          <input value={draft.branch} disabled={editingReadonly} onChange={(e) => patchDraft({ branch: e.target.value })} placeholder="master" />
+                        </label>
+                        <label>
+                          <span>挂载目录</span>
+                          <input value={draft.mountPath} disabled={editingReadonly} onChange={(e) => patchDraft({ mountPath: e.target.value })} placeholder={suggestMountPathFromRepoUrl(draft.repoUrl) || "repo_name"} />
+                        </label>
+                        <label className="af-workspaces-form__wide">
+                          <span>凭证环境变量</span>
+                          <input value={draft.credentialRef} disabled={editingReadonly} onChange={(e) => patchDraft({ credentialRef: e.target.value })} placeholder="LIKEE_GIT_READONLY_TOKEN" />
+                        </label>
+                        <label className="af-workspaces-form__wide">
+                          <span>Token</span>
+                          <input
+                            type="password"
+                            value={tokenDraft}
+                            disabled={editingReadonly}
+                            onChange={(e) => setTokenDraft(e.target.value)}
+                            placeholder={credentialEnvExists ? "已在个人环境变量中配置；留空则不修改" : "保存到个人环境变量，不写入 workspace 配置"}
+                          />
+                          <small>保存后只在知识库配置中保留 credentialRef，token 会写入当前用户的个人环境变量。</small>
+                        </label>
+                      </>
+                    ) : null}
+                    <label className="af-workspaces-form__wide">
+                      <span>说明</span>
+                      <textarea value={draft.description} disabled={editingReadonly} onChange={(e) => patchDraft({ description: e.target.value })} placeholder="这个知识库包含哪些代码、文档或需求上下文" />
+                    </label>
+                  </div>
+
+                  <div className="af-workspaces-actions">
+                    {!editingReadonly && selectedCustomIndex >= 0 ? (
+                      <button type="button" className="af-workspaces-danger" onClick={deleteDraft} disabled={saving || syncing}>
+                        <span className="material-symbols-outlined">delete</span>
+                        删除
+                      </button>
+                    ) : <span />}
+                    <div>
+                      {draft.kind === "git" && selectedCustomIndex >= 0 ? (
+                        <button type="button" onClick={syncDraft} disabled={editingReadonly || saving || syncing}>
+                          <span className="material-symbols-outlined">{syncing ? "sync" : "download"}</span>
+                          {syncing ? "拉取中" : "拉取更新"}
+                        </button>
+                      ) : null}
+                      <button type="button" onClick={startCreate} disabled={saving || syncing}>重置</button>
+                      <button type="button" className="af-workspaces-primary" onClick={saveDraft} disabled={editingReadonly || saving || syncing}>
+                        <span className="material-symbols-outlined">save</span>
+                        {saving ? "保存中" : "保存"}
+                      </button>
+                    </div>
+                  </div>
+                </section>
           </div>
         </div>
       </main>
