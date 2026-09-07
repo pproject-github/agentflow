@@ -229,6 +229,8 @@ async function renderHtmlScreenshotWithChrome({ html, workspaceRoot, baseDir, wi
 function commitWorkspaceGraph(workspaceRoot, scoped, graph, userCtx) {
   const result = writeWorkspaceGraph(scoped.root, graph, workspaceRoot);
   const persisted = hydrateWorkspaceGraphForRuntime(workspaceRoot, scoped, result.graph, userCtx);
+  // 存图就是仓库索引过期的时刻。少了这一步，流程仓库只能靠读接口每次强制重建来看到新版本。
+  markRepositoryIndexDirty(workspaceRoot);
   return {
     graph: persisted,
     path: workspaceDesignPath(scoped.root),
@@ -1110,11 +1112,14 @@ function workspaceBufferLooksLikeZip(buf) {
   );
 }
 
-function listRunnableProjectMarketplaceFlows(workspaceRoot, userCtx = {}, scope = "all") {
-  // 预览必须基于磁盘上的最新流程版本。仓库索引为了普通列表请求会缓存，
-  // 但这里若继续使用旧索引会把正常预览误判成 revision 冲突；强制重建只影响
-  // 这个需要版本一致性的入口。
-  getRepositoryIndex(workspaceRoot, { force: true });
+/**
+ * 仓库索引重建要把每个用户每个流程的图都解析一遍（线上 74 个流程约 0.8s，且是同步的，
+ * 期间整个服务的事件循环都被按住）。读接口一律走缓存：存图时已经 markRepositoryIndexDirty，
+ * 预览还会用 indexedProjectFlowPreview 按流程逐个回盘校验版本，版本对不上就返回 409 让前端刷新。
+ * 只有拷贝流程内容的写操作（安装、改可见性）才值得为一致性强制重建。
+ */
+function listRunnableProjectMarketplaceFlows(workspaceRoot, userCtx = {}, scope = "all", options = {}) {
+  getRepositoryIndex(workspaceRoot, options.force === true ? { force: true } : {});
   return listIndexedProjectFlows(workspaceRoot, userCtx, scope);
 }
 
@@ -2458,7 +2463,7 @@ async function workspaceRoutes(req, res, ctx) {
         let sourceGraph;
         let originKind = "flow";
         if (requestedProjectFlow) {
-          const source = listRunnableProjectMarketplaceFlows(root, userCtx, "all")
+          const source = listRunnableProjectMarketplaceFlows(root, userCtx, "all", { force: true })
             .find((flow) => flow.id === id);
           if (!source) {
             json(res, 404, { error: "Project flow not found or is private" });
@@ -2525,7 +2530,7 @@ async function workspaceRoutes(req, res, ctx) {
       try {
         if (String(payload?.kind || "") === "project-flow") {
           const id = String(payload?.id || "").trim();
-          const source = listRunnableProjectMarketplaceFlows(root, { ...userCtx, isAdmin: false }, "owned")
+          const source = listRunnableProjectMarketplaceFlows(root, { ...userCtx, isAdmin: false }, "owned", { force: true })
             .find((flow) => flow.id === id);
           if (!source) {
             json(res, 403, { error: "Only the project owner can change its visibility" });
