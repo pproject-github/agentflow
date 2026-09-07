@@ -9,6 +9,7 @@ import { irToGraph } from "../bin/lib/flow-dsl/ir.mjs";
 import { lintFlowDir } from "../bin/lib/flow-dsl/lint.mjs";
 import { parseFlowSource } from "../bin/lib/flow-dsl/parser.mjs";
 import { runWorkspaceGraph, workspaceNodeInputFingerprint } from "../bin/lib/workspace-server.mjs";
+import { consumeWorkspaceInterrupt, readWorkspaceInterrupt } from "../bin/lib/workspace-interrupt.mjs";
 
 const SOURCE = `import { agent, control, display, file, flow, provide, tool, workspace } from "agentflow/flow";
 
@@ -28,6 +29,16 @@ const call = flow.call("Call advance", advanceOne, { state: initial.value });
 const { state } = call;
 const board = display.markdown({ content: call.state });
 export const run = flow("Run", call, board);
+`;
+
+const INTERRUPT_SOURCE = `import { control, display, flow, provide } from "agentflow/flow";
+const input = flow.input("topic", "text");
+const wait = control.interrupt("等待确认", { value: input.value, resumeSchema: '{"type":"object"}' });
+export const child = flow.subflow("等待子流程", { topic: input }, flow(wait), { resume: wait.resume });
+const topic = provide.str("主题", { value: "hello" });
+const call = flow.call("调用等待子流程", child, { topic: topic.value });
+const report = display.markdown("结果", { content: call.resume });
+export const run = flow("Run", call, report);
 `;
 
 test("subflow DSL parses and round-trips its contract", () => {
@@ -84,6 +95,41 @@ test("flow.call executes standard child nodes in an isolated frame and maps outp
     assert.ok(events.some((event) => event.type === "node-done" && event.nodeId === "step" && event.parentNodeId === "call"));
     assert.ok(events.some((event) => event.type === "subflow-done" && event.nodeId === "call"));
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("flow.call propagates a child interrupt and resumes the same call frame", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-subflow-interrupt-"));
+  const runId = `subflow-interrupt-${process.pid}`;
+  try {
+    const graph = irToGraph(parseFlowSource(INTERRUPT_SOURCE));
+    const first = await runWorkspaceGraph(root, root, {
+      graph,
+      runNodeId: "run",
+      runId,
+      ignoreCache: true,
+    }, { userId: "subflow-interrupt-test" });
+    assert.deepEqual(first.pauseNodeIds, ["call"]);
+    assert.ok(first.events.some((event) => event.type === "subflow-waiting" && event.nodeId === "call"));
+    const waiting = readWorkspaceInterrupt(runId);
+    assert.ok(waiting?.interruptId);
+    const waitingCheckpoint = [...(first.runStateHistory || [])].reverse().find((event) => event.recordType === "checkpoint" && event.callFrame?.callFrameId && event.callFrame.status === "waiting");
+    assert.equal(waitingCheckpoint?.callFrame?.parentNodeId, "call");
+    assert.equal(waitingCheckpoint?.callFrame?.status, "waiting");
+
+    const resumed = await runWorkspaceGraph(root, root, {
+      graph: first.graph,
+      runNodeId: "run",
+      runId,
+      resume: { interruptId: waiting.interruptId, resume: { approved: true } },
+      ignoreCache: true,
+    }, { userId: "subflow-interrupt-test" });
+    assert.deepEqual(resumed.pauseNodeIds, []);
+    assert.ok(resumed.events.some((event) => event.type === "subflow-done" && event.nodeId === "call"));
+    assert.equal(readWorkspaceInterrupt(runId)?.status, "resolved");
+  } finally {
+    consumeWorkspaceInterrupt(runId, "");
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

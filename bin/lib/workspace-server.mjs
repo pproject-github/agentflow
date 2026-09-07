@@ -5783,11 +5783,30 @@ async function workspaceRunSubflowFrame({
       emit({ ...event, ...frameContext });
     },
   });
-  if (childResult.deferred || childResult.pauseNodeIds?.length) {
-    throw new Error(`Subflow ${id} paused or deferred; resumable subflow call frames are not supported yet`);
-  }
+  // Merge child mutations before checking for a pause. This is important for
+  // deferred nodes (for example Jenkins): queue/build identifiers produced in
+  // the child frame must survive on the parent graph so a later resume does not
+  // trigger the external side effect a second time.
   for (const memberId of memberSet) {
     if (childResult.graph.instances?.[memberId]) graph.instances[memberId] = childResult.graph.instances[memberId];
+  }
+  if (childResult.deferred || childResult.pauseNodeIds?.length) {
+    emit({
+      type: "subflow-waiting",
+      nodeId: parentNodeId,
+      definitionId: parentDefinitionId,
+      subflowId: id,
+      pauseNodeIds: childResult.pauseNodeIds || [],
+      deferred: childResult.deferred || null,
+      ...frameContext,
+    });
+    return {
+      resultValues: {},
+      callFrameId,
+      paused: true,
+      pauseNodeIds: childResult.pauseNodeIds || [],
+      deferred: childResult.deferred || null,
+    };
   }
   const resultValues = {};
   for (const [name, binding] of Object.entries(subflow.outputs || {})) {
@@ -5890,7 +5909,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       ts: Number(event?.ts) || now,
       runElapsedMs: Number.isFinite(event?.runElapsedMs) ? event.runElapsedMs : Math.max(0, now - runStartedAt),
     };
-    if (runState && (event?.type === "node-done" || event?.type === "paused" || event?.type === "waiting")) {
+    if (runState && (event?.type === "node-done" || event?.type === "node-waiting" || event?.type === "subflow-waiting" || event?.type === "paused" || event?.type === "waiting")) {
       enriched.runStateRevision = Number(readWorkspaceRunState(runtimeRunId)?.revision || 0);
       const currentNodeId = String(event.nodeId || "");
       const currentIndex = currentNodeId ? order.indexOf(currentNodeId) : -1;
@@ -5899,7 +5918,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         : order.filter((id) => !completedNodeIds.has(id));
       const checkpoint = appendWorkspaceRunStateCheckpoint(runtimeRunId, {
         nodeId: event.nodeId || "",
-        status: event.type === "node-done" ? "running" : (event.type === "waiting" ? "waiting" : "paused"),
+        status: event.type === "node-done" ? "running" : (["node-waiting", "subflow-waiting", "waiting"].includes(event.type) ? "waiting" : "paused"),
         eventType: event.type,
         graphRevision: workspaceDesignRevision(graph),
         cursor: {
@@ -5907,6 +5926,14 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
           completedNodeIds: Array.from(completedNodeIds),
           nextNodeIds,
         },
+        callFrame: event?.callFrameId ? {
+          callFrameId: String(event.callFrameId),
+          parentNodeId: String(event.parentNodeId || ""),
+          subflowId: String(event.subflowId || ""),
+          whileRole: String(event.whileRole || ""),
+          iteration: Number.isFinite(Number(event.iteration)) ? Number(event.iteration) : null,
+          status: ["node-waiting", "subflow-waiting", "waiting"].includes(event.type) ? "waiting" : "running",
+        } : undefined,
       });
       if (checkpoint?.checkpointId) enriched.checkpointId = checkpoint.checkpointId;
     }
@@ -6249,7 +6276,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const subflow = graph?.subflows?.[subflowId];
       if (!subflow) throw new Error(`flow.call ${nodeId} references missing subflow ${subflowId || "(empty)"}`);
       const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot, { includeContext: true });
-      const { resultValues, callFrameId } = await workspaceRunSubflowFrame({
+      const frameResult = await workspaceRunSubflowFrame({
         root,
         scopedRoot,
         payload,
@@ -6263,6 +6290,32 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         signal,
         emit,
       });
+      if (frameResult.paused) {
+        // A child interrupt/deferred is a pause of the parent call node. Keep
+        // the call frame identity in the event/checkpoint and let the normal
+        // parent Run persistence/resume path handle the suffix.
+        if (frameResult.deferred) {
+          deferred = {
+            ...frameResult.deferred,
+            nodeId,
+            subflowId,
+            callFrameId: frameResult.callFrameId,
+          };
+        }
+        runtimePauseNodeIds.push(nodeId);
+        emit({
+          type: "node-waiting",
+          nodeId,
+          definitionId: defId,
+          subflowId,
+          callFrameId: frameResult.callFrameId,
+          parentNodeId: nodeId,
+          pauseNodeIds: frameResult.pauseNodeIds || [],
+          ...(frameResult.deferred ? { deferred: frameResult.deferred } : {}),
+        });
+        break;
+      }
+      const { resultValues, callFrameId } = frameResult;
       let nextInstance = instance;
       for (const [name, value] of Object.entries(resultValues)) {
         nextInstance = workspaceSetOutputSlot(nextInstance, name, value);

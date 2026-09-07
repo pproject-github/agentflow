@@ -150,6 +150,12 @@ export function resolveWorkspaceInterrupt(runId, interruptId, resume, meta = {})
   }
   assertPayloadSize(resume);
   validateResume(resume, current.resumeSchema);
+  const decision = resume && typeof resume === "object" && !Array.isArray(resume)
+    ? String(resume.decision || resume.status || "").toLowerCase()
+    : "";
+  const approved = resume && typeof resume === "object" && !Array.isArray(resume)
+    ? !(resume.approved === false || ["reject", "rejected", "deny", "denied", "refuse", "refused"].includes(decision))
+    : true;
   const next = {
     ...current,
     status: "resuming",
@@ -157,7 +163,7 @@ export function resolveWorkspaceInterrupt(runId, interruptId, resume, meta = {})
     resolvedBy: String(meta.resolvedBy || ""),
     reviewer: String(meta.resolvedBy || ""),
     reviewComment: String(resume?.comment || ""),
-    approvalStatus: "approved",
+    approvalStatus: approved ? "approved" : "rejected",
     resolvedAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     idempotencyKey: String(meta.idempotencyKey || ""),

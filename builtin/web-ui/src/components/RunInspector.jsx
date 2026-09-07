@@ -159,6 +159,30 @@ export default function RunInspector({ run, events = [], rawLines = [], loading 
   const runState = useMemo(() => buildRunStateSnapshot(events, run, flowNodes, artifacts), [events, flowNodes, run, artifacts]);
   const businessState = persistedRunState?.state && typeof persistedRunState.state === "object" ? persistedRunState.state : null;
   const timeline = useMemo(() => runInspectorTimelineRows(trace.spans, trace), [trace]);
+  const callFrames = useMemo(() => {
+    const frames = new Map();
+    for (const event of events) {
+      const frameId = String(event?.callFrameId || "").trim();
+      if (!frameId) continue;
+      const current = frames.get(frameId) || {
+        id: frameId,
+        parentNodeId: String(event?.parentNodeId || ""),
+        subflowId: String(event?.subflowId || ""),
+        whileRole: String(event?.whileRole || ""),
+        status: "running",
+        currentNodeId: "",
+      };
+      if (event?.parentNodeId) current.parentNodeId = String(event.parentNodeId);
+      if (event?.subflowId) current.subflowId = String(event.subflowId);
+      if (event?.whileRole) current.whileRole = String(event.whileRole);
+      if (event?.nodeId) current.currentNodeId = String(event.nodeId);
+      if (["node-waiting", "subflow-waiting", "waiting"].includes(String(event?.type || ""))) current.status = "waiting";
+      if (String(event?.type || "") === "subflow-done") current.status = "success";
+      else if (String(event?.type || "") === "node-done" && current.status !== "waiting") current.status = "success";
+      frames.set(frameId, current);
+    }
+    return Array.from(frames.values());
+  }, [events]);
   const primaryRows = trace.turns.length ? trace.turns : trace.nodes;
   const selectedSpan = trace.spans.find((span) => span.id === selectedSpanId) || primaryRows[0] || trace.spans[0] || null;
   const query = search.trim().toLowerCase();
@@ -212,6 +236,20 @@ export default function RunInspector({ run, events = [], rawLines = [], loading 
               <div className="af-run-state__section-head"><h3>业务 Run State</h3><span>rev {persistedRunState.revision || 0} · 节点上报</span></div>
               <pre>{JSON.stringify(businessState, null, 2)}</pre>
               {runStateEvents.length ? <small className="af-run-state__state-events">最近更新：{runStateEvents.slice(-3).map((event) => `${event.operation || "update"} · ${event.nodeId || "node"}`).join("；")}</small> : null}
+            </section>
+          ) : null}
+          {callFrames.length ? (
+            <section className="af-run-state__section af-run-state__call-frames">
+              <div className="af-run-state__section-head"><h3>子流程调用帧</h3><span>{callFrames.length} frames</span></div>
+              <div className="af-run-state__stages">
+                {callFrames.map((frame) => (
+                  <div className={`af-run-state__stage is-${frame.status}`} key={frame.id}>
+                    <span className="material-symbols-outlined">account_tree</span>
+                    <div><strong>{frame.subflowId || "Subflow"}</strong><small>{frame.status} · {frame.currentNodeId || frame.parentNodeId || "—"}{frame.whileRole ? ` · ${frame.whileRole}` : ""}</small></div>
+                    <code title={frame.id}>{frame.id.slice(0, 12)}</code>
+                  </div>
+                ))}
+              </div>
             </section>
           ) : null}
           {runStateHistory.length ? (

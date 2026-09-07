@@ -261,8 +261,23 @@ body {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.af-approval-card__actions { display: flex; align-items: center; flex-shrink: 0; }
+.af-approval-card__actions { display: flex; align-items: center; gap: .45rem; flex-shrink: 0; }
 .af-approval-open { color: var(--af-primary); }
+.af-approval-approve,
+.af-approval-reject {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.35rem;
+  padding: 0 .8rem;
+  border: 1px solid transparent;
+  border-radius: .55rem;
+  font: inherit;
+  cursor: pointer;
+}
+.af-approval-approve { color: #061b10; background: #79e2a7; }
+.af-approval-reject { color: #ffe8e8; background: rgba(224, 94, 109, .18); border-color: rgba(255, 138, 138, .3); }
+.af-approval-approve:disabled,
+.af-approval-reject:disabled { opacity: .55; cursor: default; }
 
 @media (max-width: 640px) {
   .af-approvals-head, .af-approval-card { flex-direction: column; }
@@ -11360,6 +11375,25 @@ button.af-project-card {
 
 .af-subflow-editor-bar button:hover { background: rgba(124, 77, 255, 0.24); }
 .af-subflow-editor-bar button .material-symbols-outlined { font-size: 0.9rem; }
+.af-subflow-editor-bar__crumb {
+  min-width: 0;
+  max-width: 15rem;
+  border-color: transparent !important;
+  background: transparent !important;
+  padding: 0.25rem 0.35rem !important;
+  gap: 0.38rem !important;
+}
+.af-subflow-editor-bar__crumb strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(235, 229, 255, 0.72);
+  font-size: 0.68rem;
+}
+.af-subflow-editor-bar__crumb--current {
+  cursor: default !important;
+}
+.af-subflow-editor-bar__crumb--current strong { color: rgba(255, 255, 255, 0.96); }
 .af-subflow-editor-bar__separator { color: rgba(225, 218, 237, 0.32); }
 .af-subflow-editor-bar__kind {
   border: 1px solid rgba(169, 149, 255, 0.22);
@@ -14557,6 +14591,7 @@ button.af-project-card {
 .af-run-state__stage strong { display: block; overflow: hidden; color: rgba(235,232,239,.78); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
 .af-run-state__stage small { display: block; margin-top: .16rem; color: rgba(229,226,225,.35); font: .56rem var(--af-mono); }
 .af-run-state__stage-duration { color: rgba(229,226,225,.32); font: .56rem var(--af-mono); }
+.af-run-state__call-frames .af-run-state__stage code { color: rgba(218,207,241,.42); font: .54rem var(--af-mono); }
 .af-run-state__empty { margin: .5rem 0 0; color: rgba(229,226,225,.42); font-size: .66rem; }
 .af-run-state__snapshot { margin-top: .75rem; }
 .af-run-state__snapshot summary { padding: .52rem .7rem; color: rgba(218,207,241,.67); font-size: .64rem; font-weight: 750; cursor: pointer; }

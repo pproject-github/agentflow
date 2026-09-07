@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentFlow · 子流程隔离 Draft</title>
+  <style>
+    :root{--bg:#f4f6fa;--panel:#fff;--ink:#182230;--muted:#718096;--line:#dfe5ee;--blue:#3f67d8;--blue-soft:#eef3ff;--purple:#7656c8;--purple-soft:#f3efff;--green:#16835a;--green-soft:#e7f7ef;--amber:#a46a00;--amber-soft:#fff4d8;--red:#b53e4b;--red-soft:#ffedf0;--shadow:0 12px 32px rgba(35,48,72,.08)}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}.shell{max-width:1280px;margin:0 auto;padding:26px 24px 46px}.top{display:flex;justify-content:space-between;gap:20px;align-items:flex-start;margin-bottom:20px}.eyebrow{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--purple);font-weight:800}.top h1{font-size:28px;line-height:1.2;margin:7px 0 6px}.top p{margin:0;color:var(--muted)}button{font:inherit;border:0;cursor:pointer}.refresh{padding:10px 15px;border:1px solid var(--line);background:#fff;border-radius:10px;color:var(--ink)}.crumbs{display:flex;gap:9px;align-items:center;color:var(--muted);margin-bottom:16px}.crumbs button{background:none;color:var(--blue);padding:0}.layout{display:grid;grid-template-columns:260px minmax(0,1fr) 300px;gap:16px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}.panel h2{font-size:14px;margin:0}.panel-head{padding:16px 17px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px;align-items:center}.tree{padding:10px}.tree button{width:100%;display:flex;align-items:center;gap:9px;text-align:left;padding:11px 10px;border-radius:9px;background:transparent;color:var(--ink)}.tree button:hover,.tree button.active{background:var(--blue-soft);color:var(--blue)}.tree .nested{margin:2px 0 4px 23px;border-left:1px solid var(--line);padding-left:7px}.dot{width:8px;height:8px;border-radius:50%;background:#a4afbf;flex:0 0 auto}.dot.green{background:#25ae76}.dot.amber{background:#df9d24}.dot.red{background:#d75966}.node-meta{margin-left:auto;color:var(--muted);font-size:11px}.canvas{min-height:570px;padding:18px;display:flex;flex-direction:column}.canvas-toolbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.canvas-toolbar small{color:var(--muted)}.badge{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:99px;font-size:11px;font-weight:700}.badge.wait{background:var(--amber-soft);color:var(--amber)}.badge.run{background:var(--blue-soft);color:var(--blue)}.badge.ok{background:var(--green-soft);color:var(--green)}.badge.fail{background:var(--red-soft);color:var(--red)}.graph{flex:1;display:flex;align-items:center;justify-content:center;overflow:auto}.graph-row{display:flex;align-items:center;gap:0;min-width:700px}.edge{width:46px;height:2px;background:#b7c3d8;position:relative}.edge:after{content:"";position:absolute;right:-1px;top:-4px;border-left:7px solid #b7c3d8;border-top:5px solid transparent;border-bottom:5px solid transparent}.card{width:156px;min-height:116px;border:1px solid var(--line);border-radius:12px;background:#fff;padding:13px;box-shadow:0 6px 18px rgba(35,48,72,.06);position:relative}.card.active{border-color:#e1ab38;box-shadow:0 0 0 3px #fff3d1,0 8px 24px rgba(171,115,0,.12)}.card.done{border-color:#7bcda7}.card .kind{font-size:10px;color:var(--muted);letter-spacing:.08em;text-transform:uppercase}.card strong{display:block;margin-top:7px;font-size:14px}.card p{font-size:11px;color:var(--muted);margin:7px 0 0}.card .mini{position:absolute;right:10px;top:10px;width:7px;height:7px;border-radius:50%;background:#a7b2c3}.card.active .mini{background:#e2a52d}.card.done .mini{background:#27a873}.subflow-card{width:210px;border-color:#b9a7ee;background:linear-gradient(180deg,#fff,#faf8ff)}.subflow-card .kind{color:var(--purple)}.frame{margin-top:17px;border:1px dashed #c7b9ee;background:var(--purple-soft);padding:11px;border-radius:10px;font-size:11px;color:#5b4895}.side-section{padding:15px 17px;border-bottom:1px solid var(--line)}.side-section:last-child{border-bottom:0}.label{font-size:11px;color:var(--muted);margin-bottom:6px}.kv{display:grid;grid-template-columns:1fr auto;gap:5px;font-size:12px}.kv span:last-child{color:var(--ink);font-weight:600}.code{font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;background:#f7f9fc;border:1px solid var(--line);border-radius:9px;padding:10px;white-space:pre-wrap;overflow:auto}.contract{display:grid;gap:7px}.contract-row{display:flex;justify-content:space-between;gap:10px;font-size:12px;padding:7px 9px;border-radius:8px;background:#f8fafc}.contract-row b{font-weight:600}.contract-row code{color:var(--purple)}.actions{display:flex;gap:8px;flex-wrap:wrap}.primary,.secondary,.danger{padding:9px 12px;border-radius:9px}.primary{background:var(--blue);color:#fff}.secondary{background:#edf1f7;color:#334155}.danger{background:#fff0f2;color:var(--red);border:1px solid #ffd1d8}.primary:disabled,.secondary:disabled,.danger:disabled{opacity:.5;cursor:default}.timeline{display:grid;gap:9px;margin:0;padding:0;list-style:none}.timeline li{display:grid;grid-template-columns:9px 1fr;gap:8px;font-size:11px}.timeline i{width:8px;height:8px;border-radius:50%;background:#a9b4c4;margin-top:5px}.timeline li.current i{background:#e2a52d}.timeline li.success i{background:#24a570}.timeline small{color:var(--muted)}.notice{margin-top:16px;padding:11px 13px;border-radius:9px;background:#f8fafc;border:1px solid var(--line);color:#536174;font-size:12px}.hidden{display:none}@media(max-width:1000px){.layout{grid-template-columns:1fr}.tree{display:flex;gap:5px;overflow:auto}.tree .nested{display:contents}.tree button{min-width:180px}.canvas{min-height:480px}}@media(max-width:640px){.shell{padding:18px 13px 30px}.top{flex-direction:column}.graph-row{transform:scale(.86);transform-origin:center}.top h1{font-size:23px}}
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <header class="top">
+      <div><div class="eyebrow">AgentFlow · Draft</div><h1>子流程隔离运行视图</h1><p>同一 Run 内查看父流程、调用帧与子流程局部状态。</p></div>
+      <button class="refresh" id="reset">↻ 重置演示</button>
+    </header>
+    <nav class="crumbs" id="crumbs"><button data-view="parent">报告发布流程</button><span>›</span><button data-view="child">调用报告审核</button></nav>
+    <section class="layout">
+      <aside class="panel">
+        <div class="panel-head"><h2>执行树</h2><span class="badge run" id="treeStatus">运行中</span></div>
+        <div class="tree">
+          <button class="active" data-view="parent"><i class="dot green"></i><span>报告发布流程</span><span class="node-meta">root</span></button>
+          <div class="nested">
+            <button data-view="child"><i class="dot amber" id="childDot"></i><span>调用报告审核</span><span class="node-meta">frame</span></button>
+            <button data-view="node"><i class="dot amber"></i><span>人工确认</span><span class="node-meta">waiting</span></button>
+          </div>
+          <button data-view="publish"><i class="dot" id="publishDot"></i><span>发布报告</span><span class="node-meta">pending</span></button>
+        </div>
+        <div class="side-section"><div class="label">隔离边界</div><div class="kv"><span>父 Run</span><span>run-2026-0904</span><span>调用帧</span><span>call-001</span><span>子流程</span><span>reportReview</span></div></div>
+      </aside>
+
+      <section class="panel canvas">
+        <div class="canvas-toolbar"><div><h2 id="canvasTitle">父流程 · 报告发布流程</h2><small id="canvasHint">父画布只显示 SUBFLOW CALL，不平铺子流程内部节点</small></div><span class="badge wait" id="mainStatus">等待子流程</span></div>
+        <div class="graph" id="parentGraph">
+          <div class="graph-row">
+            <div class="card done"><span class="kind">INPUT</span><strong>报告主题</strong><p>本周运行质量报告</p><i class="mini"></i></div><div class="edge"></div>
+            <div class="card done"><span class="kind">AGENT</span><strong>生成报告</strong><p>已完成 · 43s</p><i class="mini"></i></div><div class="edge"></div>
+            <div class="card subflow-card active"><span class="kind">SUBFLOW CALL</span><strong>报告审核</strong><p>子节点 1 / 2 · 等待确认</p><div class="frame">frame: call-001<br>输入：report<br>输出：approved</div><i class="mini"></i></div><div class="edge"></div>
+            <div class="card" id="parentPublish"><span class="kind">AGENT</span><strong>发布报告</strong><p>等待审批结果</p><i class="mini"></i></div>
+          </div>
+        </div>
+        <div class="graph hidden" id="childGraph">
+          <div class="graph-row">
+            <div class="card done"><span class="kind">SUBFLOW START</span><strong>输入代理</strong><p>report:text</p><i class="mini"></i></div><div class="edge"></div>
+            <div class="card done"><span class="kind">AGENT</span><strong>检查报告</strong><p>已完成</p><i class="mini"></i></div><div class="edge"></div>
+            <div class="card active" id="approvalNode"><span class="kind">INTERRUPT</span><strong>人工确认</strong><p>等待审批</p><i class="mini"></i></div><div class="edge"></div>
+            <div class="card" id="returnNode"><span class="kind">SUBFLOW RETURN</span><strong>返回结果</strong><p>approved:boolean</p><i class="mini"></i></div>
+          </div>
+        </div>
+        <div class="notice" id="notice">当前暂停只阻塞调用帧，父 Run 保留在同一条执行链上；恢复后从子流程 checkpoint 继续。</div>
+      </section>
+
+      <aside class="panel">
+        <div class="panel-head"><h2 id="inspectorTitle">调用帧详情</h2><span class="badge wait" id="inspectorStatus">waiting</span></div>
+        <div class="side-section"><div class="label">输入契约</div><div class="contract"><div class="contract-row"><b>report</b><code>text</code></div></div></div>
+        <div class="side-section"><div class="label">输出契约</div><div class="contract"><div class="contract-row"><b>approved</b><code>bool</code></div><div class="contract-row"><b>comment</b><code>text?</code></div></div></div>
+        <div class="side-section"><div class="label">局部 State（子流程）</div><pre class="code" id="state">{
+  "reviewed": true,
+  "approved": null
+}</pre></div>
+        <div class="side-section"><div class="label">操作</div><div class="actions"><button class="primary" id="resume">批准并恢复</button><button class="danger" id="reject">驳回</button></div></div>
+        <div class="side-section"><div class="label">调用帧时间线</div><ul class="timeline" id="timeline"><li class="success"><i></i><div><b>检查报告</b><br><small>node-done · 20:19:31</small></div></li><li class="current"><i></i><div><b>人工确认</b><br><small>waiting · 20:19:32</small></div></li><li><i></i><div><b>返回父流程</b><br><small>等待恢复</small></div></li></ul></div>
+      </aside>
+    </section>
+  </main>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let status = "waiting";
+    function setView(view) {
+      const child = view === "child" || view === "node";
+      $("parentGraph").classList.toggle("hidden", child);
+      $("childGraph").classList.toggle("hidden", !child);
+      $("canvasTitle").textContent = child ? "子流程 · 报告审核" : "父流程 · 报告发布流程";
+      $("canvasHint").textContent = child ? "当前调用帧：call-001 · 只展示本次子流程执行" : "父画布只显示 SUBFLOW CALL，不平铺子流程内部节点";
+      $("inspectorTitle").textContent = child ? "子流程局部状态" : "调用帧详情";
+      document.querySelectorAll(".tree button").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
+    }
+    function finish(approved) {
+      if (status !== "waiting") return;
+      status = approved ? "success" : "rejected";
+      $("mainStatus").textContent = approved ? "执行中" : "已驳回";
+      $("mainStatus").className = "badge " + (approved ? "run" : "fail");
+      $("inspectorStatus").textContent = approved ? "resumed" : "rejected";
+      $("inspectorStatus").className = "badge " + (approved ? "ok" : "fail");
+      $("resume").disabled = true; $("reject").disabled = true;
+      $("approvalNode").className = "card done";
+      $("approvalNode").querySelector("p").textContent = approved ? "已批准" : "已驳回";
+      $("returnNode").className = approved ? "card done" : "card";
+      $("returnNode").querySelector("p").textContent = approved ? "已返回父流程" : "未返回";
+      $("parentPublish").className = approved ? "card active" : "card";
+      $("parentPublish").querySelector("p").textContent = approved ? "开始执行" : "被阻塞";
+      $("childDot").className = "dot " + (approved ? "green" : "red"); $("publishDot").className = "dot " + (approved ? "amber" : "red");
+      $("treeStatus").textContent = approved ? "运行中" : "已驳回"; $("treeStatus").className = "badge " + (approved ? "run" : "fail");
+      $("state").textContent = JSON.stringify({ reviewed: true, approved }, null, 2);
+      $("timeline").innerHTML += `<li class="success"><i></i><div><b>人工确认</b><br><small>${approved ? "resume" : "reject"} · 20:20:04</small></div></li><li><i></i><div><b>返回父流程</b><br><small>${approved ? "父流程继续" : "父流程结束"}</small></div></li>`;
+      $("notice").textContent = approved ? "子流程已恢复并返回 approved，父流程从 SUBFLOW CALL 之后继续。" : "子流程已结束为 rejected，父流程不会误判为成功。";
+    }
+    function reset() { location.reload(); }
+    document.querySelectorAll("[data-view]").forEach((el) => el.addEventListener("click", () => setView(el.dataset.view)));
+    $("resume").addEventListener("click", () => finish(true)); $("reject").addEventListener("click", () => finish(false)); $("reset").addEventListener("click", reset);
+  </script>
+</body>
+</html>

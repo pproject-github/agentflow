@@ -64,3 +64,18 @@ test("workspace interrupt rejects a stale revision", () => {
     (error) => error.code === "INTERRUPT_REVISION_CONFLICT",
   );
 });
+
+test("workspace interrupt records a rejected approval", () => {
+  const runId = "run-interrupt-reject-test";
+  const created = createWorkspaceInterrupt(runId, {
+    nodeId: "confirm",
+    resumeSchema: { type: "object", required: ["approved"] },
+  });
+  const resolved = resolveWorkspaceInterrupt(runId, created.interruptId, {
+    approved: false,
+    decision: "reject",
+    comment: "需要补充风险说明",
+  }, { resolvedBy: "tester" });
+  assert.equal(resolved.approvalStatus, "rejected");
+  assert.equal(resolved.reviewComment, "需要补充风险说明");
+});
