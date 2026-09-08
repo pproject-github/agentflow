@@ -9,7 +9,10 @@
 - `agent_subAgent` is for semantic/code/text reasoning tasks.
 - Local-only nodes are executed by AgentFlow runtime and do not call an agent.
 - The Workspace runtime executes a DAG; cyclic graphs are rejected. Express check-then-fix as forward steps.
-- Edge handles are positional: `input-0`, `output-0`, etc. Match slot order exactly.
+- An edge names the slots it connects: `sourceHandle: "next"`, `targetHandle: "prev"`. Positional `output-0` / `input-1` handles are still read, resolved against the slot table stored beside them, but never write them -- add a slot to a definition and every index past it means a different pin.
+- One incoming edge per input slot. A second one is refused on save, and the runtime would have used only the first anyway.
+- Slot types must be compatible across an edge; a data output cannot feed a control pin (`prev` / `next`).
+- Do not hand-write an instance's slot table. Slots come from the node definition (or, for a code node package, from the package); the graph keeps only their values.
 
 ## agent
 

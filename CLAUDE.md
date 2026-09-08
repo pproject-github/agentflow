@@ -269,7 +269,7 @@ instances:
 edges:
   - source: <instanceId>
     target: <instanceId>
-    sourceHandle: output-0
+    sourceHandle: output-0    # flow.yaml 用位置下标；Workspace 图用槽位名（next / prev / content…）
     targetHandle: input-0
 ui:
   nodePositions:
@@ -278,7 +278,12 @@ ui:
       y: <number>
 ```
 
-**Handle quick reference** (⚠️ = `runtime: none`, legacy Start/End only — never in a Workspace graph):
+**Handle quick reference** — positional handles below describe **`flow.yaml` only**. A
+Workspace graph names the slots an edge connects (`sourceHandle: next`, `targetHandle: prev`);
+positional handles are still read there but never written, because adding a slot to a
+definition shifts every index past it onto a different pin.
+
+(⚠️ = `runtime: none`, legacy Start/End only — never in a Workspace graph):
 | definitionId | Common outputs | Common inputs |
 |--------------|----------------|---------------|
 | control_start ⚠️ | next → output-0 | — |
