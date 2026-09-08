@@ -693,7 +693,8 @@ export function workspaceDesignPath(workspaceRoot) {
 export function writeWorkspaceGraph(workspaceRoot, graph, marketplaceRoot = "") {
   const result = writeWorkspaceGraphFiles(workspaceRoot, graph, { marketplaceRoot });
   if (result.degradedReason) {
-    log.warn(`Workspace 图无法表示成代码，已退回 ${WORKSPACE_GRAPH_FILENAME}：${result.degradedReason}`);
+    // 不带流程目录的话这条告警没法追：线上攒了 900 多条，谁都不知道是哪张图退化了。
+    log.warn(`Workspace 图无法表示成代码，已退回 ${WORKSPACE_GRAPH_FILENAME}（${path.resolve(workspaceRoot)}）：${result.degradedReason}`);
   }
   return result;
 }
