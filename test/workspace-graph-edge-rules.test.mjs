@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  edgeWipeWithoutNodeDeletion,
   introducedWorkspaceGraphEdgeViolations,
   workspaceGraphEdgeViolations,
 } from "../bin/lib/workspace-graph-edge-rules.mjs";
@@ -87,4 +88,44 @@ test("把坏边改对之后保存，放行", () => {
   const stored = graph([{ source: "a", target: "b", sourceHandle: "content", targetHandle: "prev" }]);
   const fixed = graph([{ source: "a", target: "b", sourceHandle: "next", targetHandle: "prev" }]);
   assert.deepEqual(introducedWorkspaceGraphEdgeViolations(stored, fixed), []);
+});
+
+// 0.1.190 的教训：画布加载时漏了一处句柄换算，React Flow 匹配不到 handle 丢掉全部边，
+// 用户随后任何一次保存都把这个状态写回磁盘。3 个线上流程的连线因此永久没了，
+// 服务端没有任何快照能恢复。渲染 bug 不该有删数据的能力。
+test("节点全在、连线全没 —— 拦下来", () => {
+  const stored = graph([
+    { source: "a", target: "b", sourceHandle: "next", targetHandle: "prev" },
+    { source: "a", target: "b", sourceHandle: "content", targetHandle: "content" },
+  ]);
+  const wiped = { instances: stored.instances, edges: [] };
+  assert.deepEqual(edgeWipeWithoutNodeDeletion(stored, wiped), { removedEdges: 2, keptNodes: 2 });
+});
+
+test("删了节点连带没线，是正常编辑，放行", () => {
+  const stored = graph([
+    { source: "a", target: "b", sourceHandle: "next", targetHandle: "prev" },
+    { source: "a", target: "b", sourceHandle: "content", targetHandle: "content" },
+  ]);
+  assert.equal(edgeWipeWithoutNodeDeletion(stored, { instances: { a: md() }, edges: [] }), null);
+});
+
+test("还剩线就不是这个形态，放行", () => {
+  const stored = graph([
+    { source: "a", target: "b", sourceHandle: "next", targetHandle: "prev" },
+    { source: "a", target: "b", sourceHandle: "content", targetHandle: "content" },
+  ]);
+  const one = { instances: stored.instances, edges: [{ source: "a", target: "b", sourceHandle: "next", targetHandle: "prev" }] };
+  assert.equal(edgeWipeWithoutNodeDeletion(stored, one), null);
+});
+
+// 只有一条线时，删掉它和「线丢了」分不开——那也只损失一条，人自己看得见。
+test("原本只有一条线，不拦", () => {
+  const stored = graph([{ source: "a", target: "b", sourceHandle: "next", targetHandle: "prev" }]);
+  assert.equal(edgeWipeWithoutNodeDeletion(stored, { instances: stored.instances, edges: [] }), null);
+});
+
+test("本来就没有线的图，不拦", () => {
+  const stored = graph([]);
+  assert.equal(edgeWipeWithoutNodeDeletion(stored, { instances: stored.instances, edges: [] }), null);
 });

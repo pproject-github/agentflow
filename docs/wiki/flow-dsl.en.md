@@ -170,6 +170,16 @@ fixing the wrong place**. Resolve an index against the table the edge
 was **written** against, and convert to an index against the table being **rendered** --
 they are not the same table, since merging the definition adds slots and reorders them.
 
+**A rendering bug must not be able to delete data.** When the canvas loses its edges -- a
+missed conversion, handles that match nothing -- it is holding a graph with no edges, and
+the user's next save writes that to disk. That is how 0.1.190 permanently erased the wiring
+of three deployed flows, with no snapshot anywhere to restore from. So the save path tells
+"the user deleted edges" apart from "the edges were lost somewhere else": people delete
+edges one at a time, while a rendering failure loses **all of them at once with every node
+still present**. The second case is refused with a 409 (`edgeWipeWithoutNodeDeletion`).
+Anyone who genuinely wants to clear all wiring can delete any one node first -- better that
+a rare action takes an extra step than that one silent save wipes someone's graph.
+
 ## Key design: the definition owns the slot table
 
 A slot table stored in the graph is only a snapshot of what the definition looked like the

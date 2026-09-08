@@ -82,3 +82,38 @@ export function introducedWorkspaceGraphEdgeViolations(storedGraph, nextGraph) {
   const existing = new Set(workspaceGraphEdgeViolations(storedGraph).map((v) => v.key));
   return workspaceGraphEdgeViolations(nextGraph).filter((v) => !existing.has(v.key));
 }
+
+/**
+ * 这次保存是不是「节点全在、连线全没」。
+ *
+ * 0.1.190 的教训：画布加载时把边的句柄换算漏了一处，React Flow 匹配不到任何 handle，
+ * 整张图的边被丢掉。画布手里从此是一张没有边的图，用户随后**任何一次保存**都把这个
+ * 状态写回磁盘——一个渲染 bug 就这样变成了不可恢复的数据删除，3 个线上流程的连线没了，
+ * 服务端没有任何快照能恢复。
+ *
+ * 所以存图这一步要能分辨「用户删了线」和「线在别处丢了」。两者的形态不一样：
+ * 人删线是一条一条来的，每次保存少一两条；渲染失败是**一次全没**，而节点一个不少。
+ * 只拦后者——判据窄，但那正是会造成不可逆损失的那一种。
+ *
+ * 故意清空全部连线的人还有路可走：先删掉任意一个节点，或者分两次删。宁可让这种
+ * 罕见操作多一步，也不能让一次静默保存抹掉别人的图。
+ *
+ * @param {object} storedGraph 磁盘上当前那张图
+ * @param {object} nextGraph 这次要存的图
+ * @returns {{removedEdges: number, keptNodes: number}|null} 命中时返回细节，否则 null
+ */
+export function edgeWipeWithoutNodeDeletion(storedGraph, nextGraph) {
+  const storedInstances = storedGraph?.instances && typeof storedGraph.instances === "object" ? storedGraph.instances : {};
+  const nextInstances = nextGraph?.instances && typeof nextGraph.instances === "object" ? nextGraph.instances : {};
+  const storedEdges = Array.isArray(storedGraph?.edges) ? storedGraph.edges : [];
+  const nextEdges = Array.isArray(nextGraph?.edges) ? nextGraph.edges : [];
+
+  // 一条边都没有过的图，谈不上被抹掉；只有一条时也可能就是人手删的
+  if (storedEdges.length < 2 || nextEdges.length > 0) return null;
+  const storedIds = Object.keys(storedInstances);
+  if (!storedIds.length) return null;
+  // 删过节点就不是这个形态——删节点连带删线是正常编辑
+  if (storedIds.some((id) => !Object.prototype.hasOwnProperty.call(nextInstances, id))) return null;
+
+  return { removedEdges: storedEdges.length, keptNodes: storedIds.length };
+}

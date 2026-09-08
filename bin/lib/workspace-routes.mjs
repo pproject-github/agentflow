@@ -77,7 +77,7 @@ import { createWorkspaceRunController, resolveWorkspaceRunTimeoutMs } from "./wo
 import { readWorkspaceRunState, readWorkspaceRunStateEvents, readWorkspaceRunStateHistory } from "./workspace-run-state.mjs";
 import { listWorkspaceInterrupts, readWorkspaceInterrupt } from "./workspace-interrupt.mjs";
 import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, readWorkspaceRunManifest, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
-import { introducedWorkspaceGraphEdgeViolations } from "./workspace-graph-edge-rules.mjs";
+import { edgeWipeWithoutNodeDeletion, introducedWorkspaceGraphEdgeViolations } from "./workspace-graph-edge-rules.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
 import { discoverReleaseActions, discoverReleaseCompositeActions, filterReleaseActionsForWorkflow, normalizeReleaseAgentResult, releaseAgentResultFromWorkspaceRun, releaseContextKey } from "./release-runtime.mjs";
@@ -3570,6 +3570,20 @@ async function workspaceRoutes(req, res, ctx) {
         // 画布上 isValidConnection 拦得住手画的线；程序化写入口绕开画布直接提交，
         // 非法边就是这么进库的。只拦这次**新引入**的——存量坏边一刀切会让作者连改都
         // 改不动，存不进去就没法修。
+        // 节点一个不少、连线一条不剩，不是人删的，是线在别处丢了（画布没渲染出来、
+        // 换算失败…）。这种保存会不可逆地抹掉别人的图，且服务端没有快照能恢复。
+        const wiped = edgeWipeWithoutNodeDeletion(currentStoredGraph, graph);
+        if (wiped) {
+          json(res, 409, {
+            error: `拒绝保存：这次保存会删掉全部 ${wiped.removedEdges} 条连线，而 ${wiped.keptNodes} 个节点一个都没删。`
+              + "多半是画布没能把连线画出来，请刷新页面确认连线还在，再保存。",
+            kind: "edge_wipe_refused",
+            removedEdges: wiped.removedEdges,
+            keptNodes: wiped.keptNodes,
+            currentRevision,
+          });
+          return;
+        }
         const introducedViolations = introducedWorkspaceGraphEdgeViolations(currentStoredGraph, graph);
         if (introducedViolations.length) {
           json(res, 422, {
