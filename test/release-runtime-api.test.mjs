@@ -20,16 +20,17 @@ test("maps a completed Agent result into timeline details and release records", 
   assert.deepEqual(result.state.timeline[0].details.artifacts, [{ path: "reports/localization.json" }]);
 });
 
-test("maps a waiting Agent result onto the timeline as success with waiting matter", async () => {
+test("keeps a waiting Agent result pending without advancing the timeline", async () => {
   const { applyReleaseAgentResult } = await import("../bin/lib/release-runtime.mjs?agent-waiting-contract");
   const state = { timeline: [], pending: [{ id: "cap-1", nodeId: "localization-upload-notify", status: "running" }] };
   const result = applyReleaseAgentResult(state, "localization-upload-notify", {
-    status: "waiting", summary: "等待人工确认", waiting: { reason: "需要确认发送通知", confirmation: "confirm-1" },
+    status: "waiting", summary: "等待外部结果", waiting: { reason: "external_result_pending", operator_url: "https://example.test/status" },
   });
-  assert.equal(result.state.pending.length, 0);
-  assert.equal(result.state.timeline[0].status, "completed");
-  assert.equal(result.state.timeline[0].waiting.reason, "需要确认发送通知");
-  assert.equal(result.advance, true);
+  assert.equal(result.state.pending.length, 1);
+  assert.equal(result.state.pending[0].status, "waiting");
+  assert.equal(result.state.pending[0].waiting.reason, "external_result_pending");
+  assert.equal(result.state.timeline.length, 0);
+  assert.equal(result.advance, false);
 });
 
 test("keeps a failed Agent capability retryable with a sanitized reason", async () => {
@@ -43,6 +44,18 @@ test("keeps a failed Agent capability retryable with a sanitized reason", async 
   assert.match(result.state.pending[0].error, /执行失败|失败/);
   assert.doesNotMatch(result.state.pending[0].error, /secret-value|private\.example/);
   assert.equal(result.retryable, true);
+});
+
+test("normalizes interactive waiting into a retryable failure", async () => {
+  const { normalizeReleaseAgentResult } = await import("../bin/lib/release-runtime.mjs?interactive-waiting-contract");
+  const result = normalizeReleaseAgentResult({
+    status: "waiting",
+    summary: "等待确认",
+    waiting: { reason: "confirmation_required", confirmation: "confirm-1" },
+  });
+  assert.equal(result.status, "failed");
+  assert.match(result.summary, /确认|交互/);
+  assert.equal(result.waiting.reason, "confirmation_required");
 });
 
 test("release runtime API exposes filtered catalog and initialization state", async () => {
@@ -304,7 +317,7 @@ test("reconciles persisted release runs with AgentFlow manifests after a server 
   assert.equal(result.state.runs[staleRunId].status, "failed");
 });
 
-test("reconcileReleaseState promotes Agent waiting onto the timeline as success", async () => {
+test("reconcileReleaseState keeps Agent waiting pending", async () => {
   const { reconcileReleaseState } = await import("../bin/lib/release-runtime-store.mjs?release-state-reconcile-waiting");
   const workspaceRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-release-reconcile-waiting-")));
   const context = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
@@ -345,10 +358,10 @@ test("reconcileReleaseState promotes Agent waiting onto the timeline as success"
     },
   }, { now: Date.parse("2026-09-03T08:00:00.000Z") });
 
-  assert.equal(result.state.pending.length, 0);
-  assert.equal(result.state.timeline[0].status, "completed");
-  assert.equal(result.state.timeline[0].waiting?.reason, "managed_topic_mr_open");
-  assert.match(result.state.timeline[0].output?.summary || "", /MR !1142/);
+  assert.equal(result.state.pending.length, 1);
+  assert.equal(result.state.pending[0].status, "waiting");
+  assert.equal(result.state.timeline.length, 0);
+  assert.equal(result.state.pending[0].waiting?.reason, "managed_topic_mr_open");
   assert.equal(result.state.runs[runId].status, "waiting");
   fs.rmSync(workspaceRoot, { recursive: true, force: true });
 });

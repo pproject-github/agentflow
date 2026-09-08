@@ -181,7 +181,12 @@ export function normalizeReleaseAgentResult(raw) {
     value = mergeNestedReleaseResult(value, nestedParsed.value, nestedParsed.rest);
   }
   const statusValue = String(envelopeStatus || value.status || "").trim().toLowerCase();
-  const status = ["completed", "waiting", "failed"].includes(statusValue) ? statusValue : (statusValue ? "failed" : "completed");
+  let status = ["completed", "waiting", "failed"].includes(statusValue) ? statusValue : (statusValue ? "failed" : "completed");
+  const waitingReason = String(value?.waiting?.reason || value?.waiting?.code || "").trim().toLowerCase();
+  if (status === "waiting" && /confirm|approval|required|input|interactive|人工|确认/.test(waitingReason)) {
+    status = "failed";
+    value = { ...value, summary: value.summary || "节点需要人工确认或补充输入，固定节点不支持交互，请修正输入后重试。" };
+  }
   return sanitizeReleaseValue({
     ...value,
     status,
@@ -248,8 +253,7 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
   const index = state.pending.findIndex((item) => item?.nodeId === nodeId || item?.id === nodeId);
   const current = index >= 0 ? { ...state.pending[index] } : { id: nodeId, nodeId };
   const details = { ...(current.details || {}), steps: result.steps, records: result.records, artifacts: result.artifacts, summary: result.summary };
-  if (result.status === "completed" || result.status === "waiting") {
-    // waiting = 人工闸说明项，无续跑交互；按成功入时间线，waiting 字段留给 UI 待办。
+  if (result.status === "completed") {
     const completed = {
       ...current,
       nodeId,
@@ -260,9 +264,6 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
       completedAt: Date.now(),
       error: "",
       failedAt: undefined,
-      ...(result.status === "waiting"
-        ? { waiting: result.waiting || { reason: result.summary || "待人工处理" } }
-        : {}),
     };
     state.pending = state.pending.filter((_item, itemIndex) => itemIndex !== index);
     state.timeline = [...state.timeline.filter((item) => item.id !== completed.id && item.nodeId !== nodeId), completed];
@@ -274,6 +275,7 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
     status: result.status,
     progress: 0,
     details,
+    ...(result.status === "waiting" ? { waiting: result.waiting || { reason: result.summary || "待人工处理" }, output: result } : {}),
     ...(result.status === "failed" ? { error: result.summary || "发版 Agent 执行失败", failedAt: Date.now() } : {}),
   };
   if (index >= 0) state.pending[index] = pending; else state.pending.push(pending);
@@ -456,6 +458,8 @@ function actionDefinition({ skillRoot, skillPath, skillName, skillMeta, action, 
     allowedBatches: normalizeList(releaseContext.allowed_batches, DEFAULT_BATCHES),
     requiresConfirmation: action?.requires_confirmation === true,
     acceptsCurrentRelease: skillMeta.accepts_current_release !== false,
+    // 用户需求点: 节点审计与 Agent 提示必须能读取 Skill 声明的上下文必填字段，避免运行时才暴露模糊预检错误。
+    requiredReleaseFields: normalizeList(releaseContext.required_fields),
     inputSchema: inputs,
     ...(actionKey === "release-localization:upload-source-file"
       ? { sourceFiles: reviewedLocalizationSourceFiles(skillRoot, context) }

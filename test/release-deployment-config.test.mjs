@@ -77,6 +77,15 @@ test("dev release config maps likee android to the local migration project", asy
   assert.equal(resolved.workspaceRoot, path.resolve(workspaceRoot));
 });
 
+test("dev release Skill roots exclude the removed Google Play AAB extension", async () => {
+  const { readReleaseDeploymentConfig, releaseSkillRoots } = await import("../shared/release-deployment-config.js?without-google-play-aab");
+  const workspaceRoot = "/Users/duanfengyuan/migration-workspace/test/likee_android";
+  const config = readReleaseDeploymentConfig({ AGENTFLOW_DEV: "1", AGENTFLOW_RELEASE_TEST_MODE: "1" });
+  const project = config.projects.find((entry) => entry.businessLine === "likee" && entry.platform === "android");
+  const roots = releaseSkillRoots(config, project, workspaceRoot);
+  assert.deepEqual(roots, [path.join(workspaceRoot, ".workspace", "release-skills")]);
+});
+
 test("reads release-projects.json from the default data-root file when env is unset", async () => {
   const { readReleaseDeploymentConfig, resolveReleaseProjectsFilePath, writeReleaseProjectsDocument } = await import("../shared/release-deployment-config.js?config-default-file");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-projects-default-"));

@@ -82,6 +82,34 @@ test("release execution inputs include immutable context aliases used by release
     product: "likee",
     platform: "android",
     minor_version: "5.63.2",
+    batch: "initial",
+  });
+});
+
+test("release execution inputs carry version context to every release skill action", async () => {
+  const { releaseExecutionInputs } = await import("../bin/lib/release-runtime-executor.mjs?all-release-context");
+  const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
+  for (const skill of ["release-build", "release-google-play", "release-release-notes", "release-notification"]) {
+    assert.deepEqual(releaseExecutionInputs({ skill, action: "run" }, context, {}), {
+      product: "likee",
+      platform: "android",
+      minor_version: "5.63.2",
+      batch: "initial",
+    }, skill);
+  }
+});
+
+test("composite release runs carry the same immutable version and batch aliases", async () => {
+  const { releaseExecutionInputs } = await import("../bin/lib/release-runtime-executor.mjs?composite-context");
+  assert.deepEqual(releaseExecutionInputs(
+    { id: "composite:build-package", kind: "composite", skill: "release-composite" },
+    { businessLine: "likee", platform: "android", version: "5.64.1", batch: "supplemental" },
+    {},
+  ), {
+    product: "likee",
+    platform: "android",
+    minor_version: "5.64.1",
+    batch: "supplemental",
   });
 });
 
@@ -194,12 +222,10 @@ test("single Agent composite graph carries lean skill-trigger prompt", async () 
   }, { source_path: "/tmp/source.yml" });
   assert.deepEqual(Object.values(graph.instances).map((node) => node.definitionId), ["agent_subAgent"]);
   assert.equal(Object.keys(graph.instances).some((id) => id.startsWith("composite_upload")), false);
-  assert.match(graph.instances.release_agent.body, /上传 Likee android 的受审源多语言内容/);
+  assert.match(graph.instances.release_agent.body, /受审源文件集合/);
   assert.match(graph.instances.release_agent.body, /businessLine":"likee"/);
-  assert.match(graph.instances.release_agent.body, /release-localization\/SKILL\.md/);
   assert.match(graph.instances.release_agent.body, /skillRoot:/);
-  assert.match(graph.instances.release_agent.body, /localization-uploaded/);
-  assert.match(graph.instances.release_agent.body, /禁止 skillhub evolve/);
+  assert.match(graph.instances.release_agent.body, /Skill: release-localization, release-notification/);
   assert.doesNotMatch(graph.instances.release_agent.body, /uv run python skills\//);
   assert.doesNotMatch(graph.instances.release_agent.body, /恢复摘要|勿重复 prepare|禁止 --rerun|直接按剧本/);
   assert.doesNotMatch(graph.instances.release_agent.body, /先读列出的 SKILL\.md/);
@@ -213,7 +239,7 @@ test("create-release-branch agent uses primary release-skills root and skips goo
   const main = "/tmp/project/.workspace/release-skills";
   const play = "/tmp/project/.workspace/release-skills-google-play-aab";
   assert.deepEqual(selectReleaseAgentSkillRoots([main, play], "create-release-branch"), [main]);
-  assert.deepEqual(selectReleaseAgentSkillRoots([main, play], "google-play-submit"), [play]);
+  assert.deepEqual(selectReleaseAgentSkillRoots([main, play], "google-play-submit"), [main]);
   const capability = {
     id: "create-release-branch",
     title: "创建/复用发版分支",
@@ -230,12 +256,52 @@ test("create-release-branch agent uses primary release-skills root and skips goo
     repositoryRoot: "/tmp/project", skillRoots: [main, play],
   }, { release_branch: "release/v1.0" });
   assert.match(graph.instances.release_agent.body, /skillRoot: .*release-skills/);
-  assert.match(graph.instances.release_agent.body, /显式选择 release\/v1\.0 并登记/);
-  assert.match(graph.instances.release_agent.body, /相关 Skill: release-git, release-management/);
+  assert.match(graph.instances.release_agent.body, /输入:.*release\/v1\.0/);
+  assert.match(graph.instances.release_agent.body, /Skill: release-git, release-management/);
   assert.doesNotMatch(graph.instances.release_agent.body, /uv run python skills\//);
   assert.doesNotMatch(graph.instances.release_agent.body, /release-skills-google-play-aab\/skills/);
   assert.equal(graph.instances.release_agent.input.find((slot) => slot.name === "skillsContext").value, main);
   assert.ok(graph.instances.release_agent.body.length < 4_000);
+});
+
+test("removed Google Play AAB extension never becomes an Agent Skill root", async () => {
+  const { selectReleaseAgentSkillRoots } = await import("../bin/lib/release-runtime-executor.mjs?removed-google-play-aab");
+  const main = "/tmp/project/.workspace/release-skills";
+  const removedExtension = "/tmp/project/.workspace/release-skills-google-play-aab";
+  assert.deepEqual(selectReleaseAgentSkillRoots([main, removedExtension], "google-play-submit", ["release-google-play"]), [main]);
+});
+
+test("build-package agent receives only the platform build skill root", async () => {
+  const { selectReleaseAgentSkillRoots } = await import("../bin/lib/release-runtime-executor.mjs?build-package-skill-roots");
+  const main = "/tmp/project/.workspace/release-skills";
+  const play = "/tmp/project/.workspace/release-skills-google-play-aab";
+  assert.deepEqual(
+    selectReleaseAgentSkillRoots([main, play], "build-package", ["release-build"]),
+    [main],
+  );
+});
+
+test("build-package prompt points each skill hint at the matching root", async () => {
+  const { buildReleaseAgentPrompt } = await import("../bin/lib/release-runtime-executor.mjs?build-package-skill-entrypoints");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-agent-skill-roots-"));
+  const main = path.join(tempRoot, "release-skills");
+  const play = path.join(tempRoot, "release-skills-google-play-aab");
+  fs.mkdirSync(path.join(main, "skills", "release-build"), { recursive: true });
+  fs.mkdirSync(path.join(play, "skills", "release-google-play"), { recursive: true });
+  fs.writeFileSync(path.join(main, "skills", "release-build", "SKILL.md"), "---\nname: release-build\n---\n");
+  fs.writeFileSync(path.join(play, "skills", "release-google-play", "SKILL.md"), "---\nname: release-google-play\n---\n");
+  try {
+    const prompt = buildReleaseAgentPrompt({
+      capability: { id: "build-package", title: "构建发版包", skillHints: ["release-build"] },
+      context: { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" },
+      skillRoots: [main, play],
+      requiredReleaseFields: ["build_number"],
+    });
+    assert.match(prompt, /skillRoot:/);
+    assert.doesNotMatch(prompt, /release-google-play/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("release capability intents stay lean and operator-guide shaped", async () => {
@@ -267,12 +333,11 @@ test("release capability intents stay lean and operator-guide shaped", async () 
       skillRoots: ["/tmp/p/.workspace/release-skills"],
       previousResult: { status: "completed", summary: "旧成功", records: [{ record_id: "x".repeat(32), operation: "准备翻译归档" }] },
     });
-    assert.match(prompt, /版本页上下文已锁定/);
-    assert.match(prompt, /按各 Skill 的 operator-guide/);
+    assert.match(prompt, /遵循 skillRoot 中相关 Skill/);
     assert.doesNotMatch(prompt, /恢复摘要|勿重复 prepare|幂等成功/);
     assert.match(
       prompt,
-      /创建标准发版分支|拉回翻译|上传 .+ 的受审源多语言|合入主干|发版包|首次发版审核草稿|全量发布审核草稿|首包商店发布|补包商店发布|版本更新说明并通知|开始补包|进入补包流程通知|观察灰度|全量放量通知/,
+      /任务:/,
       id,
     );
     assert.ok(prompt.length < 3_500, `${id} prompt too long: ${prompt.length}`);
@@ -302,6 +367,9 @@ test("release capability intents stay lean and operator-guide shaped", async () 
   assert.match(upload, /上传 Likee android 的受审源多语言内容（版本 5\.64\.0/);
   assert.match(upload, /localization-uploaded/);
   assert.doesNotMatch(upload, /upload-source-file|uv run/);
+  const rolloutMissingPercent = buildReleaseCapabilityPlaybook("rollout", ctx, {});
+  assert.match(rolloutMissingPercent, /gray_percent|灰度百分比/);
+  assert.match(rolloutMissingPercent, /waiting/);
   const download = buildReleaseCapabilityPlaybook("localization-download-merge-notify", ctx, {});
   assert.match(download, /为 Likee android 拉回翻译（版本 5\.64\.0/);
   assert.match(download, /创建或复用 MR/);
@@ -346,6 +414,31 @@ test("release capability intents stay lean and operator-guide shaped", async () 
   assert.doesNotMatch(invalid, /uv run python skills\/release-approval/);
 });
 
+test("capability prompts use configured business goals without CLI playbooks", async () => {
+  const { buildReleaseCapabilityPlaybook, buildReleaseAgentPrompt } = await import("../bin/lib/release-runtime-executor.mjs?config-driven-prompts");
+  const capability = {
+    id: "demo-capability",
+    capabilityGoal: "完成 ${businessLine} ${platform} 的多语言同步并发送通知。",
+    description: "不得使用的旧描述",
+    skillHints: ["release-localization", "release-notification"],
+    promptTemplate: "${businessLine}/${platform}/${version}: ${capabilityGoal}",
+  };
+  const context = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
+  const intent = buildReleaseCapabilityPlaybook("demo-capability", context, {}, capability);
+  assert.equal(intent, "完成 likee android 的多语言同步并发送通知。");
+  const prompt = buildReleaseAgentPrompt({ capability, context, skillRoots: ["/tmp/release-skills"] });
+  assert.match(prompt, /完成 likee android 的多语言同步并发送通知/);
+  assert.doesNotMatch(prompt, /prepare-translation-archive|--rerun|upload-source-file|uv run|先执行|再执行/);
+  assert.ok(prompt.length < 2_500, `prompt too long: ${prompt.length}`);
+});
+
+test("build-package only points at the platform build skill", async () => {
+  const { buildReleaseCapabilityPlaybook } = await import("../bin/lib/release-runtime-executor.mjs?build-package-goal");
+  const config = { id: "build-package", capabilityGoal: "按当前平台构建发版包并记录构建产物。", skillHints: ["release-build"] };
+  const intent = buildReleaseCapabilityPlaybook("build-package", { businessLine: "likee", platform: "ios", version: "5.64.0", batch: "initial" }, {}, config);
+  assert.equal(intent, "按当前平台构建发版包并记录构建产物。");
+});
+
 test("localization download capability completes when its MR is created", async () => {
   const { buildReleaseCapabilityPlaybook, buildReleaseAgentPrompt } = await import("../bin/lib/release-runtime-executor.mjs?localization-mr-completion");
   const context = {
@@ -357,7 +450,6 @@ test("localization download capability completes when its MR is created", async 
   };
   const playbook = buildReleaseCapabilityPlaybook("localization-download-merge-notify", context, {});
   assert.match(playbook, /创建或复用 MR/);
-  assert.match(playbook, /MR 创建或复用成功后.*完成/);
   assert.doesNotMatch(playbook, /MR 合入后/);
   assert.doesNotMatch(playbook, /localization-applied/);
   assert.doesNotMatch(playbook, /发送 localization-uploaded 通知|发送 localization-applied 通知/);
@@ -373,10 +465,10 @@ test("localization download capability completes when its MR is created", async 
     skillRoots: ["/tmp/release-skills"],
   });
   assert.match(prompt, /创建或复用 MR/);
-  assert.match(prompt, /不要等待 MR 合入/);
+  assert.match(prompt, /MR 创建成功即完成/);
   assert.doesNotMatch(prompt, /localization-applied/);
   assert.doesNotMatch(prompt, /发送 localization-applied 通知/);
-  assert.match(prompt, /不要发送合入通知/);
+  assert.doesNotMatch(prompt, /发送合入通知/);
 });
 
 test("retry previousResult is compacted so agent prompts stay under Cursor limits", async () => {

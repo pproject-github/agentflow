@@ -1758,10 +1758,10 @@ async function workspaceRoutes(req, res, ctx) {
           return;
         }
         if (agentResult?.status === "waiting") {
-          // 用户需求点: waiting 无交互续跑——按成功写入时间线，待办另述；重试=整图重跑。
+          // 用户需求点: waiting 是外部/人工阻塞，保留待执行状态，不进入已完成时间线。
           const existing = state.pending.find((item) => item.id === payload.itemId) || {};
           const waitingMatter = agentResult.waiting || { reason: agentResult.summary || "待人工处理" };
-          const successItem = {
+          const waitingItem = {
             ...existing,
             id: String(payload.itemId || existing.id || `${action.id}-${runId}`),
             nodeId: timelineNodeId,
@@ -1777,23 +1777,23 @@ async function workspaceRoutes(req, res, ctx) {
             sourcePresetId: releaseSourcePresetId(action, payload, existing),
             scopeKey: requestedScopeKey || expectedScopeKey,
             contextSnapshot: { ...requestContext },
-            status: "completed",
-            progress: 100,
+            status: "waiting",
+            progress: 0,
             inputs,
             runId,
             operator: authUser.username || userCtx.userId || "未记录",
-            ...timing,
+            ...(timing.startedAt ? { startedAt: timing.startedAt } : {}),
             error: "",
             failedAt: undefined,
             waiting: waitingMatter,
-            message: agentResult.summary || "已成功",
+            message: agentResult.summary || "等待处理",
             output: { status: "waiting", summary: agentResult.summary || "待人工处理", waiting: waitingMatter },
             ...(details ? { details } : {}),
           };
-          state.pending = state.pending.filter((item) => item.id !== successItem.id);
-          state.timeline = [...state.timeline.filter((item) => item.id !== successItem.id && item.nodeId !== successItem.nodeId), successItem];
+          state.pending = [...state.pending.filter((item) => item.id !== waitingItem.id), waitingItem];
+          state.timeline = state.timeline.filter((item) => item.id !== waitingItem.id && item.nodeId !== waitingItem.nodeId);
           state.runs[runId] = {
-            ...successItem,
+            ...waitingItem,
             status: "waiting",
             logs: Array.isArray(result?.events) ? result.events.slice(-200) : [],
           };

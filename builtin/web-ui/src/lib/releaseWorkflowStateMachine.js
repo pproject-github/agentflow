@@ -261,8 +261,8 @@ function capabilityKeysForItem(item = {}) {
 
 function normalizeNodeStatus(status) {
   const value = normalize(status);
-  // waiting = Agent 已成功停在人工闸；无交互续跑逻辑，按完成推进，UI 另述待办。
-  if (["completed", "succeeded", "skipped", "waiting"].includes(value)) return "completed";
+  if (["completed", "succeeded", "skipped"].includes(value)) return "completed";
+  if (value === "waiting") return "waiting";
   if (["failed", "external_result_unknown"].includes(value)) return "failed";
   if (["running", "previewing", "awaiting_confirmation", "ready", "blocked"].includes(value)) return "running";
   return "pending";
@@ -271,6 +271,7 @@ function normalizeNodeStatus(status) {
 function statusRank(status) {
   if (status === "failed") return 4;
   if (status === "completed") return 2;
+  if (status === "waiting") return 1.5;
   if (status === "running") return 1.5;
   return 1;
 }
@@ -294,7 +295,7 @@ function recordStatusByNode(timeline, pending) {
 }
 
 function isBlockingProcessStatus(status) {
-  return status === "running";
+  return status === "running" || status === "waiting";
 }
 
 export { capabilityKeysForItem };
@@ -368,7 +369,7 @@ export function recommendNextProcessNodes({ machine, timeline = [], pending = []
     : new Set(Array.isArray(excludedNodeIds) ? excludedNodeIds : []);
   for (const process of orderedWorkflowProcesses(machine)) {
     const state = processStates.get(process.id);
-    if (state === "failed" || state === "running") return [];
+    if (["failed", "running", "waiting"].includes(state)) return [];
     if (state !== "completed") {
       const optionalIds = new Set(process.optionalNodeIds || []);
       const next = process.nodes.find((node) => !optionalIds.has(node.id)

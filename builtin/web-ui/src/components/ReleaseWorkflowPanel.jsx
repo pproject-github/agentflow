@@ -64,8 +64,8 @@ function normalizeTimelineItem(value, index) {
     title: stringValue(value.title, nodeId),
     description: stringValue(value.description),
     category: stringValue(value.category, "发版阶段"),
-    status: "completed",
-    progress: 100,
+    status: value.status === "waiting" ? "waiting" : "completed",
+    progress: value.status === "waiting" ? 0 : 100,
     createdAt: timestampValue(value.createdAt),
     startedAt: timestampValue(value.startedAt),
     completedAt: timestampValue(value.completedAt),
@@ -234,9 +234,9 @@ function hydrateReleaseItemFromRuns(item, runs = {}) {
   } else if (!next.waiting && run.waiting) {
     next.waiting = run.waiting;
   }
-  // waiting 按成功展示：时间线条目保持 completed，待办挂在 waiting 字段。
   if (runStatus === "waiting" && String(item.status).toLowerCase() === "completed") {
-    if (!next.waiting) next.waiting = run.waiting || run.output?.waiting || { reason: "待人工处理" };
+    next.status = "waiting";
+    next.waiting = run.waiting || run.output?.waiting || { reason: "待人工处理" };
   }
   return next;
 }
@@ -254,18 +254,6 @@ function runSaysWaitingForNode(nodeId, runId, runs = {}) {
   ));
 }
 
-function promoteWaitingItemToCompleted(item) {
-  return {
-    ...item,
-    status: "completed",
-    progress: 100,
-    completedAt: item.completedAt || item.lastEventAt || Date.now(),
-    error: "",
-    failedAt: undefined,
-    waiting: item.waiting || item.output?.waiting || { reason: item.message || "待人工处理" },
-  };
-}
-
 function mergeRemotePending(previous, remoteState, context, knownIds, localCustomPending = []) {
   const dismissedNodeIds = mergeDismissedNodeIds(previous.dismissedNodeIds, remoteState.dismissedNodeIds);
   const runs = isRecord(remoteState.runs) ? remoteState.runs : {};
@@ -278,36 +266,24 @@ function mergeRemotePending(previous, remoteState, context, knownIds, localCusto
     .map(normalizePendingItem)
     .filter(Boolean)
     .map((item) => hydrateReleaseItemFromRuns(item, runs));
-  // 兼容旧快照：远端仍把 waiting 放在 pending 时，提升为时间线成功项。
-  const promotedFromPending = [];
-  const remotePendingKeep = [];
-  for (const item of hydratedRemotePending) {
-    if (String(item.status || "").toLowerCase() === "waiting") {
-      promotedFromPending.push(promoteWaitingItemToCompleted(item));
-      continue;
-    }
-    remotePendingKeep.push(item);
-  }
+  const remotePendingKeep = [...hydratedRemotePending];
   const remoteTimeline = [];
   for (const item of hydratedTimeline) {
     const status = String(item.status || "").toLowerCase();
     if (status === "waiting") {
-      remoteTimeline.push(promoteWaitingItemToCompleted(item));
+      remotePendingKeep.push(item);
       continue;
     }
     if (isHollowCompletedReleaseItem(item) && runSaysWaitingForNode(item.nodeId, item.runId, runs)) {
-      remoteTimeline.push(promoteWaitingItemToCompleted({
+      remotePendingKeep.push({
         ...item,
+        status: "waiting",
+        progress: 0,
         waiting: item.waiting || runs[String(item.runId || "")]?.waiting || runs[String(item.runId || "")]?.output?.waiting,
-      }));
+      });
       continue;
     }
     remoteTimeline.push(item);
-  }
-  for (const item of promotedFromPending) {
-    if (!remoteTimeline.some((entry) => entry.id === item.id || (entry.runId && item.runId && entry.runId === item.runId))) {
-      remoteTimeline.push(item);
-    }
   }
   const currentRemoteTimeline = remoteTimeline.filter((item) => releaseExecutionItemMatchesContext(item, context));
   const completedIds = new Set(currentRemoteTimeline.map((item) => item.nodeId));
@@ -375,8 +351,8 @@ function itemId(nodeId) {
 }
 
 function statusLabel(status) {
-  // waiting 无 Agent 交互续跑：按成功展示，待办另述。
-  return { completed: "成功", running: "执行中", failed: "失败", pending: "待执行", waiting: "成功" }[status] || status;
+  // waiting 仅表示真实外部阻塞，不进入已完成时间线。
+  return { completed: "成功", running: "执行中", failed: "失败", pending: "待执行", waiting: "待处理" }[status] || status;
 }
 
 // 大版本时间线可以包含首包和多个补包；卡片需要保留批次辨识，避免同名节点看起来像被重复写入。
@@ -1061,17 +1037,16 @@ export default function ReleaseWorkflowPanel({
       // 工作空间列表异步回填时可能只改变了前端 storage key；只要本次请求没有被取消，
       // 仍应提交 AgentFlow 已返回的结果，不能静默丢弃导致节点看起来没有反应。
       if (controller.signal.aborted) return;
-      // 用户需求点: waiting 无交互续跑——按成功写入时间线，卡片上只简明写出待办事项。
+      // 用户需求点: waiting 是外部阻塞，保留待执行状态，不能推进时间线。
       if (String(result.status || "").toLowerCase() === "waiting") {
         const waitingPayload = result.waiting || result.output?.waiting || { reason: result.message || "待人工处理" };
         const waitingLabel = humanizeWaitingMatter(waitingPayload);
-        const completedAt = Date.now();
-        const successItem = {
+        const waitingItem = {
           ...executionItem,
           inputs: normalizedInputs,
-          status: "completed",
-          progress: 100,
-          message: result.message || `${node.title} 已成功`,
+          status: "waiting",
+          progress: 0,
+          message: result.message || `${node.title} 等待外部结果`,
           output: sanitizeReleaseNodeOutput({ ...result, status: "waiting" }),
           waiting: waitingPayload,
           details: compositeDetailsFromResult(result, node, { ...(executionItem.details || {}), ...(result.details || {}) }),
@@ -1079,26 +1054,21 @@ export default function ReleaseWorkflowPanel({
           operator,
           kind: executionItem.kind || node.kind || "",
           compositeId: executionItem.compositeId || node.compositeId || "",
-          ...createCompletionMetadata({
-            operator,
-            startedAt: executionItem.startedAt || startedAt,
-            completedAt,
-          }),
         };
         setState((previous) => {
-          const withoutPending = previous.pending.filter((entry) => entry.id !== item.id);
-          const timeline = [
-            ...previous.timeline.filter((entry) => !sameReleaseExecutionItem(entry, successItem, context)),
-            successItem,
+          const pending = [
+            ...previous.pending.filter((entry) => entry.id !== item.id),
+            waitingItem,
           ];
-          return seedNextRecommendations({
+          const timeline = previous.timeline.filter((entry) => !sameReleaseExecutionItem(entry, waitingItem, context));
+          return {
             ...previous,
             timeline,
-            pending: withoutPending,
-          }, [initializationNode, ...catalogNodes]);
+            pending,
+          };
         });
-        setInspector({ item: successItem, node, mode: "completed" });
-        setMessage(`${node.title} 已成功；${waitingLabel}`);
+        setInspector({ item: waitingItem, node, mode: "waiting" });
+        setMessage(`${node.title} 待处理：${waitingLabel}`);
         return;
       }
       setState((previous) => {

@@ -126,7 +126,7 @@ test("recommends the next capability within the current stage before advancing",
   }).map((item) => item.id), ["localization-download-merge-notify"]);
 });
 
-test("does not advance while a capability is running or failed; waiting counts as success", () => {
+test("does not advance while a capability is running, waiting, or failed", () => {
   const stateMachine = machine(initialContext, ["localization-upload-notify", "create-release-branch"]);
   for (const status of ["running", "failed"]) {
     const recommendations = recommendNextProcessNodes({
@@ -136,12 +136,12 @@ test("does not advance while a capability is running or failed; waiting counts a
     });
     assert.deepEqual(recommendations, [], status);
   }
-  // waiting = 人工闸说明项，按成功完成推进下一节点
+  // waiting = 外部/人工阻塞，必须保留当前节点，不推进下一节点
   assert.deepEqual(recommendNextProcessNodes({
     machine: stateMachine,
     timeline: [{ nodeId: "localization-upload-notify", status: "waiting" }],
     pending: [],
-  }).map((item) => item.id), ["create-release-branch"]);
+  }).map((item) => item.id), []);
   assert.equal(deriveProcessStates({
     machine: stateMachine,
     timeline: [
@@ -149,7 +149,7 @@ test("does not advance while a capability is running or failed; waiting counts a
       { nodeId: "create-release-branch", status: "completed" },
     ],
     pending: [],
-  }).get("entry"), "completed");
+  }).get("entry"), "running");
   assert.equal(deriveProcessStates({
     machine: stateMachine,
     timeline: [{ nodeId: "localization-upload-notify", status: "failed" }],
@@ -169,7 +169,7 @@ test("maps custom instance and composite aliases onto capability status", () => 
   });
   assert.ok(stateMachine.processes.find((process) => process.id === "localization"));
 
-  // custom waiting 视为该能力已成功完成
+  // custom waiting 仍是阻塞态
   assert.equal(deriveProcessStates({
     machine: stateMachine,
     timeline: [],
@@ -179,7 +179,7 @@ test("maps custom instance and composite aliases onto capability status", () => 
       compositeId: "localization-download-merge-notify",
       status: "waiting",
     }],
-  }).get("localization"), "completed");
+  }).get("localization"), "running");
 
   assert.equal(deriveProcessStates({
     machine: stateMachine,

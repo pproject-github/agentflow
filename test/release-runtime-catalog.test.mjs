@@ -11,7 +11,7 @@ test("discovers action-level release nodes and filters by platform and batch", a
     const google = path.join(root, "release-google-play");
     fs.mkdirSync(path.join(approval, "scripts"), { recursive: true });
     fs.mkdirSync(path.join(google, "scripts"), { recursive: true });
-    fs.writeFileSync(path.join(approval, "SKILL.md"), `---\nname: release-approval\ndescription: 审核\nactions:\n  - name: create-initial-release-approval\n    inputs: [operator]\n    platforms: [ios, android]\n    requires_confirmation: true\n    release_context:\n      allowed_batches: [initial]\n  - name: create-full-rollout-approval\n    inputs: [operator]\n    platforms: [ios, android]\n    requires_confirmation: true\n    release_context:\n      allowed_batches: [initial, supplemental]\n---\n`);
+    fs.writeFileSync(path.join(approval, "SKILL.md"), `---\nname: release-approval\ndescription: 审核\nactions:\n  - name: create-initial-release-approval\n    inputs: [operator]\n    platforms: [ios, android]\n    requires_confirmation: true\n    release_context:\n      required_fields: [publish_date]\n      allowed_batches: [initial]\n  - name: create-full-rollout-approval\n    inputs: [operator]\n    platforms: [ios, android]\n    requires_confirmation: true\n    release_context:\n      required_fields: [build_number, publish_date]\n      allowed_batches: [initial, supplemental]\n---\n`);
     fs.writeFileSync(path.join(google, "SKILL.md"), `---\nname: release-google-play\ndescription: Google Play\nactions:\n  - name: preview-aab-submission\n    inputs: [config]\n    platforms: [android]\n    requires_confirmation: false\n  - name: submit-aab-internal-testing\n    inputs: [config]\n    platforms: [android]\n    requires_confirmation: true\n---\n`);
     for (const file of [
       path.join(approval, "scripts", "run.py"),
@@ -33,6 +33,8 @@ test("discovers action-level release nodes and filters by platform and batch", a
     assert.deepEqual(submit.businessLines, ["likee", "bigolive", "hello"]);
     const initialApproval = nodes.find((node) => node.action === "create-initial-release-approval");
     const fullApproval = nodes.find((node) => node.action === "create-full-rollout-approval");
+    assert.deepEqual(initialApproval.requiredReleaseFields, ["publish_date"]);
+    assert.deepEqual(fullApproval.requiredReleaseFields, ["build_number", "publish_date"]);
     assert.notEqual(initialApproval.description, fullApproval.description);
     assert.match(initialApproval.description, /首包/);
     assert.match(fullApproval.description, /全量/);

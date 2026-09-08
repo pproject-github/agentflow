@@ -20,8 +20,9 @@ function splitPaths(value) {
 const LOCAL_DEV_RELEASE_ROOT = "/Users/duanfengyuan/migration-workspace/test/likee_android";
 const LOCAL_DEV_RELEASE_SKILL_ROOTS = [
   path.join(LOCAL_DEV_RELEASE_ROOT, ".workspace", "release-skills"),
-  path.join(LOCAL_DEV_RELEASE_ROOT, ".workspace", "release-skills-google-play-aab"),
 ];
+
+const REMOVED_RELEASE_SKILL_ROOT_RE = /(?:^|[\\/])release-skills-google-play-aab$/i;
 
 function parseJson(value, source) {
   if (!text(value)) return {};
@@ -509,12 +510,11 @@ export function releaseSkillRoots(config, project = null, workspaceRoot = "") {
   const explicit = [
     ...(Array.isArray(config?.skillRoots) ? config.skillRoots : []),
     ...(Array.isArray(project?.skillRoots) ? project.skillRoots : []),
-  ].filter(Boolean).map((item) => path.resolve(String(item)));
+  ].filter(Boolean).map((item) => path.resolve(String(item))).filter((item) => !REMOVED_RELEASE_SKILL_ROOT_RE.test(item));
   if (explicit.length) return [...new Set(explicit)];
   if (config?.allowWorkspaceSkillRoots && workspaceRoot) {
     return [
       path.join(path.resolve(workspaceRoot), ".workspace", "release-skills"),
-      path.join(path.resolve(workspaceRoot), ".workspace", "release-skills-google-play-aab"),
     ].filter((entry) => fs.existsSync(entry));
   }
   return [];

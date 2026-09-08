@@ -218,7 +218,7 @@ export function reconcileReleaseState(workspaceRoot, context = {}, workspaceId =
     const runRecord = state.runs[runId] && typeof state.runs[runId] === "object" ? state.runs[runId] : {};
     const agentStatus = preferredAgentReleaseStatus(runRecord);
     if (agentStatus === "waiting") {
-      // waiting 无续跑：按成功入时间线，保留 waiting 待办；runs 仍记 waiting 便于诊断。
+      // 用户需求点: waiting 不能伪装完成；保留待执行卡片，避免无交互节点推进状态机。
       const agentFields = agentReleaseFields(runRecord);
       const startedAt = Number(item.startedAt || runRecord.startedAt || (Number.isFinite(Date.parse(String(manifest?.startedAt || ""))) ? Date.parse(String(manifest.startedAt)) : 0));
       const finishedAt = Number.isFinite(Date.parse(String(manifest?.finishedAt || manifest?.updatedAt || "")))
@@ -231,17 +231,15 @@ export function reconcileReleaseState(workspaceRoot, context = {}, workspaceId =
       };
       const reconciled = {
         ...item,
-        status: "completed",
-        progress: 100,
+        status: "waiting",
+        progress: 0,
         error: "",
         failedAt: undefined,
         ...timing,
         ...agentFields,
       };
       state.runs[runId] = { ...runRecord, ...reconciled, status: "waiting", ...timing, ...agentFields };
-      state.timeline = [...state.timeline.filter((entry) => (
-        (entry?.id !== reconciled.id && entry?.nodeId !== reconciled.nodeId) || entry?.runId !== runId
-      )), reconciled];
+      pending.push(reconciled);
       changed = true;
       continue;
     }
