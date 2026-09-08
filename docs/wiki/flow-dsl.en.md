@@ -180,6 +180,21 @@ still present**. The second case is refused with a 409 (`edgeWipeWithoutNodeDele
 Anyone who genuinely wants to clear all wiring can delete any one node first -- better that
 a rare action takes an extra step than that one silent save wipes someone's graph.
 
+**Reading one graph scans every node package, so the manifests have to be cached.**
+`readWorkspaceDesign` resolves `import x from "marketplace:..."`, which means knowing what
+slots each package declares, and reading a manifest means parsing `index.mjs` with acorn.
+The deployment has 102 packages and one pass costs 100ms -- of the 104ms it takes to read a
+graph, 101ms goes here. The flow repository index then reads 97 graphs: **97 x 104ms is
+about 10 seconds of one pegged core**, during which the event loop cannot even accept new
+connections (`Recv-Q` reached 27) and every request in flight stalls together. That is why
+1 in 20 requests for `/projects` took over 8 seconds.
+
+A published version directory is immutable -- changing content requires a new version -- so
+a declaration read once stays good. The cache holds **only the declaration**; metadata
+(visibility and so on) is re-read every time, because **rewriting an existing file inside a
+directory does not change that directory's mtime**, so keying the cache on directory mtime
+would serve stale visibility forever.
+
 ## Key design: the definition owns the slot table
 
 A slot table stored in the graph is only a snapshot of what the definition looked like the

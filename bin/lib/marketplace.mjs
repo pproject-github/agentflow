@@ -101,9 +101,44 @@ function normalizeSlotList(value) {
  * 读取节点包清单：`index.mjs` 的静态声明优先，回退 `node.yaml`。
  * 声明写得不合法时不静默吞掉——按目录名报错，否则节点会莫名从面板消失。
  */
+/**
+ * 已发布的节点包版本目录是**不可变**的：`marketplace/packages/nodes/<id>/<version>/`
+ * 发布一次就不再改，改内容必须换版本号。所以读一次清单就能一直用。
+ *
+ * 不缓存的代价是实打实的：读清单要 acorn 解析 `index.mjs`，线上 102 个包一趟 100ms；
+ * 而每读一张图都要扫一遍全部包，仓库索引重建又要读 97 张图 —— 97 × 100ms ≈ 10 秒，
+ * 单线程跑满，事件循环被按住，连 accept 都来不及做。线上 /projects 十次里有一次
+ * 超过 8 秒就是这么来的。
+ *
+ * 仍然按目录 mtime 校验：版本目录理论上不可变，但本地包和手工改动不受这条保证约束。
+ */
+const declarationCache = new Map();
+
+/**
+ * 只缓存**声明**那一半，元数据每次都重读。
+ *
+ * 声明来自 `index.mjs` / `node.yaml`，读它要 acorn 解析，是全部开销所在；而已发布的版本
+ * 目录不可变（改内容必须换版本号），缓存住是安全的。元数据（可见性等）会被原地改写，
+ * 而**改写目录里已有的文件不会改变目录的 mtime**，靠 mtime 判失效会读到旧值，所以它不进缓存。
+ */
+function readNodePackageDeclarationCached(dir) {
+  let key = "";
+  try {
+    const st = fs.statSync(dir);
+    key = `${st.mtimeMs}`;
+  } catch {
+    return null;
+  }
+  const cached = declarationCache.get(dir);
+  if (cached && cached.key === key) return cached.value;
+  const value = readNodePackageManifest(dir, readYamlObject);
+  declarationCache.set(dir, { key, value });
+  return value;
+}
+
 function readNodeManifestRaw(dir) {
   try {
-    const manifest = readNodePackageManifest(dir, readYamlObject);
+    const manifest = readNodePackageDeclarationCached(dir);
     const metadata = readJsonObject(path.join(dir, NODE_PACKAGE_METADATA_FILENAME));
     return manifest && metadata ? { ...manifest, ...metadata } : manifest;
   } catch (e) {
