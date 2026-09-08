@@ -14600,6 +14600,9 @@ button.af-project-card {
 .af-run-state__stage.is-error > .material-symbols-outlined { color: #df716b; }
 .af-run-state__stage.is-waiting > .material-symbols-outlined { color: #d39c55; }
 .af-run-state__stage.is-running > .material-symbols-outlined { color: #8fb7ee; }
+/* 没参与本次执行：压下去，别和真正待执行的阶段抢注意力。 */
+.af-run-state__stage.is-not_run { opacity: 0.45; }
+.af-run-state__stage.is-not_run > .material-symbols-outlined { color: rgba(255, 255, 255, 0.32); }
 .af-run-state__stage > div { min-width: 0; }
 .af-run-state__stage strong { display: block; overflow: hidden; color: rgba(235,232,239,.78); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
 .af-run-state__stage small { display: block; margin-top: .16rem; color: rgba(229,226,225,.35); font: .56rem var(--af-mono); }
