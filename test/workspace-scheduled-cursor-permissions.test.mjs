@@ -124,3 +124,81 @@ console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
+
+// 用户需求点: 没发布过稳定版本的流程，定时执行时 cursor-agent 停在 permissionMode: default，
+// webSearch 被自动 User Rejected，日报连着三天是空的却不报错。定时和手动拿同一套工具授权。
+test("an unpublished Scheduled Run is unattended too", async () => {
+  const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-unpublished-cursor-")));
+  const previousHome = process.env.AGENTFLOW_HOME;
+  const previousCursorAgentCommand = process.env.CURSOR_AGENT_CMD;
+  process.env.AGENTFLOW_HOME = path.join(tempRoot, "data");
+  let server;
+  try {
+    const mockCallsPath = path.join(tempRoot, "cursor-calls.jsonl");
+    const mockCursorAgent = path.join(tempRoot, "mock-cursor-agent.mjs");
+    fs.writeFileSync(mockCursorAgent, `#!/usr/bin/env node
+import { appendFileSync } from "node:fs";
+appendFileSync(${JSON.stringify(mockCallsPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");
+console.log(JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "ok" }));
+`, "utf8");
+    fs.chmodSync(mockCursorAgent, 0o755);
+    process.env.CURSOR_AGENT_CMD = mockCursorAgent;
+
+    const nonce = `unpublished-${Date.now()}`;
+    const [{ loginOrCreateUser }, { startUiServer }, workspaceServer] = await Promise.all([
+      import(`../bin/lib/auth.mjs?${nonce}`),
+      import(`../bin/lib/ui-server.mjs?${nonce}`),
+      import("../bin/lib/workspace-server.mjs"),
+    ]);
+    const user = loginOrCreateUser("unpublished-cursor-owner", "unpublished-cursor-password");
+    const workspaceRoot = path.join(tempRoot, "workspace");
+    server = await startUiServer({
+      workspaceRoot,
+      host: "127.0.0.1",
+      port: 0,
+      staticDir: path.join(tempRoot, "static"),
+      enableWorkspaceScheduler: false,
+    });
+    const base = `http://127.0.0.1:${server.address().port}`;
+    const headers = { Authorization: `Bearer ${user.token}`, "Content-Type": "application/json" };
+    const request = async (method, pathname, body) => {
+      const response = await fetch(base + pathname, {
+        method,
+        headers,
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+      const text = await response.text();
+      let payload = null;
+      try { payload = JSON.parse(text); } catch {}
+      return { status: response.status, body: payload, text };
+    };
+
+    const created = await request("POST", "/api/flows", { flowId: "unpublished-cursor", targetSpace: "user" });
+    assert.equal(created.status, 200, created.text);
+    const saved = await request("POST", "/api/workspace/graph", {
+      flowId: "unpublished-cursor",
+      flowSource: "user",
+      graph: scheduledAgentGraph(),
+    });
+    assert.equal(saved.status, 200, saved.text);
+
+    const schedules = await request("GET", "/api/workspace/schedules?flowId=unpublished-cursor&flowSource=user");
+    assert.equal(schedules.status, 200, schedules.text);
+    const entry = (schedules.body?.schedules || []).find((item) => item.scheduleNodeId === "daily" || item.runNodeId === "daily");
+    assert.ok(entry, `未取到定时条目: ${schedules.text}`);
+    assert.equal(entry.releaseId || "", "", "这条用例要覆盖的正是没有稳定版本的情况");
+
+    await workspaceServer.runWorkspaceScheduledEntry(workspaceRoot, entry);
+
+    const calls = fs.readFileSync(mockCallsPath, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].includes("--force"), true, "未发布的定时执行同样要拿到工具授权");
+  } finally {
+    if (server) await new Promise((resolve) => server.close(resolve));
+    if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;
+    else process.env.AGENTFLOW_HOME = previousHome;
+    if (previousCursorAgentCommand === undefined) delete process.env.CURSOR_AGENT_CMD;
+    else process.env.CURSOR_AGENT_CMD = previousCursorAgentCommand;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
