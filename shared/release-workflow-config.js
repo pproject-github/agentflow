@@ -1,6 +1,27 @@
 const freeze = (value) => Object.freeze(value);
 const normalize = (value) => String(value ?? "").trim().toLowerCase();
 
+// 页面可以只携带大版本；Skill 仍需要完整的小版本来区分首包和补包。
+export function normalizeReleaseMinorVersion(value, fallback = "1.0.0") {
+  const text = String(value ?? "").trim().replace(/^v/i, "");
+  if (/^\d+\.\d+$/.test(text)) return `${text}.0`;
+  return text || fallback;
+}
+
+export function releaseMajorVersion(value, fallback = "1.0") {
+  const text = String(value ?? "").trim().replace(/^v/i, "");
+  const match = text.match(/^(\d+\.\d+)(?:\.\d+)?$/);
+  return match ? match[1] : fallback;
+}
+
+export function inferReleaseBatch(value, explicitBatch = "") {
+  const explicit = normalize(explicitBatch);
+  if (explicit === "initial" || explicit === "supplemental") return explicit;
+  const text = normalizeReleaseMinorVersion(value, "1.0.0");
+  const suffix = Number(text.split(".")[2]);
+  return Number.isInteger(suffix) && suffix > 0 ? "supplemental" : "initial";
+}
+
 const processOrder = ["entry", "localization", "merge-master", "build", "approval", "publish", "rollout", "full-rollout"];
 const processTitles = {
   entry: "发版入口", localization: "多语言处理", "merge-master": "合回 master", build: "构建包",
@@ -29,45 +50,35 @@ const resultOutputs = [
   { key: "artifacts", type: "json" }, { key: "waiting", type: "json" }, { key: "next_action", type: "text" },
 ];
 
-const promptTemplate = (goal) => [
-  "你是发版执行 Agent：版本页上下文已锁定，按业务意图在 skillRoot 触发对应 Skill，不要只给计划。",
-  "相关 Skill：${skillHints}。按 Skill operator-guide / cli 自行编排；失败再查 references/cli.md。",
-  "禁止 skillhub evolve/detect/report。",
-  "当前上下文：businessLine=${businessLine}，platform=${platform}，version=${version}，batch=${batch}，batchIndex=${batchIndex}。",
-  `任务：${goal}`,
-  "必须只返回 JSON：{status:\"completed|waiting|failed\",summary,steps,records,artifacts,waiting,next_action}。",
-].join("\n");
+const promptTemplate = (goal) => goal;
 
 // platforms 默认双端；灰度放量等能力通过 extra.platforms 收窄到 Android。
-const capability = (id, title, description, stageId, batches, skillHints, inputs = [], extra = {}) => ({
-  id, title, description, capabilityGoal: description, businessLines: ["likee"], platforms: ["android", "ios"], batches, stageId, skillHints, inputs,
-  outputs: resultOutputs.map((item) => ({ ...item })), promptTemplate: promptTemplate(description), ...extra,
+const capability = (id, title, goal, stageId, batches, skillHints, inputs = [], extra = {}) => ({
+  id, title, description: goal, capabilityGoal: goal, businessLines: ["likee"], platforms: ["android", "ios"], batches, stageId, skillHints, inputs,
+  outputs: resultOutputs.map((item) => ({ ...item })), promptTemplate: promptTemplate(goal), ...extra,
 });
 
 // 用户需求点: 复合发版节点只声明能力和提示词，原子 Skill 的编排由 Agent 读取最新 Skill 后完成。
 const capabilityDefinitions = [
-  capability("release-initialization:prepare-context", "准备活动发版上下文", "读取并准备当前业务线、平台、版本和批次的活动发版上下文；已有活动发版时复用，否则按 release-management Skill 的安全流程创建。", "entry", ["initial", "supplemental"], ["release-management", "release-runtime"], [{ key: "publish_date", type: "text", required: false, label: "发布日期", placeholder: "YYYY-MM-DD" }], { requiresConfirmation: false, nodeId: "release-initialization:prepare-context" }),
-  capability("localization-upload-notify", "多语言上传 & 通知", "读取 release-localization Skill 维护的当前业务线与平台受审源文件集合，上传全部源多语言并发送通知；文件集合由 Skill 自行发现。", "entry", ["initial"], ["release-localization", "release-notification"]),
-  capability("create-release-branch", "创建/复用发版分支", "创建或复用当前版本的 release 分支并登记结果。", "entry", ["initial"], ["release-git", "release-management"], [{ key: "release_branch", type: "text", required: false }]),
-  capability("localization-download-merge-notify", "多语言下载 & 合入代码 & 提交 MR & 通知", "拉回翻译、应用到工程、提交受管理变更并发送通知。", "localization", ["initial"], ["release-localization", "release-git", "release-notification"], [
-    { key: "force_rerun", type: "checkbox", required: false, label: "强制重新下载", placeholder: "忽略历史成功，重新 prepare/apply 并合入" },
-  ]),
-  capability("merge-release-to-master", "发版分支合回 master", "按 release-git Skill 的安全流程将发版分支合回 master。", "merge-master", ["initial"], ["release-git"]),
-  capability("build-package", "构建发版包", "根据当前平台、批次和 Skill 配置构建发版包并记录产物（Android 渠道/商店包，iOS 走 release-build）。", "build", ["initial", "supplemental"], ["release-build", "release-channel-packages", "release-google-play"], [{ key: "build_number", type: "text", required: false, label: "构建号", placeholder: "未填则读活动发版清单" }]),
-  capability("submit-approval", "提交发版审核单", "为首包创建首次发版审核草稿（release-approval）。", "approval", ["initial"], ["release-approval", "release-records"]),
+  capability("localization-upload-notify", "多语言上传 & 通知", "使用 release-localization Skill 维护的受审源文件集合，上传当前业务线与平台的全部多语言并发送通知。", "entry", ["initial"], ["release-localization", "release-notification"]),
+  capability("create-release-branch", "创建/复用发版分支", "创建或复用当前版本的发版分支并登记。", "entry", ["initial"], ["release-git", "release-management"], [{ key: "release_branch", type: "text", required: false }]),
+  capability("localization-download-merge-notify", "多语言下载 & 创建 MR", "下载并应用多语言；有变更时提交并创建或复用 MR，MR 创建成功即完成。", "localization", ["initial"], ["release-localization", "release-git"]),
+  capability("merge-release-to-master", "发版分支合回 master", "按 release-git Skill 流程将发版分支合回 master。", "merge-master", ["initial"], ["release-git"]),
+  capability("build-package", "构建发版包", "按当前平台构建发版包并记录构建产物。", "build", ["initial", "supplemental"], ["release-build"]),
+  capability("submit-approval", "提交发版审核单", "为当前首包创建发版审核草稿。", "approval", ["initial"], ["release-approval", "release-records"]),
   // 用户需求点: 首包与补包商店发布是不同流程，须拆成独立能力与独立意图，避免 Agent 混用事件。
-  capability("initial-publish-and-notify", "首包发布 & 通知", "按首包流程完成商店侧发布准备并通知；不具备能力时返回 waiting 或 failed。", "publish", ["initial"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
-  capability("supplemental-publish-and-notify", "补包发布 & 通知", "按补包流程完成商店侧发布准备并通知；不具备能力时返回 waiting 或 failed。", "publish", ["supplemental"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
-  // 用户需求点: release-notification 支持进入补包流程通知；补包入口单独触发，编排由 Skill operator-guide 决定。
-  capability("prepare-supplemental-notification", "准备补包通知", "发送进入补包流程通知，告知协作者准备继续补包发布。", "entry", ["supplemental"], ["release-notification", "release-management"]),
+  capability("initial-publish-and-notify", "首包发布 & 通知", "按当前平台的首包流程完成发布并通知。", "publish", ["initial"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
+  capability("supplemental-publish-and-notify", "补包发布 & 通知", "按当前平台的补包流程完成发布并通知。", "publish", ["supplemental"], ["release-google-play", "release-release-notes", "release-notification", "release-records"]),
+  // 用户需求点: 补包入口必须先触发发版上下文，再发送开始通知；平台时间线没有历史记录也不能阻止执行。
+  capability("start-supplemental-release-notify", "开始补包 & 发送通知", "准备当前补包发版上下文并发送开始通知。", "entry", ["supplemental"], ["release-management", "release-notification"]),
   // 用户需求点: 灰度放量仅 Likee Android；iOS 无此阶段。
-  capability("rollout", "放量", "观察灰度指标并按确认要求推进当前版本放量。", "rollout", ["initial", "supplemental"], ["release-gray-observe", "release-metrics", "release-notification"], [
-    { key: "gray_percent", type: "text", required: false, label: "目标灰度 %", placeholder: "如 5 / 50 / 100" },
+  capability("rollout", "放量", "按当前平台的灰度规则执行指定比例放量并记录结果。", "rollout", ["initial", "supplemental"], ["release-gray-observe", "release-metrics", "release-notification"], [
+    { key: "gray_percent", type: "text", required: true, label: "目标灰度 %", placeholder: "如 5 / 50 / 100" },
   ], { platforms: ["android"] }),
   // 用户需求点: 全量审核单排在全量发布前；对齐 release-approval operator-guide（指标快照/构建号/发布日期/OA 申请人）。
-  capability("submit-full-rollout-approval", "全量审核单", "创建全量发布审核草稿；目标批次须已有构建号、发布日期与已确认指标快照（见 release-approval 操作指南）。", "full-rollout", ["initial", "supplemental"], ["release-approval", "release-records"]),
+  capability("submit-full-rollout-approval", "全量审核单", "创建全量发布审核草稿。", "full-rollout", ["initial", "supplemental"], ["release-approval", "release-records"]),
   // 用户需求点: 全量发布须同步发送全量放量通知（release-notification：灰度/全量放量通知）；编排见 Skill operator-guide。
-  capability("full-rollout", "全量发布 & 通知", "发送全量放量通知并完成全量发布相关登记。", "full-rollout", ["initial", "supplemental"], ["release-approval", "release-gray-observe", "release-notification", "release-records"]),
+  capability("full-rollout", "全量发布 & 通知", "按当前平台完成全量发布登记并发送通知。", "full-rollout", ["initial", "supplemental"], ["release-approval", "release-gray-observe", "release-notification", "release-records"]),
   // 用户需求点: 自由 Agent 只保留一个添加入口（不复制到每个阶段），不进入状态机默认推荐。
   capability("free-prompt-agent", "自由 Agent", "按操作员给出的任务说明，在锁定的发版上下文与 skillRoot 下执行发版相关操作。", "entry", ["initial", "supplemental"], ["release-runtime", "release-management"], [
     { key: "prompt", type: "textarea", required: true, label: "任务说明", placeholder: "描述要执行的发版任务，可点名 Skill / CLI…" },
@@ -75,14 +86,7 @@ const capabilityDefinitions = [
   ], {
     insertableInAnyStage: true,
     requiresConfirmation: false,
-    promptTemplate: [
-      "你是发版执行 Agent：版本页上下文已锁定，按操作员任务在 skillRoot 触发对应 Skill，不要只给计划。",
-      "相关 Skill：${skillHints}。按 Skill operator-guide / cli 自行编排；失败再查 references/cli.md。",
-      "禁止 skillhub evolve/detect/report。",
-      "当前上下文：businessLine=${businessLine}，platform=${platform}，version=${version}，batch=${batch}，batchIndex=${batchIndex}。",
-      "操作员任务：${prompt}",
-      "必须只返回 JSON：{status:\"completed|waiting|failed\",summary,steps,records,artifacts,waiting,next_action}。",
-    ].join("\n"),
+    promptTemplate: "${prompt}",
   }),
 ];
 
@@ -108,7 +112,7 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
     freeze({
       id: "likee-android-release", title: "Likee Android 发版", businessLines: freeze(["likee"]), platforms: freeze(["android"]), batches: freeze(["initial", "supplemental"]), entryStageIds: freeze(["entry"]),
       stages: freezeStages([
-        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "prepare-supplemental-notification"], { order: 0 }),
+        stage("entry", "发版入口", ["localization-upload-notify", "create-release-branch", "start-supplemental-release-notify"], { order: 0 }),
         stage("localization", "多语言处理", ["localization-download-merge-notify"], { order: 1 }),
         stage("merge-master", "合回 master", ["merge-release-to-master"], { order: 2 }),
         stage("build", "构建包", ["build-package"], { order: 3 }),
@@ -126,7 +130,7 @@ export const RELEASE_WORKFLOW_CONFIG = freeze({
     freeze({
       id: "likee-ios-release", title: "Likee iOS 发版", businessLines: freeze(["likee"]), platforms: freeze(["ios"]), batches: freeze(["initial", "supplemental"]), entryStageIds: freeze(["entry"]),
       stages: freezeStages([
-        stage("entry", "发版入口", ["release-initialization:prepare-context", "localization-upload-notify", "create-release-branch", "prepare-supplemental-notification"], { order: 0 }),
+        stage("entry", "发版入口", ["localization-upload-notify", "create-release-branch", "start-supplemental-release-notify"], { order: 0 }),
         stage("localization", "多语言处理", ["localization-download-merge-notify"], { order: 1 }),
         stage("merge-master", "合回 master", ["merge-release-to-master"], { order: 2 }),
         stage("build", "构建包", ["build-package"], { order: 3 }),
@@ -152,9 +156,12 @@ function nodeId(node) { return typeof node === "string" ? node : String(node?.id
 function capabilityList(config = RELEASE_WORKFLOW_CONFIG) { return Array.isArray(config?.capabilities) ? config.capabilities : Array.isArray(config?.compositeWorkflows) ? config.compositeWorkflows : []; }
 
 // 用户需求点: 能力和状态机必须按同一业务线、平台、批次上下文选择，不能跨平台暴露节点。
-export function selectReleaseCompositeWorkflow(context = {}, config = RELEASE_WORKFLOW_CONFIG) {
+export function selectReleaseCompositeWorkflow(context = {}, config = RELEASE_WORKFLOW_CONFIG, options = {}) {
   const scope = contextScope(context); const requestedId = String(context.capabilityId || context.compositeId || context.id || "").trim(); const stageId = String(context.stageId || "").trim();
-  const candidates = capabilityList(config).filter((item) => scopeMatches(item?.businessLines, scope.businessLine) && scopeMatches(item?.platforms, scope.platform) && scopeMatches(item?.batches, scope.batch) && (!stageId || item?.insertableInAnyStage === true || String(item?.stageId || "") === stageId));
+  const includeAllBatches = options?.includeAllBatches === true;
+  const candidates = capabilityList(config).filter((item) => scopeMatches(item?.businessLines, scope.businessLine) && scopeMatches(item?.platforms, scope.platform)
+    && (includeAllBatches || scopeMatches(item?.batches, scope.batch))
+    && (!stageId || item?.insertableInAnyStage === true || String(item?.stageId || "") === stageId));
   if (requestedId) return candidates.find((item) => String(item?.id || "").trim() === requestedId) || null;
   return candidates.length === 1 ? candidates[0] : null;
 }
@@ -219,7 +226,8 @@ export function validateReleaseWorkflowConfig(config) {
     if (!item || typeof item !== "object") { errors.push("malformed capability entry"); continue; }
     const id = String(item.id || "").trim(); if (!id) errors.push("capability id is required"); else if (capabilityIds.has(id)) errors.push(`duplicate capability id: ${id}`); capabilityIds.add(id); validateScope(errors, item, id || "capability");
     if (item.actions !== undefined) errors.push(`capability must not define actions: ${id}`); if (item.expandSourceFiles !== undefined) errors.push(`capability must not define expandSourceFiles: ${id}`);
-    if (!String(item.promptTemplate || "").includes("${businessLine}")) errors.push(`capability promptTemplate must include businessLine: ${id}`);
+    if (!String(item.capabilityGoal || item.description || "").trim()) errors.push(`capability goal is required: ${id}`);
+    if (!String(item.promptTemplate || "").trim()) errors.push(`capability promptTemplate is required: ${id}`);
     if (!Array.isArray(item.skillHints) || item.skillHints.length === 0 || item.skillHints.some((hint) => !normalize(hint).startsWith("release-"))) errors.push(`capability skillHints must reference release Skills: ${id}`);
     if (!Array.isArray(item.inputs) || !Array.isArray(item.outputs)) errors.push(`capability inputs and outputs must be arrays: ${id}`);
   }

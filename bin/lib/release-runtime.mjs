@@ -3,6 +3,9 @@ import path from "node:path";
 import yaml from "js-yaml";
 import {
   RELEASE_WORKFLOW_CONFIG,
+  inferReleaseBatch,
+  normalizeReleaseMinorVersion,
+  releaseMajorVersion,
   releaseActionProcessMetadata,
   selectReleaseWorkflow,
   workflowActionIds,
@@ -76,19 +79,42 @@ const ACTION_DESCRIPTIONS = Object.freeze({
   "release-notification:send-rollout-notification": "发送灰度或全量发布通知。",
 });
 
-function contextSnapshot({ businessLine = "likee", platform = "android", version = "1.0.0", batch = "initial" } = {}) {
-  return {
+function contextSnapshot({ businessLine = "likee", platform = "android", version = "1.0.0", batch = "", batchIndex } = {}) {
+  const snapshot = {
     businessLine: String(businessLine || "likee").trim().toLowerCase() || "likee",
     platform: String(platform || "android").trim().toLowerCase() || "android",
-    version: String(version || "1.0.0").trim() || "1.0.0",
-    batch: String(batch || "initial").trim().toLowerCase() || "initial",
+    version: normalizeReleaseMinorVersion(version),
+    batch: inferReleaseBatch(version, batch),
   };
+  const normalizedBatchIndex = Number(batchIndex);
+  if (Number.isInteger(normalizedBatchIndex) && normalizedBatchIndex > 0) snapshot.batchIndex = normalizedBatchIndex;
+  return snapshot;
 }
 
 // 用户需求点: 节点只能在初始化选定的业务、平台、版本和批次范围内运行，因此所有运行请求使用同一稳定范围键。
 export function releaseContextKey(context = {}) {
   const snapshot = contextSnapshot(context);
   return [snapshot.businessLine, snapshot.platform, snapshot.version, snapshot.batch].join("/");
+}
+
+// 用户需求点: 自定义集合可跨首包/补包复用能力；执行时必须切换到该能力声明的目标批次，仍沿用同一版本上下文。
+export function releaseExecutionContextForAction(action = {}, context = {}) {
+  const current = contextSnapshot(context);
+  const allowedBatches = Array.isArray(action?.allowedBatches)
+    ? action.allowedBatches.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean)
+    : [];
+  const explicitTarget = String(action?.targetBatch || action?.contextSnapshot?.batch || "").trim().toLowerCase();
+  const targetBatch = explicitTarget && (allowedBatches.length === 0 || allowedBatches.includes(explicitTarget))
+    ? explicitTarget
+    : allowedBatches.includes(current.batch)
+      ? current.batch
+      : allowedBatches.length === 1 ? allowedBatches[0] : current.batch;
+  return { ...context, ...current, batch: targetBatch };
+}
+
+export function releaseTimelineKey(context = {}) {
+  const snapshot = contextSnapshot(context);
+  return [snapshot.businessLine, snapshot.platform, releaseMajorVersion(snapshot.version)].join("/");
 }
 
 const RELEASE_SECRET_KEY = /(token|secret|password|passwd|webhook|authorization|cookie|api[-_]?key)/i;
@@ -170,7 +196,12 @@ export function normalizeReleaseAgentResult(raw) {
     value = mergeNestedReleaseResult(value, nestedParsed.value, nestedParsed.rest);
   }
   const statusValue = String(envelopeStatus || value.status || "").trim().toLowerCase();
-  const status = ["completed", "waiting", "failed"].includes(statusValue) ? statusValue : (statusValue ? "failed" : "completed");
+  let status = ["completed", "waiting", "failed"].includes(statusValue) ? statusValue : (statusValue ? "failed" : "completed");
+  const waitingReason = String(value?.waiting?.reason || value?.waiting?.code || "").trim().toLowerCase();
+  if (status === "waiting" && /confirm|approval|required|input|interactive|人工|确认/.test(waitingReason)) {
+    status = "failed";
+    value = { ...value, summary: value.summary || "节点需要人工确认或补充输入，固定节点不支持交互，请修正输入后重试。" };
+  }
   return sanitizeReleaseValue({
     ...value,
     status,
@@ -237,8 +268,7 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
   const index = state.pending.findIndex((item) => item?.nodeId === nodeId || item?.id === nodeId);
   const current = index >= 0 ? { ...state.pending[index] } : { id: nodeId, nodeId };
   const details = { ...(current.details || {}), steps: result.steps, records: result.records, artifacts: result.artifacts, summary: result.summary };
-  if (result.status === "completed" || result.status === "waiting") {
-    // waiting = 人工闸说明项，无续跑交互；按成功入时间线，waiting 字段留给 UI 待办。
+  if (result.status === "completed") {
     const completed = {
       ...current,
       nodeId,
@@ -249,9 +279,6 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
       completedAt: Date.now(),
       error: "",
       failedAt: undefined,
-      ...(result.status === "waiting"
-        ? { waiting: result.waiting || { reason: result.summary || "待人工处理" } }
-        : {}),
     };
     state.pending = state.pending.filter((_item, itemIndex) => itemIndex !== index);
     state.timeline = [...state.timeline.filter((item) => item.id !== completed.id && item.nodeId !== nodeId), completed];
@@ -263,6 +290,7 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
     status: result.status,
     progress: 0,
     details,
+    ...(result.status === "waiting" ? { waiting: result.waiting || { reason: result.summary || "待人工处理" }, output: result } : {}),
     ...(result.status === "failed" ? { error: result.summary || "发版 Agent 执行失败", failedAt: Date.now() } : {}),
   };
   if (index >= 0) state.pending[index] = pending; else state.pending.push(pending);
@@ -271,7 +299,14 @@ export function applyReleaseAgentResult(stateInput, nodeId, rawResult) {
 
 export function createSupplementalBatch(stateInput = {}) {
   const source = stateInput && typeof stateInput === "object" ? stateInput : {};
-  const context = { ...(source.context || {}), batch: "supplemental", batchIndex: Number(source.context?.batchIndex ?? source.batchIndex ?? 0) + 1 };
+  const currentVersion = normalizeReleaseMinorVersion(source.context?.version || "1.0.0");
+  const versionSuffix = Number(currentVersion.split(".")[2]);
+  const currentIndex = Number(source.context?.batchIndex ?? source.batchIndex);
+  const baseIndex = Number.isInteger(currentIndex) && currentIndex >= 0
+    ? currentIndex
+    : (Number.isInteger(versionSuffix) && versionSuffix > 0 ? versionSuffix : 0);
+  const batchIndex = baseIndex + 1;
+  const context = { ...(source.context || {}), version: `${releaseMajorVersion(currentVersion)}.${batchIndex}`, batch: "supplemental", batchIndex };
   return {
     context,
     state: {
@@ -279,9 +314,10 @@ export function createSupplementalBatch(stateInput = {}) {
       context,
       batch: "supplemental",
       batchIndex: context.batchIndex,
-      timeline: [],
+      // 首包与后续补包共享同一条大版本时间线；当前批次节点通过 version/batch 隔离。
+      timeline: Array.isArray(source.timeline) ? [...source.timeline] : [],
       pending: [],
-      runs: {},
+      runs: { ...(source.runs || {}) },
     },
   };
 }
@@ -437,6 +473,8 @@ function actionDefinition({ skillRoot, skillPath, skillName, skillMeta, action, 
     allowedBatches: normalizeList(releaseContext.allowed_batches, DEFAULT_BATCHES),
     requiresConfirmation: action?.requires_confirmation === true,
     acceptsCurrentRelease: skillMeta.accepts_current_release !== false,
+    // 用户需求点: 节点审计与 Agent 提示必须能读取 Skill 声明的上下文必填字段，避免运行时才暴露模糊预检错误。
+    requiredReleaseFields: normalizeList(releaseContext.required_fields),
     inputSchema: inputs,
     ...(actionKey === "release-localization:upload-source-file"
       ? { sourceFiles: reviewedLocalizationSourceFiles(skillRoot, context) }
@@ -644,19 +682,21 @@ export function filterReleaseActionsForWorkflow(nodes = [], context = {}, config
 }
 
 // 用户需求点: 复合节点由当前 workflow 配置 materialize，内部每个原子 Action 必须同时存在且受同一业务/平台/批次白名单约束。
-export function discoverReleaseCompositeActions(context = {}, nodes = [], config = RELEASE_WORKFLOW_CONFIG) {
+export function discoverReleaseCompositeActions(context = {}, nodes = [], config = RELEASE_WORKFLOW_CONFIG, options = {}) {
   const workflow = selectReleaseWorkflow(context, config);
   if (!workflow) return [];
   const atomicById = new Map((Array.isArray(nodes) ? nodes : []).filter((node) => node?.id).map((node) => [String(node.id), node]));
   const result = [];
   const seen = new Set();
+  const includeAllBatches = options?.includeAllBatches === true;
   const batch = String(context?.batch || "initial").trim().toLowerCase() || "initial";
   for (const stage of Array.isArray(workflow.stages) ? workflow.stages : []) {
-    if (Array.isArray(stage.batches) && !stage.batches.map((value) => String(value || "").trim().toLowerCase()).includes(batch)) continue;
+    if (!includeAllBatches && Array.isArray(stage.batches) && !stage.batches.map((value) => String(value || "").trim().toLowerCase()).includes(batch)) continue;
     const ids = Array.isArray(stage.compositeIds) ? stage.compositeIds : (Array.isArray(stage.capabilityIds) ? stage.capabilityIds : workflowStageNodeIds(stage));
     for (const compositeId of ids) {
-      const composite = selectReleaseCompositeWorkflow({ ...context, compositeId, stageId: stage.id }, config);
+      const composite = selectReleaseCompositeWorkflow({ ...context, compositeId, stageId: stage.id }, config, { includeAllBatches });
       if (!composite || seen.has(composite.id)) continue;
+      const targetContext = releaseExecutionContextForAction({ allowedBatches: composite.batches }, context);
       if (composite.promptTemplate || !Array.isArray(composite.actions)) {
         const capabilityId = String(composite.id || compositeId).trim();
         result.push({
@@ -686,8 +726,9 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
           workflowStageTitle: stage.title,
           workflowStageOrder: workflow.stages.indexOf(stage),
           workflowActionOrder: 0,
-          contextSnapshot: { ...context },
-          scopeKey: releaseContextKey(context),
+          targetBatch: targetContext.batch,
+          contextSnapshot: { ...targetContext },
+          scopeKey: releaseContextKey(targetContext),
           runnable: true,
           error: "",
           source: { compositeId: capabilityId },
@@ -765,8 +806,9 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
         workflowStageTitle: stage.title,
         workflowStageOrder: workflow.stages.indexOf(stage),
         workflowActionOrder: 0,
-        contextSnapshot: { ...context },
-        scopeKey: releaseContextKey(context),
+        targetBatch: targetContext.batch,
+        contextSnapshot: { ...targetContext },
+        scopeKey: releaseContextKey(targetContext),
         runnable: actions.every((action) => action.runnable !== false),
         error: actions.find((action) => action.error)?.error || "",
         source: { compositeId: composite.id },
@@ -781,6 +823,7 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
     const stage = (workflow.stages || []).find((item) => String(item?.id || "") === String(composite.stageId || ""))
       || (workflow.stages || [])[0]
       || { id: "entry", title: "发版入口", order: 0 };
+    const targetContext = releaseExecutionContextForAction({ allowedBatches: composite.batches }, context);
     result.push({
       id: composite.nodeId || `composite:${capabilityId}`,
       kind: "composite",
@@ -809,8 +852,9 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
       workflowStageTitle: stage.title,
       workflowStageOrder: (workflow.stages || []).indexOf(stage),
       workflowActionOrder: 0,
-      contextSnapshot: { ...context },
-      scopeKey: releaseContextKey(context),
+      targetBatch: targetContext.batch,
+      contextSnapshot: { ...targetContext },
+      scopeKey: releaseContextKey(targetContext),
       runnable: true,
       error: "",
       source: { compositeId: capabilityId },
@@ -818,4 +862,56 @@ export function discoverReleaseCompositeActions(context = {}, nodes = [], config
     seen.add(capabilityId);
   }
   return result;
+}
+
+/**
+ * Normalize an atomic Skill action reported by an external assistant to the
+ * visible capability card used by the release timeline.
+ */
+export function releaseCapabilityPresetIdForAction(actionId = "", inputs = {}) {
+  const id = String(actionId || "").trim().toLowerCase();
+  const event = String(inputs?.event || "").trim().toLowerCase();
+  if ((id === "release-notification:send-rollout-notification" || id === "release-notification:send-notification")
+    && event === "patch-flow-entered") return "composite:start-supplemental-release-notify";
+  if (id === "release-notification:send-rollout-notification" && event === "rollout-announce") {
+    const percent = Number(inputs?.gray_percent);
+    return Number.isFinite(percent) && percent >= 100 ? "composite:full-rollout" : "composite:rollout";
+  }
+  return "";
+}
+
+// 用户需求点: 助手输入必须落到自由 Agent 父节点，完成后时间线才能稳定显示该节点；原子 Action 只作为内部步骤保留。
+export function normalizeReleaseCapabilityId(actionId = "") {
+  const id = String(actionId || "").trim();
+  if (!id || id.startsWith("composite:") || id.includes(":")) return id;
+  const capabilityIds = new Set((RELEASE_WORKFLOW_CONFIG.capabilities || []).map((item) => String(item?.id || "").trim()));
+  return capabilityIds.has(id) ? `composite:${id}` : id;
+}
+
+// 用户需求点: 每次助手完成后都要使用可被目录识别的父节点身份，避免时间线被 knownNodeIds 过滤掉。
+export function releaseTimelineSourcePresetId(actionId = "", inputs = {}) {
+  const normalized = normalizeReleaseCapabilityId(actionId);
+  if (normalized === "composite:free-prompt-agent") return normalized;
+  return releaseCapabilityPresetIdForAction(normalized, inputs) || normalized;
+}
+
+// 用户需求点: 助手的每次运行都保留独立实例，同时统一关联自由 Agent 预置节点，确保所有终态分支都能被时间线识别。
+export function releaseTimelineIdentity(action = {}, payload = {}, existing = {}) {
+  const itemId = String(payload?.itemId || existing?.id || "").trim();
+  const existingNodeId = String(existing?.nodeId || "").trim();
+  const actionId = normalizeReleaseCapabilityId(action?.id);
+  const nodeId = itemId.startsWith("custom-")
+    ? itemId
+    : existingNodeId.startsWith("custom-")
+      ? existingNodeId
+      : existingNodeId || actionId || itemId;
+  const existingPreset = normalizeReleaseCapabilityId(existing?.sourcePresetId);
+  // 用户需求点: 自由 Agent 重试不能继承历史原子 Action 身份；外层时间线节点始终归属自由 Agent。
+  const sourcePresetId = actionId === "composite:free-prompt-agent"
+    ? actionId
+    : existingPreset || releaseTimelineSourcePresetId(actionId, payload?.inputs || {});
+  return {
+    nodeId,
+    sourcePresetId,
+  };
 }

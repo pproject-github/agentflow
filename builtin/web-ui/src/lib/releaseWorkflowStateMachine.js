@@ -7,6 +7,7 @@ import {
   selectReleaseCompositeWorkflow,
   compositeActionIds,
 } from "../../../../shared/release-workflow-config.js";
+import { releaseMajorVersion } from "../../../../shared/release-workflow-config.js";
 
 const PROCESS_ORDER = RELEASE_WORKFLOW_CONFIG.processOrder;
 const PROCESS_TITLES = RELEASE_WORKFLOW_CONFIG.processTitles;
@@ -63,6 +64,11 @@ function processOrderForNode(node = {}, config = RELEASE_WORKFLOW_CONFIG, contex
 function processRank(processId) {
   const index = PROCESS_ORDER.indexOf(processId);
   return index < 0 ? PROCESS_ORDER.length : index;
+}
+
+function capabilityIdForCatalogNode(node = {}) {
+  const raw = String(node.compositeId || node.id || "").trim();
+  return raw.replace(/^composite:/, "");
 }
 
 // 用户需求点: 初始化后的入口流程由 workflow.entryStageIds 决定；入口流程执行到一半时，
@@ -135,6 +141,14 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     const workflowNodes = eligibleNodes
       .filter((node) => configuredActionIds.has(node.id) || configuredCompositeIds.has(node.id))
       .map((node) => ({ ...node, workflowId: workflow.id }));
+    // 用户需求点: 首包和补包能力要共用一个大版本自定义集合，但不能把 workflow 外的节点暴露给操作员。
+    const allBatchCapabilityIds = new Set(
+      (workflow.stages || []).flatMap((stage) => workflowStageNodeIds(stage)),
+    );
+    const catalogNodes = eligibleNodes.filter((node) => (
+      allBatchCapabilityIds.has(capabilityIdForCatalogNode(node))
+      || node.insertableInAnyStage === true
+    ));
     const byId = new Map(workflowNodes.map((node) => [node.id, node]));
     const processes = activeStages.map((stage, index) => {
       const stageCompositeIds = Array.isArray(stage.compositeIds) ? stage.compositeIds : (Array.isArray(stage.capabilityIds) ? stage.capabilityIds : workflowStageNodeIds(stage));
@@ -166,6 +180,9 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     const processIds = new Set(processes.map((process) => process.id));
     return {
       context: scope,
+      // The complete business/platform catalog is used by custom-stage
+      // insertion; `processes` below remains batch-scoped for recommendations.
+      catalogNodes,
       workflowId: workflow.id,
       nodes: workflowNodes,
       workflow: {
@@ -208,11 +225,27 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
 
 // 用户需求点: 自定义阶段只能从当前业务线、平台和批次对应的流程节点中选择，
 // 不能把未纳入当前状态机的 Skill/Action 平铺到候选集合里。
-export function selectWorkflowProcessNodes({ machine, nodes = [] } = {}) {
+export function selectWorkflowProcessNodes({ machine, nodes = [], includeAllBatches = false } = {}) {
   if (!machine) return [];
-  const byId = new Map((Array.isArray(nodes) ? nodes : []).filter((node) => node?.id).map((node) => [node.id, node]));
+  const sourceNodes = includeAllBatches && Array.isArray(machine.catalogNodes) ? machine.catalogNodes : nodes;
+  const byId = new Map((Array.isArray(sourceNodes) ? sourceNodes : []).filter((node) => node?.id).map((node) => [node.id, node]));
   const seen = new Set();
   const selected = [];
+  if (includeAllBatches) {
+    for (const node of sourceNodes) {
+      if (!node?.id || seen.has(node.id)) continue;
+      seen.add(node.id);
+      const processId = processIdForNode(node, undefined, machine.context);
+      selected.push({
+        ...node,
+        workflowId: node.workflowId || machine.workflowId || machine.workflow?.id || "",
+        workflowProcessId: processId,
+        workflowProcessTitle: node.processTitle || processTitleForId(processId),
+        workflowProcessOrder: node.processOrder,
+      });
+    }
+    return selected;
+  }
   for (const process of machine.processes || []) {
     for (const processNode of process.nodes || []) {
       const node = byId.get(processNode.id) || processNode;
@@ -260,8 +293,8 @@ function capabilityKeysForItem(item = {}) {
 
 function normalizeNodeStatus(status) {
   const value = normalize(status);
-  // waiting = Agent 已成功停在人工闸；无交互续跑逻辑，按完成推进，UI 另述待办。
-  if (["completed", "succeeded", "skipped", "waiting"].includes(value)) return "completed";
+  if (["completed", "succeeded", "skipped"].includes(value)) return "completed";
+  if (value === "waiting") return "waiting";
   if (["failed", "external_result_unknown"].includes(value)) return "failed";
   if (["running", "previewing", "awaiting_confirmation", "ready", "blocked"].includes(value)) return "running";
   return "pending";
@@ -270,6 +303,7 @@ function normalizeNodeStatus(status) {
 function statusRank(status) {
   if (status === "failed") return 4;
   if (status === "completed") return 2;
+  if (status === "waiting") return 1.5;
   if (status === "running") return 1.5;
   return 1;
 }
@@ -293,7 +327,7 @@ function recordStatusByNode(timeline, pending) {
 }
 
 function isBlockingProcessStatus(status) {
-  return status === "running";
+  return status === "running" || status === "waiting";
 }
 
 export { capabilityKeysForItem };
@@ -367,7 +401,7 @@ export function recommendNextProcessNodes({ machine, timeline = [], pending = []
     : new Set(Array.isArray(excludedNodeIds) ? excludedNodeIds : []);
   for (const process of orderedWorkflowProcesses(machine)) {
     const state = processStates.get(process.id);
-    if (state === "failed" || state === "running") return [];
+    if (["failed", "running", "waiting"].includes(state)) return [];
     if (state !== "completed") {
       const optionalIds = new Set(process.optionalNodeIds || []);
       const next = process.nodes.find((node) => !optionalIds.has(node.id)
@@ -382,10 +416,16 @@ export function recommendNextProcessNodes({ machine, timeline = [], pending = []
 
 export { PROCESS_ORDER, PROCESS_TITLES };
 
-// 创建补包批次时生成独立状态容器，保留旧批次历史供只读查看。
+// 创建补包批次时沿用同一大版本状态容器，保留所有批次历史供只读查看。
 export function createSupplementalBatch(previous = {}) {
-  const batchIndex = Number(previous.batchIndex ?? previous.context?.batchIndex ?? 0) + 1;
-  const context = { ...(previous.context || {}), batch: "supplemental", batchIndex };
+  const currentVersion = String(previous.context?.version || "1.0.0").trim();
+  const versionSuffix = Number(currentVersion.split(".")[2]);
+  const currentIndex = Number(previous.batchIndex ?? previous.context?.batchIndex);
+  const baseIndex = Number.isInteger(currentIndex) && currentIndex >= 0
+    ? currentIndex
+    : (Number.isInteger(versionSuffix) && versionSuffix > 0 ? versionSuffix : 0);
+  const batchIndex = baseIndex + 1;
+  const context = { ...(previous.context || {}), version: `${releaseMajorVersion(currentVersion)}.${batchIndex}`, batch: "supplemental", batchIndex };
   return {
     context,
     state: {
@@ -393,9 +433,14 @@ export function createSupplementalBatch(previous = {}) {
       context,
       batch: "supplemental",
       batchIndex,
-      timeline: [],
+      // 首包与后续补包共享同一条大版本时间线；当前批次的节点用 batch/version 做执行隔离。
+      timeline: Array.isArray(sourceTimeline(previous)) ? [...sourceTimeline(previous)] : [],
       pending: [],
-      runs: {},
+      runs: { ...(previous.runs || previous.state?.runs || {}) },
     },
   };
+}
+
+function sourceTimeline(previous = {}) {
+  return Array.isArray(previous.timeline) ? previous.timeline : previous.state?.timeline;
 }

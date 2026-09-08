@@ -82,6 +82,34 @@ test("release execution inputs include immutable context aliases used by release
     product: "likee",
     platform: "android",
     minor_version: "5.63.2",
+    batch: "initial",
+  });
+});
+
+test("release execution inputs carry version context to every release skill action", async () => {
+  const { releaseExecutionInputs } = await import("../bin/lib/release-runtime-executor.mjs?all-release-context");
+  const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
+  for (const skill of ["release-build", "release-google-play", "release-release-notes", "release-notification"]) {
+    assert.deepEqual(releaseExecutionInputs({ skill, action: "run" }, context, {}), {
+      product: "likee",
+      platform: "android",
+      minor_version: "5.63.2",
+      batch: "initial",
+    }, skill);
+  }
+});
+
+test("composite release runs carry the same immutable version and batch aliases", async () => {
+  const { releaseExecutionInputs } = await import("../bin/lib/release-runtime-executor.mjs?composite-context");
+  assert.deepEqual(releaseExecutionInputs(
+    { id: "composite:build-package", kind: "composite", skill: "release-composite" },
+    { businessLine: "likee", platform: "android", version: "5.64.1", batch: "supplemental" },
+    {},
+  ), {
+    product: "likee",
+    platform: "android",
+    minor_version: "5.64.1",
+    batch: "supplemental",
   });
 });
 
@@ -194,12 +222,10 @@ test("single Agent composite graph carries lean skill-trigger prompt", async () 
   }, { source_path: "/tmp/source.yml" });
   assert.deepEqual(Object.values(graph.instances).map((node) => node.definitionId), ["agent_subAgent"]);
   assert.equal(Object.keys(graph.instances).some((id) => id.startsWith("composite_upload")), false);
-  assert.match(graph.instances.release_agent.body, /上传 Likee android 的受审源多语言内容/);
+  assert.match(graph.instances.release_agent.body, /受审源文件集合/);
   assert.match(graph.instances.release_agent.body, /businessLine":"likee"/);
-  assert.match(graph.instances.release_agent.body, /release-localization\/SKILL\.md/);
   assert.match(graph.instances.release_agent.body, /skillRoot:/);
-  assert.match(graph.instances.release_agent.body, /localization-uploaded/);
-  assert.match(graph.instances.release_agent.body, /禁止 skillhub evolve/);
+  assert.match(graph.instances.release_agent.body, /Skill: release-localization, release-notification/);
   assert.doesNotMatch(graph.instances.release_agent.body, /uv run python skills\//);
   assert.doesNotMatch(graph.instances.release_agent.body, /恢复摘要|勿重复 prepare|禁止 --rerun|直接按剧本/);
   assert.doesNotMatch(graph.instances.release_agent.body, /先读列出的 SKILL\.md/);
@@ -213,7 +239,7 @@ test("create-release-branch agent uses primary release-skills root and skips goo
   const main = "/tmp/project/.workspace/release-skills";
   const play = "/tmp/project/.workspace/release-skills-google-play-aab";
   assert.deepEqual(selectReleaseAgentSkillRoots([main, play], "create-release-branch"), [main]);
-  assert.deepEqual(selectReleaseAgentSkillRoots([main, play], "google-play-submit"), [play]);
+  assert.deepEqual(selectReleaseAgentSkillRoots([main, play], "google-play-submit"), [main]);
   const capability = {
     id: "create-release-branch",
     title: "创建/复用发版分支",
@@ -230,12 +256,52 @@ test("create-release-branch agent uses primary release-skills root and skips goo
     repositoryRoot: "/tmp/project", skillRoots: [main, play],
   }, { release_branch: "release/v1.0" });
   assert.match(graph.instances.release_agent.body, /skillRoot: .*release-skills/);
-  assert.match(graph.instances.release_agent.body, /显式选择 release\/v1\.0 并登记/);
-  assert.match(graph.instances.release_agent.body, /相关 Skill: release-git, release-management/);
+  assert.match(graph.instances.release_agent.body, /输入:.*release\/v1\.0/);
+  assert.match(graph.instances.release_agent.body, /Skill: release-git, release-management/);
   assert.doesNotMatch(graph.instances.release_agent.body, /uv run python skills\//);
   assert.doesNotMatch(graph.instances.release_agent.body, /release-skills-google-play-aab\/skills/);
   assert.equal(graph.instances.release_agent.input.find((slot) => slot.name === "skillsContext").value, main);
   assert.ok(graph.instances.release_agent.body.length < 4_000);
+});
+
+test("removed Google Play AAB extension never becomes an Agent Skill root", async () => {
+  const { selectReleaseAgentSkillRoots } = await import("../bin/lib/release-runtime-executor.mjs?removed-google-play-aab");
+  const main = "/tmp/project/.workspace/release-skills";
+  const removedExtension = "/tmp/project/.workspace/release-skills-google-play-aab";
+  assert.deepEqual(selectReleaseAgentSkillRoots([main, removedExtension], "google-play-submit", ["release-google-play"]), [main]);
+});
+
+test("build-package agent receives only the platform build skill root", async () => {
+  const { selectReleaseAgentSkillRoots } = await import("../bin/lib/release-runtime-executor.mjs?build-package-skill-roots");
+  const main = "/tmp/project/.workspace/release-skills";
+  const play = "/tmp/project/.workspace/release-skills-google-play-aab";
+  assert.deepEqual(
+    selectReleaseAgentSkillRoots([main, play], "build-package", ["release-build"]),
+    [main],
+  );
+});
+
+test("build-package prompt points each skill hint at the matching root", async () => {
+  const { buildReleaseAgentPrompt } = await import("../bin/lib/release-runtime-executor.mjs?build-package-skill-entrypoints");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-agent-skill-roots-"));
+  const main = path.join(tempRoot, "release-skills");
+  const play = path.join(tempRoot, "release-skills-google-play-aab");
+  fs.mkdirSync(path.join(main, "skills", "release-build"), { recursive: true });
+  fs.mkdirSync(path.join(play, "skills", "release-google-play"), { recursive: true });
+  fs.writeFileSync(path.join(main, "skills", "release-build", "SKILL.md"), "---\nname: release-build\n---\n");
+  fs.writeFileSync(path.join(play, "skills", "release-google-play", "SKILL.md"), "---\nname: release-google-play\n---\n");
+  try {
+    const prompt = buildReleaseAgentPrompt({
+      capability: { id: "build-package", title: "构建发版包", skillHints: ["release-build"] },
+      context: { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" },
+      skillRoots: [main, play],
+      requiredReleaseFields: ["build_number"],
+    });
+    assert.match(prompt, /skillRoot:/);
+    assert.doesNotMatch(prompt, /release-google-play/);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 });
 
 test("release capability intents stay lean and operator-guide shaped", async () => {
@@ -250,7 +316,7 @@ test("release capability intents stay lean and operator-guide shaped", async () 
     "submit-approval",
     "initial-publish-and-notify",
     "supplemental-publish-and-notify",
-    "prepare-supplemental-notification",
+    "start-supplemental-release-notify",
     "rollout",
     "submit-full-rollout-approval",
     "full-rollout",
@@ -267,12 +333,11 @@ test("release capability intents stay lean and operator-guide shaped", async () 
       skillRoots: ["/tmp/p/.workspace/release-skills"],
       previousResult: { status: "completed", summary: "旧成功", records: [{ record_id: "x".repeat(32), operation: "准备翻译归档" }] },
     });
-    assert.match(prompt, /版本页上下文已锁定/);
-    assert.match(prompt, /按各 Skill 的 operator-guide/);
+    assert.match(prompt, /遵循 skillRoot 中相关 Skill/);
     assert.doesNotMatch(prompt, /恢复摘要|勿重复 prepare|幂等成功/);
     assert.match(
       prompt,
-      /创建标准发版分支|拉回翻译|上传 .+ 的受审源多语言|合入主干|发版包|首次发版审核草稿|全量发布审核草稿|首包商店发布|补包商店发布|版本更新说明并通知|进入补包流程通知|观察灰度|全量放量通知/,
+      /任务:/,
       id,
     );
     assert.ok(prompt.length < 3_500, `${id} prompt too long: ${prompt.length}`);
@@ -285,8 +350,12 @@ test("release capability intents stay lean and operator-guide shaped", async () 
   assert.match(buildReleaseCapabilityPlaybook("initial-publish-and-notify", { ...ctx, platform: "ios" }, {}), /首包版本更新说明/);
   assert.match(buildReleaseCapabilityPlaybook("supplemental-publish-and-notify", { ...ctx, batch: "supplemental" }, {}), /补包商店发布/);
   assert.match(buildReleaseCapabilityPlaybook("supplemental-publish-and-notify", { ...ctx, platform: "ios", batch: "supplemental" }, {}), /补包版本更新说明/);
-  assert.match(buildReleaseCapabilityPlaybook("prepare-supplemental-notification", { ...ctx, batch: "supplemental" }, {}), /进入补包流程通知/);
-  assert.doesNotMatch(buildReleaseCapabilityPlaybook("prepare-supplemental-notification", { ...ctx, batch: "supplemental" }, {}), /send-rollout-notification|patch-flow-entered|uv run|gray_percent/);
+  const supplementalStart = buildReleaseCapabilityPlaybook("start-supplemental-release-notify", { ...ctx, batch: "supplemental" }, {});
+  assert.match(supplementalStart, /guide-current-release/);
+  assert.match(supplementalStart, /append-release-batch/);
+  assert.match(supplementalStart, /补包开始通知/);
+  assert.match(supplementalStart, /平台时间线没有历史记录也允许执行/);
+  assert.doesNotMatch(supplementalStart, /send-rollout-notification|patch-flow-entered|gray_percent/);
   assert.match(buildReleaseCapabilityPlaybook("full-rollout", ctx, {}), /全量放量通知/);
   assert.doesNotMatch(buildReleaseCapabilityPlaybook("full-rollout", ctx, { operator: "duanfengyuan" }), /send-rollout-notification|gray_percent|uv run/);
   assert.match(buildReleaseCapabilityPlaybook("rollout", ctx, { gray_percent: "50" }), /放量到 50%/);
@@ -298,14 +367,22 @@ test("release capability intents stay lean and operator-guide shaped", async () 
   assert.match(upload, /上传 Likee android 的受审源多语言内容（版本 5\.64\.0/);
   assert.match(upload, /localization-uploaded/);
   assert.doesNotMatch(upload, /upload-source-file|uv run/);
+  const rolloutMissingPercent = buildReleaseCapabilityPlaybook("rollout", ctx, {});
+  assert.match(rolloutMissingPercent, /gray_percent|灰度百分比/);
+  assert.match(rolloutMissingPercent, /waiting/);
   const download = buildReleaseCapabilityPlaybook("localization-download-merge-notify", ctx, {});
   assert.match(download, /为 Likee android 拉回翻译（版本 5\.64\.0/);
-  assert.match(download, /localization-applied/);
+  assert.match(download, /创建或复用 MR/);
+  assert.match(download, /MR 创建或复用成功后本节点立即完成/);
+  assert.doesNotMatch(download, /MR 合入后|localization-applied/);
+  assert.match(download, /不要发送合入通知/);
   assert.doesNotMatch(download, /prepare-translation-archive|uv run|勿重复|--rerun|强制重新下载/);
   const downloadForce = buildReleaseCapabilityPlaybook("localization-download-merge-notify", ctx, { force_rerun: true });
   assert.match(downloadForce, /强制重新下载/);
   assert.match(downloadForce, /--rerun/);
-  assert.match(downloadForce, /已 merged 的旧 MR 不算/);
+  assert.match(downloadForce, /创建或复用 MR/);
+  assert.doesNotMatch(downloadForce, /MR 合入后|localization-applied/);
+  assert.match(downloadForce, /不要发送合入通知/);
   assert.doesNotMatch(downloadForce, /uv run python/);
   const downloadResume = buildReleaseCapabilityPlaybook("localization-download-merge-notify", ctx, {
     apply_record_id: "029565ca36d54effa06a9da6bba82520",
@@ -335,6 +412,63 @@ test("release capability intents stay lean and operator-guide shaped", async () 
   const invalid = buildReleaseCapabilityPlaybook("submit-approval", ctx, { operator: "段丰源" });
   assert.match(invalid, /approval_operator_invalid|waiting/);
   assert.doesNotMatch(invalid, /uv run python skills\/release-approval/);
+});
+
+test("capability prompts use configured business goals without CLI playbooks", async () => {
+  const { buildReleaseCapabilityPlaybook, buildReleaseAgentPrompt } = await import("../bin/lib/release-runtime-executor.mjs?config-driven-prompts");
+  const capability = {
+    id: "demo-capability",
+    capabilityGoal: "完成 ${businessLine} ${platform} 的多语言同步并发送通知。",
+    description: "不得使用的旧描述",
+    skillHints: ["release-localization", "release-notification"],
+    promptTemplate: "${businessLine}/${platform}/${version}: ${capabilityGoal}",
+  };
+  const context = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
+  const intent = buildReleaseCapabilityPlaybook("demo-capability", context, {}, capability);
+  assert.equal(intent, "完成 likee android 的多语言同步并发送通知。");
+  const prompt = buildReleaseAgentPrompt({ capability, context, skillRoots: ["/tmp/release-skills"] });
+  assert.match(prompt, /完成 likee android 的多语言同步并发送通知/);
+  assert.doesNotMatch(prompt, /prepare-translation-archive|--rerun|upload-source-file|uv run|先执行|再执行/);
+  assert.ok(prompt.length < 2_500, `prompt too long: ${prompt.length}`);
+});
+
+test("build-package only points at the platform build skill", async () => {
+  const { buildReleaseCapabilityPlaybook } = await import("../bin/lib/release-runtime-executor.mjs?build-package-goal");
+  const config = { id: "build-package", capabilityGoal: "按当前平台构建发版包并记录构建产物。", skillHints: ["release-build"] };
+  const intent = buildReleaseCapabilityPlaybook("build-package", { businessLine: "likee", platform: "ios", version: "5.64.0", batch: "initial" }, {}, config);
+  assert.equal(intent, "按当前平台构建发版包并记录构建产物。");
+});
+
+test("localization download capability completes when its MR is created", async () => {
+  const { buildReleaseCapabilityPlaybook, buildReleaseAgentPrompt } = await import("../bin/lib/release-runtime-executor.mjs?localization-mr-completion");
+  const context = {
+    businessLine: "likee",
+    platform: "android",
+    version: "5.64.0",
+    batch: "initial",
+    repositoryRoot: "/tmp/likee-android",
+  };
+  const playbook = buildReleaseCapabilityPlaybook("localization-download-merge-notify", context, {});
+  assert.match(playbook, /创建或复用 MR/);
+  assert.doesNotMatch(playbook, /MR 合入后/);
+  assert.doesNotMatch(playbook, /localization-applied/);
+  assert.doesNotMatch(playbook, /发送 localization-uploaded 通知|发送 localization-applied 通知/);
+  assert.match(playbook, /不要发送合入通知/);
+
+  const prompt = buildReleaseAgentPrompt({
+    capability: {
+      id: "localization-download-merge-notify",
+      title: "多语言下载 & 创建 MR",
+      skillHints: ["release-localization", "release-git"],
+    },
+    context,
+    skillRoots: ["/tmp/release-skills"],
+  });
+  assert.match(prompt, /创建或复用 MR/);
+  assert.match(prompt, /MR 创建成功即完成/);
+  assert.doesNotMatch(prompt, /localization-applied/);
+  assert.doesNotMatch(prompt, /发送 localization-applied 通知/);
+  assert.doesNotMatch(prompt, /发送合入通知/);
 });
 
 test("retry previousResult is compacted so agent prompts stay under Cursor limits", async () => {
@@ -408,6 +542,25 @@ test("builds the activity release context preparation as a direct release-manage
   const publishInput = graph.instances.release_agent.input.find((slot) => slot.name === "publish_date");
   assert.equal(publishInput?.value, "2026-09-01");
   assert.equal(graph.instances.release_agent.input.find((slot) => slot.name === "minor_version")?.value, "1.3.0");
+});
+
+test("prepare-context graph embeds TAPD-derived publish_date for an executable run", async () => {
+  const { buildCompositeReleaseRunGraph } = await import("../bin/lib/release-runtime-executor.mjs?prepare-context-graph-tapd");
+  const graph = buildCompositeReleaseRunGraph({
+    id: "release-initialization:prepare-context",
+    title: "准备活动发版上下文",
+    skillHints: ["release-management"],
+  }, [], {
+    businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial",
+    repositoryRoot: "/tmp/project", skillRoots: ["/tmp/release-skills"],
+  }, {}, {
+    skillRoots: ["/tmp/release-skills"],
+    tapdConfig: { workspaceId: "33202860" },
+    fetchIterationsSync: () => ({ data: [{ Iteration: { id: "it-564", name: "Likee Android&iOS V5.64（9/2）", enddate: "2026-09-02" } }] }),
+  });
+  assert.equal(graph.meta.inputs.publish_date, "2026-09-02");
+  assert.equal(graph.instances.release_agent.input.find((slot) => slot.name === "publish_date")?.value, "2026-09-02");
+  assert.equal(graph.meta.agentDriven, false);
 });
 
 test("extracts a release Agent result from the release_agent graph output slot", async () => {
@@ -518,37 +671,162 @@ test("prepare-context wrapper returns waiting when publish_date is missing", asy
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
-test("bootstrapReleasePrepareContext completes prepare-context during initialization read", async () => {
-  const { bootstrapReleasePrepareContext, runPrepareContextFastPath } = await import("../bin/lib/release-runtime-executor.mjs?prepare-context-bootstrap");
-  const os = await import("node:os");
-  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-prepare-bootstrap-"));
-  const skillRoot = path.join(tempRoot, "skills", "release-management");
+test("prepare-context wrapper does not create a release for unrelated preflight failures", async () => {
+  const { prepareContextWrapperScript } = await import("../bin/lib/release-runtime-executor.mjs?prepare-context-wrapper-unrelated");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-prepare-context-unrelated-"));
+  const skillRoot = path.join(tempRoot, "release-management");
   fs.mkdirSync(path.join(skillRoot, "scripts"), { recursive: true });
-  fs.writeFileSync(path.join(skillRoot, "scripts", "run.py"), [
+  const runPy = path.join(skillRoot, "scripts", "run.py");
+  fs.writeFileSync(runPy, [
     "import sys",
     "action = sys.argv[sys.argv.index('--action') + 1] if '--action' in sys.argv else ''",
     "if action == 'guide-current-release':",
-    "    print('status: succeeded')",
-    "    print('record_id: active-564')",
-    "    print('data:')",
-    "    print('  minor_version: 5.64.0')",
+    "    print('status: preflight_failed')",
+    "    print('error: platform_selection_required')",
+    "elif action == 'create-active-release':",
+    "    raise SystemExit('must not create on platform selection failure')",
   ].join("\n"));
-  const context = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
-  const fast = runPrepareContextFastPath(context, {}, [tempRoot]);
-  assert.equal(fast.status, "completed");
-  const bootstrapped = bootstrapReleasePrepareContext({
-    timeline: [{ nodeId: "release-initialization", status: "completed" }],
-    pending: [{ nodeId: "release-initialization:prepare-context", status: "pending", id: "old-pending" }],
-    dismissedNodeIds: [],
-  }, context, [tempRoot]);
-  assert.equal(bootstrapped.changed, true);
-  assert.equal(bootstrapped.state.initialization?.status, "completed");
-  assert.equal(bootstrapped.state.pending.some((item) => item.nodeId === "release-initialization:prepare-context"), false);
-  assert.equal(bootstrapped.state.timeline.some((item) => item.nodeId === "release-initialization:prepare-context" && item.status === "completed"), true);
+  const result = spawnSync("sh", ["-c", prepareContextWrapperScript(runPy, skillRoot)], {
+    env: { ...process.env, AGENTFLOW_INPUTS_JSON: JSON.stringify({
+      product: "likee", platform: "android", minor_version: "5.64.0", major_version: "5.64", batch: "initial", publish_date: "2026-09-02",
+    }) },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(result.stdout.trim());
+  assert.equal(payload.status, "failed");
+  assert.match(payload.summary, /platform_selection_required/);
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });
 
-test("bootstrapReleasePrepareContext completes prepare-context during initialization read", async () => {
+test("prepare-context wrapper does not reuse a successful context for another version", async () => {
+  const { prepareContextWrapperScript } = await import("../bin/lib/release-runtime-executor.mjs?prepare-context-wrapper-version");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-prepare-context-version-"));
+  const skillRoot = path.join(tempRoot, "release-management");
+  fs.mkdirSync(path.join(skillRoot, "scripts"), { recursive: true });
+  const runPy = path.join(skillRoot, "scripts", "run.py");
+  fs.writeFileSync(runPy, [
+    "import sys",
+    "action = sys.argv[sys.argv.index('--action') + 1] if '--action' in sys.argv else ''",
+    "if action == 'guide-current-release':",
+    "    print('status: succeeded')",
+    "    print('record_id: active-other')",
+    "    print('current_release:')",
+    "    print('  minor_version: 15.64.0')",
+    "elif action == 'create-active-release':",
+    "    raise SystemExit('must not create on version mismatch')",
+  ].join("\n"));
+  const result = spawnSync("sh", ["-c", prepareContextWrapperScript(runPy, skillRoot)], {
+    env: { ...process.env, AGENTFLOW_INPUTS_JSON: JSON.stringify({
+      product: "likee", platform: "android", minor_version: "5.64.0", major_version: "5.64", batch: "initial", publish_date: "2026-09-02",
+    }) },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(result.stdout.trim());
+  assert.equal(payload.status, "failed");
+  assert.match(payload.summary, /版本不匹配/);
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("prepare-context wrapper rejects a required target precondition", async () => {
+  const { prepareContextWrapperScript } = await import("../bin/lib/release-runtime-executor.mjs?prepare-context-wrapper-precondition");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-prepare-context-precondition-"));
+  const skillRoot = path.join(tempRoot, "release-management");
+  fs.mkdirSync(path.join(skillRoot, "scripts"), { recursive: true });
+  const runPy = path.join(skillRoot, "scripts", "run.py");
+  fs.writeFileSync(runPy, [
+    "import sys",
+    "action = sys.argv[sys.argv.index('--action') + 1] if '--action' in sys.argv else ''",
+    "if action == 'guide-current-release':",
+    "    print('status: succeeded')",
+    "    print('current_release:')",
+    "    print('  minor_version: 5.64.0')",
+    "    print('precondition:')",
+    "    print('  status: required')",
+    "    print('  reason: target_not_configured')",
+    "elif action == 'create-active-release':",
+    "    raise SystemExit('must not create when target precondition is required')",
+  ].join("\n"));
+  const result = spawnSync("sh", ["-c", prepareContextWrapperScript(runPy, skillRoot)], {
+    env: { ...process.env, AGENTFLOW_INPUTS_JSON: JSON.stringify({
+      product: "likee", platform: "android", minor_version: "5.64.0", major_version: "5.64", batch: "initial", publish_date: "2026-09-02",
+    }) },
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0);
+  const payload = JSON.parse(result.stdout.trim());
+  assert.equal(payload.status, "failed");
+  assert.match(payload.summary, /target_not_configured/);
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("prepare-context fast path fills publish_date from the matching TAPD iteration", async () => {
+  const { runPrepareContextFastPath } = await import("../bin/lib/release-runtime-executor.mjs?prepare-context-tapd");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-prepare-tapd-"));
+  const skillRoot = path.join(tempRoot, "release-skills");
+  fs.mkdirSync(path.join(skillRoot, "release-management", "scripts"), { recursive: true });
+  const runPy = path.join(skillRoot, "release-management", "scripts", "run.py");
+  fs.writeFileSync(runPy, [
+    "import sys",
+    "action = sys.argv[sys.argv.index('--action') + 1] if '--action' in sys.argv else ''",
+    "values = {}",
+    "for index, item in enumerate(sys.argv):",
+    "    if item == '--input' and index + 1 < len(sys.argv) and '=' in sys.argv[index + 1]:",
+    "        key, value = sys.argv[index + 1].split('=', 1)",
+    "        values[key] = value",
+    "if action == 'guide-current-release':",
+    "    print('status: preflight_failed')",
+    "    print('error: 未找到活动发版')",
+    "elif action == 'create-active-release':",
+    "    print('status: succeeded')",
+    "    print('record_id: tapd-created')",
+    "    print('publish_date_seen: ' + values.get('publish_date', ''))",
+  ].join("\n"));
+  const fast = runPrepareContextFastPath(
+    { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" },
+    {},
+    [skillRoot],
+    {
+      tapdConfig: { workspaceId: "33202860" },
+      fetchIterationsSync: () => ({ data: [{ Iteration: { id: "it-564", name: "Likee Android&iOS V5.64（9/2）", enddate: "2026-09-02" } }] }),
+    },
+  );
+  assert.equal(fast.status, "completed");
+  assert.equal(fast.records?.[0]?.record_id, "tapd-created");
+  assert.equal(fast.summary, "活动发版上下文已创建");
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("prepare-context fast path reports an actionable waiting state when TAPD has no matching iteration", async () => {
+  const { runPrepareContextFastPath } = await import("../bin/lib/release-runtime-executor.mjs?prepare-context-tapd-missing");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-prepare-tapd-missing-"));
+  const skillRoot = path.join(tempRoot, "release-skills");
+  fs.mkdirSync(path.join(skillRoot, "release-management", "scripts"), { recursive: true });
+  const runPy = path.join(skillRoot, "release-management", "scripts", "run.py");
+  fs.writeFileSync(runPy, [
+    "import sys",
+    "action = sys.argv[sys.argv.index('--action') + 1] if '--action' in sys.argv else ''",
+    "if action == 'guide-current-release':",
+    "    print('status: preflight_failed')",
+    "    print('error: 未找到活动发版')",
+  ].join("\n"));
+  const fast = runPrepareContextFastPath(
+    { businessLine: "likee", platform: "android", version: "9.99.0", batch: "initial" },
+    {},
+    [skillRoot],
+    {
+      tapdConfig: { workspaceId: "33202860" },
+      fetchIterationsSync: () => ({ data: [] }),
+    },
+  );
+  assert.equal(fast.status, "waiting");
+  assert.match(fast.summary, /TAPD 未找到版本 9\.99\.0/);
+  assert.equal(fast.waiting?.reason, "publish_date_required");
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("initialization bootstrap records context preparation on the initialization node", async () => {
   const { bootstrapReleasePrepareContext, runPrepareContextFastPath } = await import("../bin/lib/release-runtime-executor.mjs?prepare-context-bootstrap");
   const os = await import("node:os");
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-prepare-bootstrap-"));
@@ -574,6 +852,40 @@ test("bootstrapReleasePrepareContext completes prepare-context during initializa
   assert.equal(bootstrapped.changed, true);
   assert.equal(bootstrapped.state.initialization?.status, "completed");
   assert.equal(bootstrapped.state.pending.some((item) => item.nodeId === "release-initialization:prepare-context"), false);
-  assert.equal(bootstrapped.state.timeline.some((item) => item.nodeId === "release-initialization:prepare-context" && item.status === "completed"), true);
+  const initialization = bootstrapped.state.timeline.find((item) => item.nodeId === "release-initialization");
+  assert.equal(initialization?.contextPreparationStatus, "completed");
+  assert.equal(initialization?.details?.summary, "活动发版上下文已就绪");
+  fs.rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("initialization bootstrap records context preparation on the initialization node", async () => {
+  const { bootstrapReleasePrepareContext, runPrepareContextFastPath } = await import("../bin/lib/release-runtime-executor.mjs?prepare-context-bootstrap");
+  const os = await import("node:os");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-prepare-bootstrap-"));
+  const skillRoot = path.join(tempRoot, "skills", "release-management");
+  fs.mkdirSync(path.join(skillRoot, "scripts"), { recursive: true });
+  fs.writeFileSync(path.join(skillRoot, "scripts", "run.py"), [
+    "import sys",
+    "action = sys.argv[sys.argv.index('--action') + 1] if '--action' in sys.argv else ''",
+    "if action == 'guide-current-release':",
+    "    print('status: succeeded')",
+    "    print('record_id: active-564')",
+    "    print('data:')",
+    "    print('  minor_version: 5.64.0')",
+  ].join("\n"));
+  const context = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
+  const fast = runPrepareContextFastPath(context, {}, [tempRoot]);
+  assert.equal(fast.status, "completed");
+  const bootstrapped = bootstrapReleasePrepareContext({
+    timeline: [{ nodeId: "release-initialization", status: "completed" }],
+    pending: [{ nodeId: "release-initialization:prepare-context", status: "pending", id: "old-pending" }],
+    dismissedNodeIds: [],
+  }, context, [tempRoot]);
+  assert.equal(bootstrapped.changed, true);
+  assert.equal(bootstrapped.state.initialization?.status, "completed");
+  assert.equal(bootstrapped.state.pending.some((item) => item.nodeId === "release-initialization:prepare-context"), false);
+  const initialization = bootstrapped.state.timeline.find((item) => item.nodeId === "release-initialization");
+  assert.equal(initialization?.contextPreparationStatus, "completed");
+  assert.equal(initialization?.details?.summary, "活动发版上下文已就绪");
   fs.rmSync(tempRoot, { recursive: true, force: true });
 });

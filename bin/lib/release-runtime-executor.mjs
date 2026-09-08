@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { RELEASE_WORKFLOW_CONFIG } from "../../shared/release-workflow-config.js";
+import { readReleaseDeploymentConfigWithDataRoot } from "./admin-release-projects.mjs";
+import { defaultFetchIterationsSync, findTapdIterationForVersion } from "./release-tapd.mjs";
 
 function shellQuote(value) {
   return `'${String(value ?? "").replace(/'/g, `'"'"'`)}'`;
@@ -206,31 +208,21 @@ export function discoverReleaseSkillRecovery(skillRoots = [], capabilityId = "")
   });
 }
 
-/**
- * 用户需求点: Agent 只能使用与当前能力匹配的主 Skill 根；把 google-play-aab 副本和主 release-skills 并列会让它跑错 cwd 并空转超时。
- */
-export function selectReleaseAgentSkillRoots(skillRoots = [], capabilityId = "") {
-  const roots = (Array.isArray(skillRoots) ? skillRoots : []).map((root) => String(root || "").trim()).filter(Boolean);
-  if (!roots.length) return [];
-  const id = String(capabilityId || "");
-  const wantsPlay = /google-play|channel-package|aab/i.test(id);
-  const normalized = roots.map((root) => root.replace(/\/+$/, ""));
-  const play = normalized.filter((root) => /release-skills-google-play-aab$/.test(root));
-  const main = normalized.filter((root) => /(?:^|\/)release-skills$/.test(root));
-  if (wantsPlay && play.length) return play;
-  if (!wantsPlay && main.length) return main;
-  if (!wantsPlay) {
-    const withoutPlay = normalized.filter((root) => !/release-skills-google-play-aab$/.test(root));
-    if (withoutPlay.length) return withoutPlay;
-  }
-  return [normalized[0]];
+/** 用户需求点: 已移除 Google Play AAB 扩展仓库，所有发版 Agent 只从主 release-skills 根读取 Skill。 */
+export function selectReleaseAgentSkillRoots(skillRoots = [], capabilityId = "", skillHints = []) {
+  void capabilityId;
+  void skillHints;
+  const normalized = (Array.isArray(skillRoots) ? skillRoots : [])
+    .map((root) => String(root || "").trim().replace(/\/+$/, ""))
+    .filter(Boolean)
+    .filter((root) => !/(?:^|\/)release-skills-google-play-aab$/i.test(root));
+  if (!normalized.length) return [];
+  const main = normalized.filter((root) => /(?:^|\/)release-skills$/i.test(root));
+  return main.length ? main : [normalized[0]];
 }
 
-/**
- * 用户需求点: AgentFlow 只下发 Skill 操作手册级的业务意图句，不注入 CLI 剧本 / 恢复摘要 / 幂等策略。
- * 能力编排、续跑、是否重跑一律由 Skill 自行决定。
- */
-export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, inputs = {}) {
+/** @deprecated 仅保留旧测试/外部调用兼容；AgentFlow 执行路径不使用。 */
+function legacyReleaseCapabilityPlaybook(capabilityId = "", context = {}, inputs = {}) {
   const id = String(capabilityId || "");
   const productLabel = String(context?.businessLine || inputs?.product || "likee").trim() || "likee";
   const platformLabel = String(context?.platform || inputs?.platform || "android").trim() || "android";
@@ -262,11 +254,11 @@ export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, 
     if (forceRerun) {
       return [
         `为 ${displayProduct} ${platformLabel} 拉回翻译（版本 ${version}，批次 ${batch}）。本次为强制重新下载。`,
-        "必须对 prepare-translation-archive 使用 --rerun（按 Skill confirm 流程），再 apply；禁止因历史 succeeded/skipped 跳过。",
-        "已 merged 的旧 MR 不算本轮完成；有变更须提交新的 topic MR，合入后再发 localization-applied。",
+        "必须对 prepare-translation-archive 使用 --rerun（按 Skill 流程），再 apply；有变更时交接 release-git 完成受管理提交、推送和创建或复用 MR。",
+        "MR 创建或复用成功后本节点立即完成；不要等待 MR 合入，不要发送合入通知。",
       ].join("\n");
     }
-    return `为 ${displayProduct} ${platformLabel} 拉回翻译（版本 ${version}，批次 ${batch}），应用到工程、提交受管理变更并在 MR 合入后发送 localization-applied 通知。`;
+    return `为 ${displayProduct} ${platformLabel} 拉回翻译（版本 ${version}，批次 ${batch}），按 Skill 应用到工程；有变更时由 Skill 内部交接 release-git 完成受管理提交、推送和创建或复用 MR。MR 创建或复用成功后本节点立即完成；不要等待 MR 合入，不要发送合入通知。`;
   }
   if (id.includes("create-release-branch")) {
     if (!version) {
@@ -295,10 +287,14 @@ export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, 
         "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
       ].join("\n");
     }
+    // 用户需求点: 构建号优先从活动发版读取，读取不到时立刻停在 waiting，不得盲目触发构建。
     const buildNumber = String(inputs?.build_number || "").trim();
     return buildNumber
       ? `准备 ${displayProduct} ${platformLabel} 发版包（版本 ${version}，批次 ${batch}，构建号 ${buildNumber}）。`
-      : `准备 ${displayProduct} ${platformLabel} 发版包（版本 ${version}，批次 ${batch}）。`;
+      : [
+        `准备 ${displayProduct} ${platformLabel} 发版包（版本 ${version}，批次 ${batch}）。`,
+        "先从当前活动发版读取渠道包所需的 build_number（Android 需包含对应构建号）；无法确定时返回 status=waiting，waiting.reason=build_number_required，required_inputs=[\"build_number\"]，不要猜测或执行。",
+      ].join("\n");
   }
   if (id.includes("submit-full-rollout-approval")) {
     const operator = resolveReleaseApprovalOperator(inputs?.operator, context?.operator);
@@ -361,14 +357,19 @@ export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, 
       ? `为 ${displayProduct} ${platformLabel} 上传补包版本更新说明并通知（版本 ${version}，批次 supplemental）。`
       : `为 ${displayProduct} ${platformLabel} 执行补包商店发布并通知（版本 ${version}，批次 supplemental）。`;
   }
-  if (id.includes("prepare-supplemental-notification")) {
+  if (id.includes("start-supplemental-release-notify")) {
     if (!version) {
       return [
-        `为 ${displayProduct} ${platformLabel} 发送进入补包流程通知。`,
+        `为 ${displayProduct} ${platformLabel} 开始补包并发送通知。`,
         "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
       ].join("\n");
     }
-    return `为 ${displayProduct} ${platformLabel} 发送进入补包流程通知（版本 ${version}，批次 ${batch}）。`;
+    return [
+      `为 ${displayProduct} ${platformLabel} 开始补包（版本 ${version}，批次 supplemental）并发送补包开始通知。`,
+      "先按 release-management Skill 执行 guide-current-release，读取当前版本的发版上下文；平台时间线没有历史记录也允许执行，不要因为页面没有历史卡片而跳过。",
+      "若同一主版本已有活动发版，按 Skill 执行 append-release-batch 追加 supplemental batch；若没有任何活动发版，按 Skill 建立首包活动上下文后再继续补包准备；不要把补包误当成新的首包流程。",
+      "发版上下文准备成功后，再按 release-notification Skill 发送补包开始通知。上下文或分支无法安全建立时返回 status=failed/waiting，说明原因，不要假装完成。",
+    ].join("\n");
   }
   if (id === "rollout" || (id.includes("rollout") && !id.includes("full-rollout"))) {
     if (!version) {
@@ -377,7 +378,14 @@ export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, 
         "缺少初始化版本号（minor_version）。返回 status=waiting，waiting.reason=version_required，required_inputs=[\"minor_version\"]，不要执行。",
       ].join("\n");
     }
+    // 用户需求点: Android 放量必须由操作员明确给出灰度比例，不能让 Agent 猜测目标量级。
     const grayPercent = String(inputs?.gray_percent || "").trim();
+    if (!grayPercent && platform === "android") {
+      return [
+        `为 ${displayProduct} ${platformLabel} 观察灰度并推进放量（版本 ${version}，批次 ${batch}）。`,
+        "缺少灰度百分比（gray_percent）。返回 status=waiting，waiting.reason=gray_percent_required，required_inputs=[\"gray_percent\"]，不要执行。",
+      ].join("\n");
+    }
     return grayPercent
       ? `为 ${displayProduct} ${platformLabel} 观察灰度并推进放量到 ${grayPercent}%（版本 ${version}，批次 ${batch}）。`
       : `为 ${displayProduct} ${platformLabel} 观察灰度并推进放量（版本 ${version}，批次 ${batch}）。`;
@@ -416,7 +424,37 @@ export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, 
   return `为 ${displayProduct} ${platformLabel}${version ? ` ${version}` : ""}（${batch}）执行当前发版能力。`;
 }
 
-export function buildReleaseAgentPrompt({ capability = {}, context = {}, inputs = {}, skillRoots = [], upstreamOutputs = {}, previousResult = null } = {}) {
+function interpolateReleaseGoal(template, values) {
+  return String(template || "").replace(/\$\{([a-zA-Z0-9_]+)\}/g, (_match, key) => String(values?.[key] ?? "").trim());
+}
+
+/** 用户需求点: 发版平台只传递配置中的业务目标，Skill 自行决定内部步骤和 CLI 参数。 */
+export function buildReleaseCapabilityPlaybook(capabilityId = "", context = {}, inputs = {}, configuredCapability = null) {
+  const id = String(capabilityId || "").trim();
+  // 仅兼容旧的直接调用方；AgentFlow 运行路径始终传入配置能力，使用下方配置驱动目标。
+  if (!configuredCapability) return legacyReleaseCapabilityPlaybook(id, context, inputs);
+  const capability = configuredCapability && typeof configuredCapability === "object"
+    ? configuredCapability
+    : RELEASE_WORKFLOW_CONFIG.capabilities?.find((item) => String(item?.id || "") === id);
+  const product = String(context?.businessLine || inputs?.product || "").trim();
+  const platform = String(context?.platform || inputs?.platform || "").trim();
+  const version = String(context?.version || inputs?.minor_version || "").trim();
+  const batch = String(context?.batch || inputs?.batch || "initial").trim();
+  const prompt = String(inputs?.prompt || "").trim();
+  const goal = String(capability?.capabilityGoal || capability?.description || "执行当前发版能力。").trim();
+  if (id === "free-prompt-agent" && prompt) return prompt;
+  return interpolateReleaseGoal(goal, {
+    businessLine: product,
+    platform,
+    version,
+    batch,
+    batchIndex: context?.batchIndex,
+    operator: inputs?.operator || context?.operator,
+    prompt,
+  });
+}
+
+export function buildReleaseAgentPrompt({ capability = {}, context = {}, inputs = {}, skillRoots = [], upstreamOutputs = {}, previousResult = null, requiredReleaseFields = [] } = {}) {
   const capabilityId = String(capability?.id || capability?.compositeId || "").trim();
   const promptInputs = inputs && typeof inputs === "object" && !Array.isArray(inputs) ? { ...inputs } : {};
   if (capabilityId.includes("localization-upload-notify")) delete promptInputs.source_path;
@@ -430,9 +468,12 @@ export function buildReleaseAgentPrompt({ capability = {}, context = {}, inputs 
     ...inputHints,
     ...(Array.isArray(capability.skillHints) ? capability.skillHints.filter(Boolean) : []),
   ])];
-  const agentSkillRoots = selectReleaseAgentSkillRoots(skillRoots, capabilityId);
+  const agentSkillRoots = selectReleaseAgentSkillRoots(skillRoots, capabilityId, hints);
   const skillRoot = agentSkillRoots[0] || "";
-  const intent = buildReleaseCapabilityPlaybook(capabilityId, context, promptInputs);
+  const configuredCapability = capability?.capabilityGoal
+    ? capability
+    : (RELEASE_WORKFLOW_CONFIG.capabilities?.find((item) => String(item?.id || "") === capabilityId) || capability);
+  const intent = buildReleaseCapabilityPlaybook(capabilityId, context, promptInputs, configuredCapability);
   const contextBrief = sanitizePromptValue({
     businessLine: context?.businessLine,
     platform: context?.platform,
@@ -449,22 +490,23 @@ export function buildReleaseAgentPrompt({ capability = {}, context = {}, inputs 
     ? sanitizePromptValue(Object.fromEntries(explicitKeys.map((key) => [key, promptInputs[key]])))
     : null;
   const safeUpstream = sanitizePromptValue(upstreamOutputs);
+  const requiredFields = [...new Set([
+    ...(Array.isArray(requiredReleaseFields) ? requiredReleaseFields : []),
+    ...(Array.isArray(capability?.inputs) ? capability.inputs.filter((input) => input?.required).map((input) => input?.key) : []),
+  ]
+    .map((field) => String(field || "").trim()).filter(Boolean))];
+  // 用户需求点: 固定节点必须无交互执行；缺少 Skill 必填参数时立即返回可操作的 waiting/failed 结果。
   const prompt = [
-    "你是发版执行 Agent。版本页上下文已锁定，按下方业务意图在 skillRoot 触发对应 release-* Skill，不要改业务线/平台/版本，不要只给计划。",
-    "按各 Skill 的 operator-guide / cli 自行编排；AgentFlow 不提供步骤剧本。失败时再查对应 Skill 的 references/cli.md。",
-    "禁止 skillhub evolve/detect/report。",
-    `repositoryRoot: ${String(context?.repositoryRoot || context?.workspacePath || "")}`,
+    "你是发版执行 Agent。遵循 skillRoot 中相关 Skill 的当前 operator-guide，按任务实际执行，不改业务线、平台或版本。",
     `skillRoot: ${skillRoot || "（缺失：返回 failed）"}`,
-    hints.length ? `相关 Skill: ${hints.join(", ")}` : "",
-    skillRoot && hints.length
-      ? `SKILL 入口:\n${hints.map((hint) => `- ${skillRoot.replace(/\/+$/, "")}/skills/${String(hint).replace(/^\/+|\/+$/g, "")}/SKILL.md`).join("\n")}`
-      : "",
+    context?.repositoryRoot || context?.workspacePath ? `repositoryRoot: ${String(context.repositoryRoot || context.workspacePath)}` : "",
+    hints.length ? `Skill: ${hints.join(", ")}` : "",
     `任务: ${intent}`,
     `上下文: ${JSON.stringify(contextBrief)}`,
     safeInputs ? `输入: ${JSON.stringify(safeInputs)}` : "",
-    Object.keys(safeUpstream || {}).length ? `上游: ${JSON.stringify(safeUpstream)}` : "",
-    '完成后只返回 JSON：{"status":"completed|waiting|failed","summary":"...","steps":[],"records":[],"artifacts":[],"waiting":null,"next_action":""}',
-    "summary 用简短 Markdown，写清结果与可打开产物；artifacts 填 url；records 填 operation/result_status/record_id。",
+    Object.keys(safeUpstream || {}).length ? `上游结果: ${JSON.stringify(safeUpstream)}` : "",
+    requiredFields.length ? `必要输入: ${requiredFields.join(", ")}；无法确定时立即返回 failed，并列出 required_inputs。` : "本节点无后续对话；缺少参数或需要确认时立即返回 failed，并列出原因。真实外部异步结果才返回 waiting。",
+    '只返回 JSON：{"status":"completed|waiting|failed","summary":"...","steps":[],"records":[],"artifacts":[],"waiting":null,"next_action":""}。',
   ].filter(Boolean).join("\n");
   const MAX_RELEASE_AGENT_PROMPT_CHARS = 12_000;
   if (prompt.length <= MAX_RELEASE_AGENT_PROMPT_CHARS) return prompt;
@@ -522,6 +564,7 @@ export function prepareContextWrapperScript(scriptPath, skillRoot) {
   const python = [
     "import json, os, re, subprocess, sys",
     "input_values = json.loads(os.environ.get('AGENTFLOW_INPUTS_JSON', '{}'))",
+    "publish_date_lookup_error = str(input_values.pop('publish_date_lookup_error', '') or '').strip()",
     `script_path = ${JSON.stringify(String(scriptPath || ""))}`,
     `skill_root = ${JSON.stringify(String(skillRoot || ""))}`,
     "def action_status(stdout):",
@@ -533,12 +576,22 @@ export function prepareContextWrapperScript(scriptPath, skillRoot) {
     "def record_id(stdout):",
     "    match = re.search(r'(?m)^record_id:\\s*(\\S+)', stdout or '')",
     "    return match.group(1).strip() if match and match.group(1).strip().lower() != 'null' else ''",
+    "def guidance_reason(stdout):",
+    "    match = re.search(r'(?mi)^\\s*(?:reason|guidance_reason):\\s*([a-z0-9_.-]+)', stdout or '')",
+    "    return match.group(1).strip().lower() if match else ''",
+    "def reported_minor_version(stdout):",
+    "    matches = re.findall(r'''(?mi)^\\s*minor_version:\\s*[\\\"']?([0-9]+(?:\\.[0-9]+)+)[\\\"']?\\s*$''', stdout or '')",
+    "    return matches[-1].strip() if matches else ''",
+    "def required_precondition(stdout):",
+    "    return bool(re.search(r'(?mis)precondition:\\s*(?:\\n\\s*)?status:\\s*required\\b', stdout or ''))",
+    "def no_active_release(stdout):",
+    "    reason = guidance_reason(stdout)",
+    "    if reason == 'no_active_release': return True",
+    "    return bool(re.search(r'(?i)(?:no active release|missing.*active release|未找到活动发版|尚未建立活动发版)', stdout or ''))",
     "def is_success(stdout):",
-    "    return action_status(stdout) in ('succeeded', 'skipped', 'completed', 'already_current')",
+    "    return action_status(stdout) in ('succeeded', 'skipped', 'completed', 'already_current') and not required_precondition(stdout)",
     "def needs_create(stdout):",
-    "    if re.search(r'create-active-release|publish_date|未找到|not found|missing.*active|no active', stdout or '', re.I):",
-    "        return True",
-    "    return action_status(stdout) in ('preflight_failed', 'failed', 'error')",
+    "    return no_active_release(stdout)",
     "def run_action(action, values):",
     "    args = ['uv', 'run', 'python', script_path, '--action', action]",
     "    args.extend([item for key, value in values.items() if value not in (None, '') for item in ('--input', f'{key}={value}')])",
@@ -560,24 +613,31 @@ export function prepareContextWrapperScript(scriptPath, skillRoot) {
     "guide_out = (guide.stdout or '') + ('\\n' + guide.stderr if guide.stderr else '')",
     "if guide.returncode != 0 and not guide.stdout:",
     "    emit({'status': 'failed', 'summary': stdout_error(guide_out) or 'guide-current-release 执行失败', 'steps': [{'action': 'guide-current-release', 'status': 'failed'}], 'records': [], 'artifacts': [], 'waiting': None, 'next_action': ''})",
-    "if is_success(guide_out) and minor_version and minor_version in guide_out:",
+    "if is_success(guide_out) and minor_version and reported_minor_version(guide_out) and reported_minor_version(guide_out) != minor_version:",
+    "    emit({'status': 'failed', 'summary': f'活动发版版本不匹配：请求 {minor_version}，Skill 返回 {reported_minor_version(guide_out)}', 'steps': [{'action': 'guide-current-release', 'status': 'failed'}], 'records': [], 'artifacts': [], 'waiting': None, 'next_action': ''})",
+    "if is_success(guide_out) and minor_version and reported_minor_version(guide_out) == minor_version:",
     "    rec = record_id(guide_out)",
     "    emit({'status': 'completed', 'summary': '活动发版上下文已就绪', 'steps': [{'action': 'guide-current-release', 'status': 'completed'}], 'records': ([{'record_id': rec}] if rec else []), 'artifacts': [], 'waiting': None, 'next_action': 'continue'})",
-    "if is_success(guide_out) and not needs_create(guide_out):",
+    "if is_success(guide_out) and not minor_version and not needs_create(guide_out):",
+    "    rec = record_id(guide_out)",
+    "    emit({'status': 'completed', 'summary': '活动发版上下文已就绪', 'steps': [{'action': 'guide-current-release', 'status': 'completed'}], 'records': ([{'record_id': rec}] if rec else []), 'artifacts': [], 'waiting': None, 'next_action': 'continue'})",
+    "if is_success(guide_out) and minor_version and not reported_minor_version(guide_out):",
     "    rec = record_id(guide_out)",
     "    emit({'status': 'completed', 'summary': '活动发版上下文已就绪', 'steps': [{'action': 'guide-current-release', 'status': 'completed'}], 'records': ([{'record_id': rec}] if rec else []), 'artifacts': [], 'waiting': None, 'next_action': 'continue'})",
     "if needs_create(guide_out) and not publish_date:",
-    "    emit({'status': 'waiting', 'summary': '请填写发布日期 (publish_date) 后重试', 'steps': [{'action': 'guide-current-release', 'status': 'waiting'}], 'records': [], 'artifacts': [], 'waiting': {'reason': 'publish_date_required', 'required_inputs': ['publish_date']}, 'next_action': 'fill_publish_date'})",
+    "    emit({'status': 'waiting', 'summary': publish_date_lookup_error or '请填写发布日期 (publish_date) 后重试', 'steps': [{'action': 'guide-current-release', 'status': 'waiting'}], 'records': [], 'artifacts': [], 'waiting': {'reason': 'publish_date_required', 'required_inputs': ['publish_date']}, 'next_action': 'fill_publish_date'})",
+    "if not needs_create(guide_out):",
+    "    emit({'status': 'failed', 'summary': stdout_error(guide_out) or guidance_reason(guide_out) or 'guide-current-release 执行失败', 'steps': [{'action': 'guide-current-release', 'status': 'failed'}], 'records': [], 'artifacts': [], 'waiting': None, 'next_action': ''})",
     "create_inputs = {'product': product, 'platform': platform, 'major_version': major_version, 'publish_date': publish_date}",
     "create = run_action('create-active-release', create_inputs)",
     "create_out = (create.stdout or '') + ('\\n' + create.stderr if create.stderr else '')",
     "if create.returncode != 0 and not create.stdout:",
     "    emit({'status': 'failed', 'summary': stdout_error(create_out) or 'create-active-release 执行失败', 'steps': [{'action': 'guide-current-release', 'status': 'completed'}, {'action': 'create-active-release', 'status': 'failed'}], 'records': [], 'artifacts': [], 'waiting': None, 'next_action': ''})",
-    "if is_success(create_out):",
+    "if is_success(create_out) and not required_precondition(create_out):",
     "    rec = record_id(create_out)",
     "    emit({'status': 'completed', 'summary': '活动发版上下文已创建', 'steps': [{'action': 'guide-current-release', 'status': 'completed'}, {'action': 'create-active-release', 'status': 'completed'}], 'records': ([{'record_id': rec}] if rec else []), 'artifacts': [], 'waiting': None, 'next_action': 'continue'})",
     "if needs_create(create_out) and not publish_date:",
-    "    emit({'status': 'waiting', 'summary': '请填写发布日期 (publish_date) 后重试', 'steps': [{'action': 'create-active-release', 'status': 'waiting'}], 'records': [], 'artifacts': [], 'waiting': {'reason': 'publish_date_required', 'required_inputs': ['publish_date']}, 'next_action': 'fill_publish_date'})",
+    "    emit({'status': 'waiting', 'summary': publish_date_lookup_error or '请填写发布日期 (publish_date) 后重试', 'steps': [{'action': 'create-active-release', 'status': 'waiting'}], 'records': [], 'artifacts': [], 'waiting': {'reason': 'publish_date_required', 'required_inputs': ['publish_date']}, 'next_action': 'fill_publish_date'})",
     "emit({'status': 'failed', 'summary': stdout_error(create_out) or stdout_error(guide_out) or '准备活动发版上下文失败', 'steps': [{'action': 'create-active-release', 'status': 'failed'}], 'records': [], 'artifacts': [], 'waiting': None, 'next_action': ''})",
   ].join("\n");
   return [
@@ -600,7 +660,61 @@ function parsePrepareContextFastPathOutput(stdout) {
 }
 
 /** 用户需求点: 初始化完成后在读取状态时自动执行 guide-current-release，避免单独的「准备活动发版上下文」冗余卡片。 */
-export function runPrepareContextFastPath(context = {}, inputs = {}, skillRoots = []) {
+function releaseTapdConfigForContext(context = {}) {
+  const deployment = readReleaseDeploymentConfigWithDataRoot();
+  const businessLine = String(context?.businessLine || "").trim().toLowerCase();
+  const platform = String(context?.platform || "").trim().toLowerCase() === "iphone"
+    ? "ios"
+    : String(context?.platform || "").trim().toLowerCase();
+  return deployment.projects.find((entry) => (
+    String(entry.businessLine || "").trim().toLowerCase() === businessLine
+    && String(entry.platform || "").trim().toLowerCase() === platform
+  ))?.tapd || {};
+}
+
+function prepareContextFastPathRun(command, executionInputs, env) {
+  const runResult = spawnSync("sh", ["-c", command], { env: { ...env, AGENTFLOW_INPUTS_JSON: JSON.stringify(executionInputs) }, encoding: "utf8", timeout: 120_000 });
+  return {
+    process: runResult,
+    payload: parsePrepareContextFastPathOutput(runResult.stdout || runResult.stderr),
+  };
+}
+
+/**
+ * 用户需求点: 将业务线、平台和版本映射到 TAPD 迭代，确定性补齐首次发版日期；失败时只返回可人工补充的提示，不启动 Agent。
+ */
+export function resolvePrepareContextInputs(context = {}, inputs = {}, options = {}) {
+  const executionInputs = releaseExecutionInputs({ id: PREPARE_CONTEXT_NODE_ID, skill: "release-management" }, context, inputs);
+  if (String(executionInputs.publish_date || "").trim()) return { inputs: executionInputs, tapdError: "" };
+  const tapdConfig = options.tapdConfig === undefined ? releaseTapdConfigForContext(context) : (options.tapdConfig || {});
+  const workspaceId = String(tapdConfig.workspaceId || tapdConfig.workspace_id || "").trim();
+  if (!workspaceId) {
+    return { inputs: { ...executionInputs, publish_date_lookup_error: "未配置 TAPD workspaceId，无法自动确定首次发版日期" }, tapdError: "未配置 TAPD workspaceId，无法自动确定首次发版日期" };
+  }
+  try {
+    const fetchIterationsSync = typeof options.fetchIterationsSync === "function"
+      ? options.fetchIterationsSync
+      : defaultFetchIterationsSync;
+    const iterations = fetchIterationsSync({
+      workspaceId,
+      categoryId: tapdConfig.categoryId || tapdConfig.category_id || "",
+      iterationName: tapdConfig.iterationName || tapdConfig.iteration_name || "",
+      apiBaseUrl: tapdConfig.apiBaseUrl || tapdConfig.api_base_url,
+      accessTokenEnv: tapdConfig.accessTokenEnv || tapdConfig.access_token_env,
+      accessToken: tapdConfig.accessToken || tapdConfig.access_token,
+    });
+    const matched = findTapdIterationForVersion(iterations, context.version || executionInputs.minor_version);
+    if (matched?.releaseDate) return { inputs: { ...executionInputs, publish_date: matched.releaseDate }, tapdError: "" };
+    const tapdError = `TAPD 未找到版本 ${String(context.version || executionInputs.minor_version || "").trim()} 对应迭代，请填写 publish_date 后重试`;
+    return { inputs: { ...executionInputs, publish_date_lookup_error: tapdError }, tapdError };
+  } catch (error) {
+    const tapdError = String(error?.message || error || "TAPD 迭代查询失败").trim();
+    return { inputs: { ...executionInputs, publish_date_lookup_error: tapdError }, tapdError };
+  }
+}
+
+/** 用户需求点: 准备上下文优先用 TAPD 迭代结束日期补齐首次发版日期；仅在无法自动确定时要求人工输入。 */
+export function runPrepareContextFastPath(context = {}, inputs = {}, skillRoots = [], options = {}) {
   const compositeId = PREPARE_CONTEXT_NODE_ID;
   const roots = selectReleaseAgentSkillRoots(skillRoots, compositeId);
   const skillRoot = roots[0] || "";
@@ -608,94 +722,146 @@ export function runPrepareContextFastPath(context = {}, inputs = {}, skillRoots 
   if (!scriptPath || !fs.existsSync(scriptPath)) {
     return { ok: false, status: "failed", summary: "缺少 release-management 执行脚本" };
   }
-  const executionInputs = releaseExecutionInputs({ id: compositeId, skill: "release-management" }, context, inputs);
-  const env = { ...process.env, AGENTFLOW_INPUTS_JSON: JSON.stringify(executionInputs) };
+  const initialInputs = releaseExecutionInputs({ id: compositeId, skill: "release-management" }, context, inputs);
+  const env = { ...process.env };
   const command = prepareContextWrapperScript(scriptPath, skillRoot);
-  const result = spawnSync("sh", ["-c", command], { env, encoding: "utf8", timeout: 120_000 });
-  const payload = parsePrepareContextFastPathOutput(result.stdout || result.stderr);
+  let executionInputs = initialInputs;
+  let { process: result, payload } = prepareContextFastPathRun(command, executionInputs, env);
   if (!payload) {
     return { ok: false, status: "failed", summary: String(result.stderr || result.stdout || "准备活动发版上下文失败").trim().slice(0, 500) };
   }
-  return { ok: true, ...payload };
+  const waitingForPublishDate = String(payload.status || "").toLowerCase() === "waiting"
+    && String(payload.waiting?.reason || "").toLowerCase() === "publish_date_required"
+    && !String(executionInputs.publish_date || "").trim();
+  if (waitingForPublishDate) {
+    const resolved = resolvePrepareContextInputs(context, executionInputs, options);
+    executionInputs = resolved.inputs;
+    if (String(executionInputs.publish_date || "").trim()) {
+      ({ process: result, payload } = prepareContextFastPathRun(command, executionInputs, env));
+    }
+    const tapdError = resolved.tapdError;
+    if (tapdError && String(payload.status || "").toLowerCase() === "waiting") {
+      payload = {
+        ...payload,
+        summary: tapdError,
+        waiting: {
+          ...(payload.waiting && typeof payload.waiting === "object" ? payload.waiting : {}),
+          reason: "publish_date_required",
+          required_inputs: ["publish_date"],
+          source: "tapd",
+        },
+        next_action: "fill_publish_date",
+      };
+    }
+  }
+  return { ok: true, ...payload, contextInputs: { ...executionInputs } };
 }
 
+/** 用户需求点: 初始化节点一次性完成活动发版上下文，不再生成独立的 prepare-context 时间线节点。 */
 export function bootstrapReleasePrepareContext(stateInput = {}, context = {}, skillRoots = []) {
   const state = stateInput && typeof stateInput === "object" ? { ...stateInput } : {};
   const timeline = Array.isArray(state.timeline) ? [...state.timeline] : [];
-  const pending = Array.isArray(state.pending) ? [...state.pending] : [];
-  const dismissed = new Set(Array.isArray(state.dismissedNodeIds) ? state.dismissedNodeIds : []);
-  const initialized = timeline.some((item) => item?.nodeId === "release-initialization"
-    && ["completed", "succeeded", "skipped"].includes(String(item.status || "").toLowerCase()));
+  const initializationIndex = timeline.findIndex((item) => item?.nodeId === "release-initialization");
+  const initialization = initializationIndex >= 0 ? timeline[initializationIndex] : null;
+  const initialized = Boolean(initialization);
   if (!initialized) return { state, changed: false };
-  if (dismissed.has(PREPARE_CONTEXT_NODE_ID)) return { state, changed: false };
-  const preparationDone = timeline.some((item) => item?.nodeId === PREPARE_CONTEXT_NODE_ID
-    && ["completed", "succeeded", "skipped", "waiting"].includes(String(item.status || "").toLowerCase()));
-  if (preparationDone) return { state, changed: false };
-  if (pending.some((item) => item?.nodeId === PREPARE_CONTEXT_NODE_ID && String(item.status || "").toLowerCase() === "running")) {
-    return { state, changed: false };
+  const batch = String(context?.batch || state.context?.batch || initialization.contextSnapshot?.batch || "initial").trim().toLowerCase() || "initial";
+  if (batch === "supplemental") {
+    // 用户需求点: 补包上下文必须由开始补包节点触发，首次读取页面时不能隐式执行或创建活动发版。
+    // 统一大版本时间线已经有首包初始化时，该初始化节点继续作为整条时间线的根，不应被补包读取改写为 deferred。
+    const initializationBatch = String(initialization.contextSnapshot?.batch || "").trim().toLowerCase();
+    if (initializationBatch === "initial" || String(initialization.contextPreparationStatus || "").toLowerCase() === "completed") {
+      return { state, changed: false };
+    }
+    if (String(initialization.contextPreparationStatus || "").toLowerCase() === "deferred") return { state, changed: false };
+    const deferredInitialization = {
+      ...initialization,
+      contextPreparationStatus: "deferred",
+      summary: initialization.summary || "补包上下文将在开始补包节点中准备",
+      updatedAt: Date.now(),
+    };
+    const deferredTimeline = [...timeline];
+    deferredTimeline[initializationIndex] = deferredInitialization;
+    return {
+      changed: true,
+      state: {
+        ...state,
+        initialization: { ...(state.initialization || {}), status: "completed", contextPreparationStatus: "deferred" },
+        timeline: deferredTimeline,
+      },
+    };
   }
+  if (["completed", "waiting", "failed"].includes(String(initialization.contextPreparationStatus || "").toLowerCase())) return { state, changed: false };
   if (timeline.some((item) => item?.nodeId && item.nodeId !== "release-initialization" && !String(item.nodeId).startsWith("release-initialization:"))) {
     return { state, changed: false };
   }
   const result = runPrepareContextFastPath(context, {}, skillRoots);
   const now = Date.now();
-  const scopeKey = `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`;
-  const baseItem = {
-    nodeId: PREPARE_CONTEXT_NODE_ID,
-    title: "准备活动发版上下文",
-    description: "读取并准备当前业务线、平台、版本和批次的活动发版上下文",
-    category: "发版初始化",
-    processId: "initialization",
-    processOrder: 0,
-    processTitle: "发版初始化",
-    scopeKey,
-    contextSnapshot: { ...context },
-    operator: "系统初始化",
-    inputs: {},
+  const nextTimeline = [...timeline];
+  const current = { ...initialization };
+  const details = {
+    ...(result.steps ? { steps: result.steps } : {}),
+    ...(result.records ? { records: result.records } : {}),
+    ...(result.artifacts ? { artifacts: result.artifacts } : {}),
+    ...(result.waiting ? { waiting: result.waiting } : {}),
+    ...(result.summary ? { summary: result.summary } : {}),
+    ...(result.error ? { error: result.error } : {}),
   };
   if (result.ok && String(result.status || "").toLowerCase() === "waiting") {
-    const waitingItem = {
-      ...baseItem,
-      id: `${PREPARE_CONTEXT_NODE_ID}-bootstrap-${now}`,
-      status: "waiting",
-      progress: 0,
-      createdAt: now,
-      error: "",
-      summary: result.summary || "请填写发布日期 (publish_date) 后重试",
-      details: { waiting: result.waiting || { required_inputs: ["publish_date"] } },
-    };
+    current.status = "waiting";
+    current.progress = 0;
+    current.contextPreparationStatus = "waiting";
+    current.summary = result.summary || "请填写发布日期 (publish_date) 后重试";
+    current.details = details;
+    current.updatedAt = now;
+    nextTimeline[initializationIndex] = current;
     return {
       changed: true,
       state: {
         ...state,
-        initialization: { status: "pending", preparationNodeId: PREPARE_CONTEXT_NODE_ID },
-        pending: [waitingItem, ...pending.filter((item) => item?.nodeId !== PREPARE_CONTEXT_NODE_ID)],
+        initialization: { status: "waiting", contextPreparationStatus: "waiting" },
+        timeline: nextTimeline,
+        pending: (Array.isArray(state.pending) ? state.pending : []).filter((item) => item?.nodeId !== PREPARE_CONTEXT_NODE_ID),
       },
     };
   }
   if (result.ok && ["completed", "succeeded", "skipped"].includes(String(result.status || "").toLowerCase())) {
+    current.status = "completed";
+    current.progress = 100;
+    current.contextPreparationStatus = "completed";
+    current.summary = result.summary || "活动发版上下文已就绪";
+    current.details = details;
+    current.updatedAt = now;
+    current.completedAt = current.completedAt || now;
+    current.inputs = { ...(current.inputs || {}), ...(result.contextInputs || {}) };
+    current.contextSnapshot = { ...(current.contextSnapshot || {}), ...(result.contextInputs || {}) };
+    nextTimeline[initializationIndex] = current;
     return {
       changed: true,
       state: {
         ...state,
-        initialization: { status: "completed", preparationNodeId: PREPARE_CONTEXT_NODE_ID },
-        pending: pending.filter((item) => item?.nodeId !== PREPARE_CONTEXT_NODE_ID),
-        timeline: [...timeline, {
-          ...baseItem,
-          id: `${PREPARE_CONTEXT_NODE_ID}-bootstrap-${now}`,
-          status: "completed",
-          progress: 100,
-          createdAt: now,
-          startedAt: now,
-          completedAt: now,
-          durationMs: 0,
-          error: "",
-          summary: result.summary || "活动发版上下文已就绪",
-        }],
+        initialization: { status: "completed", contextPreparationStatus: "completed" },
+        pending: (Array.isArray(state.pending) ? state.pending : []).filter((item) => item?.nodeId !== PREPARE_CONTEXT_NODE_ID),
+        timeline: nextTimeline,
       },
     };
   }
-  return { state, changed: false };
+  current.status = "failed";
+  current.progress = 0;
+  current.contextPreparationStatus = "failed";
+  current.summary = result.summary || "准备活动发版上下文失败";
+  current.details = details;
+  current.updatedAt = now;
+  nextTimeline[initializationIndex] = current;
+  return {
+    changed: true,
+    state: {
+      ...state,
+      initialization: { status: "failed", contextPreparationStatus: "failed" },
+      pending: (Array.isArray(state.pending) ? state.pending : []).filter((item) => item?.nodeId !== PREPARE_CONTEXT_NODE_ID),
+      timeline: nextTimeline,
+    },
+  };
 }
 
 export function buildPrepareContextReleaseRunGraph(composite, context = {}, inputs = {}, options = {}) {
@@ -703,7 +869,8 @@ export function buildPrepareContextReleaseRunGraph(composite, context = {}, inpu
   const skillRoots = selectReleaseAgentSkillRoots(options.skillRoots || context.skillRoots || (context.skillRoot ? [context.skillRoot] : []), compositeId);
   const skillRoot = skillRoots[0] || "";
   const scriptPath = releaseManagementScriptPath(skillRoot);
-  const executionInputs = releaseExecutionInputs({ id: compositeId, skill: "release-management" }, context, inputs);
+  const resolvedInputs = resolvePrepareContextInputs(context, inputs, options);
+  const executionInputs = resolvedInputs.inputs;
   const inputSlots = Object.entries(executionInputs)
     .filter(([name]) => String(name || "").trim() && !String(name).startsWith("__"))
     .map(([name, value]) => ({ type: "text", name: String(name), value: String(value ?? ""), showOnNode: false }));
@@ -909,9 +1076,13 @@ export function buildCompositeReleaseRunGraph(composite, atomicNodes = [], conte
       else delete effectiveInputs.operator;
     }
     const skillRoots = options.skillRoots || context.skillRoots || (context.skillRoot ? [context.skillRoot] : []);
-    const agentSkillRoots = selectReleaseAgentSkillRoots(skillRoots, compositeId);
+    const agentSkillRoots = selectReleaseAgentSkillRoots(skillRoots, compositeId, composite.skillHints || []);
     const previousResult = options.previousResult || context.previousResult || null;
-    const body = buildReleaseAgentPrompt({ capability: composite, context, inputs: effectiveInputs, skillRoots: agentSkillRoots, upstreamOutputs: options.upstreamOutputs || {}, previousResult });
+    const requiredReleaseFields = [...new Set((Array.isArray(atomicNodes) ? atomicNodes : [])
+      .filter((node) => !composite.skillHints?.length || composite.skillHints.includes(node.skill))
+      .flatMap((node) => Array.isArray(node.requiredReleaseFields) ? node.requiredReleaseFields : [])
+      .map((field) => String(field || "").trim()).filter(Boolean))];
+    const body = buildReleaseAgentPrompt({ capability: composite, context, inputs: effectiveInputs, skillRoots: agentSkillRoots, upstreamOutputs: options.upstreamOutputs || {}, previousResult, requiredReleaseFields });
     return {
       version: 1,
       meta: {
@@ -957,12 +1128,19 @@ export function releaseExecutionInputs(action, context = {}, inputs = {}) {
   const result = { ...(inputs && typeof inputs === "object" ? inputs : {}) };
   result.product = String(context?.businessLine || "likee").trim().toLowerCase() || "likee";
   result.platform = String(context?.platform || "android").trim().toLowerCase() || "android";
+  // 所有 release Skill 都显式接收当前批次；补包不能依赖版本后缀的隐式推断。
+  if (skill.startsWith("release-")) result.batch = String(context?.batch || "initial").trim().toLowerCase() || "initial";
+  if (action?.kind === "composite" || skill === "release-composite") result.minor_version = version;
   if (actionId === "release-initialization:prepare-context") {
     result.minor_version = version;
     result.major_version = majorVersion;
     result.batch = String(context?.batch || "initial").trim().toLowerCase() || "initial";
   }
-  if (["release-git", "release-approval", "release-gray-observe", "release-records", "release-channel-packages", "release-localization", "release-notification"].includes(skill)) {
+  if ([
+    "release-git", "release-approval", "release-gray-observe", "release-records",
+    "release-channel-packages", "release-localization", "release-notification",
+    "release-build", "release-google-play", "release-release-notes", "release-metrics",
+  ].includes(skill)) {
     result.minor_version = version;
   }
   if (skill === "release-management" && ["create-active-release", "append-release-batch", "register-release-branch", "update-active-release"].includes(actionName)) {

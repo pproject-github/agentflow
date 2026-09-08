@@ -18,6 +18,14 @@ test("release deployment config resolves a business/platform project and indepen
   assert.deepEqual(releaseSkillRoots(config, resolved.project, resolved.workspaceRoot), [path.resolve("/opt/release-skills")]);
 });
 
+test("release project config preserves TAPD synchronization settings", async () => {
+  const { readReleaseDeploymentConfig } = await import(`../shared/release-deployment-config.js?tapd-config=${Date.now()}`);
+  const config = readReleaseDeploymentConfig({ AGENTFLOW_RELEASE_PROJECTS_JSON: JSON.stringify({
+    projects: [{ id: "likee-android", businessLine: "likee", platform: "android", workspaceRoot: "/srv/releases/likee-android", tapd: { workspaceId: "33202860", categoryName: "版本", iterationName: "Likee Android", apiBaseUrl: "https://api.tapd.cn", accessTokenEnv: "TAPD_ACCESS_TOKEN", accessToken: "do-not-persist" } }],
+  }) });
+  assert.deepEqual(config.projects[0].tapd, { workspaceId: "33202860", categoryName: "版本", iterationName: "Likee Android", apiBaseUrl: "https://api.tapd.cn", accessTokenEnv: "TAPD_ACCESS_TOKEN" });
+});
+
 test("release deployment config rejects arbitrary paths and malformed production config", async () => {
   const { readReleaseDeploymentConfig, resolveReleaseWorkspace } = await import("../shared/release-deployment-config.js?config-security");
   const config = readReleaseDeploymentConfig({ NODE_ENV: "production", AGENTFLOW_RELEASE_PROJECTS_JSON: "not-json" });
@@ -67,6 +75,39 @@ test("dev release config maps likee android to the local migration project", asy
   const resolved = resolveReleaseWorkspace(config, { businessLine: "likee", platform: "android" }, project.id, workspaceRoot, "/Users/duanfengyuan/PycharmProjects/agentflow");
   assert.equal(resolved.ok, true);
   assert.equal(resolved.workspaceRoot, path.resolve(workspaceRoot));
+});
+
+test("dev release Skill roots exclude the removed Google Play AAB extension", async () => {
+  const { readReleaseDeploymentConfig, releaseSkillRoots } = await import("../shared/release-deployment-config.js?without-google-play-aab");
+  const workspaceRoot = "/Users/duanfengyuan/migration-workspace/test/likee_android";
+  const config = readReleaseDeploymentConfig({ AGENTFLOW_DEV: "1", AGENTFLOW_RELEASE_TEST_MODE: "1" });
+  const project = config.projects.find((entry) => entry.businessLine === "likee" && entry.platform === "android");
+  const roots = releaseSkillRoots(config, project, workspaceRoot);
+  assert.deepEqual(roots, [path.join(workspaceRoot, ".workspace", "release-skills")]);
+});
+
+test("local dev mode ignores the production data-root release project file", async () => {
+  const { readReleaseDeploymentConfig } = await import("../shared/release-deployment-config.js?dev-production-isolation");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-dev-isolation-"));
+  const configPath = path.join(tempRoot, "release-projects.json");
+  fs.writeFileSync(configPath, JSON.stringify({
+    projects: [{ id: "prod-likee-android", businessLine: "likee", platform: "android", workspaceRoot: "/data1/services/mengmai/workspace/repos/likee_android", skillRoots: ["/data1/services/mengmai/skills"] }],
+    operators: { likee: { android: ["duanfengyuan"], ios: [] } },
+  }));
+  try {
+    const config = readReleaseDeploymentConfig({ AGENTFLOW_DEV: "1", AGENTFLOW_RELEASE_TEST_MODE: "1" }, { defaultFilePath: configPath });
+    const project = config.projects.find((entry) => entry.businessLine === "likee" && entry.platform === "android");
+    assert.equal(project?.id, "likee-android-local");
+    assert.equal(project?.workspaceRoot, "/Users/duanfengyuan/migration-workspace/test/likee_android");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("local dev identity can execute the local Likee Android release flow", async () => {
+  const { readReleaseDeploymentConfig, canWriteRelease } = await import("../shared/release-deployment-config.js?local-dev-operator");
+  const config = readReleaseDeploymentConfig({ AGENTFLOW_DEV: "1", AGENTFLOW_RELEASE_TEST_MODE: "1" }, { defaultFilePath: path.join(os.tmpdir(), `missing-release-projects-${Date.now()}.json`) });
+  assert.equal(canWriteRelease("local-dev", { businessLine: "likee", platform: "android" }, config), true);
 });
 
 test("reads release-projects.json from the default data-root file when env is unset", async () => {

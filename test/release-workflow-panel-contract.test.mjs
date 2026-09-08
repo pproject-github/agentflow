@@ -127,7 +127,7 @@ test("free-prompt appears once under assistant group, not every stage", async ()
   assert.doesNotMatch(source, /每个流程分组都挂一份/);
 });
 
-test("client sanitizes graph output and treats waiting as timeline success", async () => {
+test("client keeps waiting results out of the completed timeline", async () => {
   const source = await readFile(panelPath, "utf8");
   assert.match(source, /function sanitizeReleaseNodeOutput/);
   assert.match(source, /sanitizeReleaseNodeOutput\(/);
@@ -136,10 +136,10 @@ test("client sanitizes graph output and treats waiting as timeline success", asy
   assert.match(source, /af-release-node__checkbox/);
   assert.match(source, /type === "checkbox"/);
   assert.match(source, /String\(result\.status \|\| ""\)\.toLowerCase\(\) === "waiting"/);
-  assert.match(source, /status: "completed"/);
+  assert.match(source, /status: "waiting"/);
   assert.match(source, /humanizeWaitingMatter/);
   assert.match(source, /待办：/);
-  assert.match(source, /promoteWaitingItemToCompleted/);
+  assert.doesNotMatch(source, /promoteWaitingItemToCompleted/);
 });
 
 test("hydrates hollow timeline entries from runs", async () => {

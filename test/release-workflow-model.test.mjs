@@ -18,6 +18,8 @@ import {
   removePendingNode,
   filterDismissedPending,
   isPendingDismissed,
+  groupCustomReleaseNodes,
+  releaseNodeExecutionContext,
 } from "../builtin/web-ui/src/lib/releaseWorkflowModel.js";
 import { RELEASE_WORKFLOW_CONFIG } from "../shared/release-workflow-config.js";
 
@@ -53,7 +55,40 @@ test("uses navigation parameters as the immutable release context", () => {
     "?businessLine=Hello&platform=iOS&version=2.3.4",
   );
 
-  assert.deepEqual(context, { businessLine: "hello", platform: "ios", version: "2.3.4" });
+  assert.deepEqual(context, { businessLine: "hello", platform: "ios", version: "2.3.4", batch: "supplemental" });
+});
+
+test("normalizes a major version URL and infers initial batch when batch is omitted", () => {
+  assert.deepEqual(resolveReleaseContext({}, "?businessLine=likee&platform=android&version=5.64"), {
+    businessLine: "likee",
+    platform: "android",
+    version: "5.64.0",
+    batch: "initial",
+  });
+});
+
+test("infers supplemental batch from a minor version when batch is omitted", () => {
+  assert.deepEqual(resolveReleaseContext({}, "?businessLine=likee&platform=android&version=5.64.1"), {
+    businessLine: "likee",
+    platform: "android",
+    version: "5.64.1",
+    batch: "supplemental",
+  });
+});
+
+test("uses only the current batch for recommendations while retaining prior batches in the timeline", () => {
+  const context = { businessLine: "likee", platform: "android", version: "5.64.1", batch: "supplemental" };
+  const initialization = createInitializationNode({ ...context, version: "5.64.0", batch: "initial" });
+  const start = { id: "start-supplemental-release-notify", title: "开始补包 & 发送通知", description: "", category: "发版", processId: "entry", processOrder: 0, businessLines: ["likee"], platforms: ["android"], contextSnapshot: { ...context } };
+  const build = { id: "build-package", title: "构建发版包", description: "", category: "构建", processId: "build", processOrder: 1, businessLines: ["likee"], platforms: ["android"], contextSnapshot: { ...context } };
+  const state = seedNextRecommendations({
+    context,
+    timeline: [{ ...initialization, id: "initialization", status: "completed" }, { id: "initial-build", nodeId: "build-package", status: "completed", contextSnapshot: { ...context, version: "5.64.0", batch: "initial" }, scopeKey: "likee/android/5.64.0/initial" }],
+    pending: [],
+    customNodes: [],
+  }, [start, build]);
+  assert.equal(state.timeline.length, 2);
+  assert.equal(state.pending[0]?.nodeId, "start-supplemental-release-notify");
 });
 
 test("creates an initialization node with the active release context", () => {
@@ -79,47 +114,19 @@ test("creates an initialization node with the active release context", () => {
   assert.deepEqual(node.nextNodeIds, []);
 });
 
-test("initialization exposes a configurable activity preparation step", () => {
+test("initialization is the only fixed context node", () => {
   const context = { businessLine: "likee", platform: "android", version: "5.63.2", batch: "initial" };
   const node = createInitializationNode(context, { path: "/workspace/likee" });
-  const preparation = createInitializationPreparationNode(context, { path: "/workspace/likee" });
-
-  assert.equal(preparation.nodeId, undefined);
-  assert.equal(preparation.id, "release-initialization:prepare-context");
-  assert.equal(preparation.initializationActionId, "release-management:create-active-release");
-  assert.equal(preparation.kind, "composite");
-  assert.equal(preparation.requiresConfirmation, false);
-  assert.deepEqual(preparation.inputSchema.map((item) => item.key), ["publish_date"]);
-  const seeded = seedInitializationPreparationState({ timeline: [], pending: [], customNodes: [] }, node, preparation);
+  const seeded = seedInitializationState({ timeline: [], pending: [], customNodes: [] }, node);
   assert.equal(seeded.timeline[0].nodeId, "release-initialization");
-  assert.deepEqual(seeded.pending.map((item) => item.nodeId), [preparation.id]);
-  assert.equal(seeded.initialization.status, "pending");
-  const blocked = seedNextRecommendations(seeded, [node, {
+  assert.deepEqual(seeded.pending, []);
+  const ready = seedNextRecommendations(seeded, [node, {
     id: "composite:create-release-branch",
     title: "Create Release Branch",
     businessLines: ["likee"],
     platforms: ["android"],
   }]);
-  assert.deepEqual(blocked.pending.map((item) => item.nodeId), [preparation.id]);
-  const ready = seedNextRecommendations({
-    ...seeded,
-    initialization: { status: "completed", preparationNodeId: preparation.id },
-    timeline: [...seeded.timeline, { nodeId: preparation.id, status: "completed" }],
-    pending: [],
-  }, [node, {
-    id: "composite:localization-upload-notify",
-    title: "Create Release Branch",
-    businessLines: ["likee"],
-    platforms: ["android"],
-  }]);
   assert.equal(ready.pending.length, 1);
-
-  const legacyEmptyInput = seedInitializationPreparationState({
-    timeline: [seeded.timeline[0]],
-    pending: [{ id: "legacy", nodeId: preparation.id, status: "pending", inputs: {} }],
-    customNodes: [],
-  }, node, preparation);
-  assert.deepEqual(legacyEmptyInput.pending[0].inputs, {});
 });
 
 test("seeds initialization as completed when the release context has no state", () => {
@@ -484,12 +491,87 @@ test("static release catalog exposes free-prompt agent without putting it in def
   assert.ok(free.inputSchema.some((input) => input.key === "prompt"));
 });
 
-test("static release catalog exposes the preparation Agent once without duplicate capability entries", async () => {
+test("custom node picker isolates free Agent in the assistant group", () => {
+  const freeAgent = {
+    id: "composite:free-prompt-agent",
+    compositeId: "free-prompt-agent",
+    title: "自由 Agent",
+    processId: "entry",
+    processTitle: "发版入口",
+    workflowProcessId: "entry",
+    workflowProcessTitle: "发版入口",
+    insertableInAnyStage: true,
+  };
+  const groups = groupCustomReleaseNodes([
+    freeAgent,
+    {
+      id: "composite:create-release-branch",
+      title: "创建发版分支",
+      workflowProcessId: "entry",
+      workflowProcessTitle: "发版入口",
+    },
+  ], [freeAgent]);
+
+  assert.deepEqual(groups.map((group) => group.id), ["entry", "assistant"]);
+  assert.deepEqual(groups[0].nodes.map((node) => node.id), ["composite:create-release-branch"]);
+  assert.deepEqual(groups[1].nodes.map((node) => node.id), ["composite:free-prompt-agent"]);
+  assert.equal(groups[1].title, "助手驱动");
+  assert.equal(groups.flatMap((group) => group.nodes).filter((node) => node.id === freeAgent.id).length, 1);
+});
+
+test("supplemental-only custom nodes execute in their own batch within the same major version", () => {
+  const context = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
+  const executionContext = releaseNodeExecutionContext({
+    id: "composite:supplemental-publish-and-notify",
+    allowedBatches: ["supplemental"],
+    targetBatch: "supplemental",
+  }, context);
+
+  assert.deepEqual(executionContext, {
+    businessLine: "likee",
+    platform: "android",
+    version: "5.64.0",
+    batch: "supplemental",
+  });
+});
+
+test("static release catalog does not expose the initialization context as an addable node", async () => {
   const { getReleaseNodes } = await import("../builtin/web-ui/src/lib/releaseNodeCatalog.js");
   const nodes = getReleaseNodes({ businessLine: "likee", platform: "android", version: "1.3.0", batch: "initial" });
   const preparation = nodes.filter((node) => node.id === "release-initialization:prepare-context");
-  assert.equal(preparation.length, 1);
-  assert.equal(preparation[0].kind, "composite");
+  assert.equal(preparation.length, 0);
   assert.equal(nodes.some((node) => node.id === "release-initialization"), false);
   assert.equal(nodes.some((node) => node.id === "localization-upload-notify"), false);
+});
+
+test("visible timeline keeps every completed free Agent instance across one major version", async () => {
+  const model = await import(`../builtin/web-ui/src/lib/releaseWorkflowModel.js?free-agent-timeline=${Date.now()}`);
+  assert.equal(typeof model.selectVisibleReleaseTimeline, "function");
+  const knownIds = new Set(["composite:free-prompt-agent"]);
+  const timeline = [
+    {
+      id: "custom-free-prompt-agent-first",
+      nodeId: "custom-free-prompt-agent-first",
+      sourcePresetId: "composite:free-prompt-agent",
+      status: "completed",
+      scopeKey: "likee/android/5.64.0/initial",
+    },
+    {
+      id: "custom-free-prompt-agent-second",
+      nodeId: "custom-free-prompt-agent-second",
+      sourcePresetId: "composite:free-prompt-agent",
+      status: "completed",
+      scopeKey: "likee/android/5.64.1/supplemental",
+    },
+  ];
+  const visible = model.selectVisibleReleaseTimeline(timeline, knownIds, {
+    businessLine: "likee",
+    platform: "android",
+    version: "5.64.1",
+    batch: "supplemental",
+  });
+  assert.deepEqual(visible.map((item) => item.id), [
+    "custom-free-prompt-agent-first",
+    "custom-free-prompt-agent-second",
+  ]);
 });

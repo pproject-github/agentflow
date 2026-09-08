@@ -4528,7 +4528,20 @@ async function workspacePersistNodeImplementation(scopedRoot, graph, nodeId, opt
   return { changed, wrote: true, instance: next, implementationRef };
 }
 
+/**
+ * Release Agent runs execute against a real checkout. Persisting Workspace node
+ * history there creates untracked `nodes/` files and makes the next release
+ * Skill Git preflight fail. Keep that runtime metadata in the platform run
+ * package unless a caller explicitly opts back in.
+ */
+export function shouldPersistWorkspaceNodeHistory(opts = {}) {
+  return opts?.releaseRuntime !== true || opts?.persistNodeHistory === true;
+}
+
 async function workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, opts = {}) {
+  if (!shouldPersistWorkspaceNodeHistory(opts)) {
+    return { changed: false, wrote: false, instance: graph?.instances?.[nodeId] };
+  }
   try {
     return await workspacePersistNodeImplementation(scopedRoot, graph, nodeId, opts);
   } catch (e) {

@@ -7,6 +7,7 @@ import {
   deriveWorkflowCursor,
   recommendNextProcessNodes,
   selectWorkflowProcessNodes,
+  createSupplementalBatch,
 } from "../builtin/web-ui/src/lib/releaseWorkflowStateMachine.js";
 import { RELEASE_WORKFLOW_CONFIG, selectReleaseWorkflow, workflowActionIds } from "../shared/release-workflow-config.js";
 
@@ -53,6 +54,71 @@ test("uses the same Likee Android workflow for initial and supplemental batches"
   ]);
 });
 
+test("custom-stage candidates include supplemental capabilities from the shared major-version catalog", () => {
+  const initialNodes = [
+    node("localization-upload-notify"),
+    node("start-supplemental-release-notify", initialContext, {
+      allowedBatches: ["supplemental"],
+      // Catalog entries are scoped to the page context; allowedBatches is
+      // retained as capability metadata and must not hide custom selection.
+      contextSnapshot: { businessLine: "likee", platform: "android", version: "5.63.2" },
+    }),
+  ];
+  const stateMachine = createReleaseProcessStateMachine({ context: initialContext, nodes: initialNodes });
+  const candidates = selectWorkflowProcessNodes({ machine: stateMachine, nodes: initialNodes, includeAllBatches: true });
+  assert.ok(candidates.some((item) => item.id === "start-supplemental-release-notify"));
+});
+
+test("custom-stage all-batch candidates exclude nodes outside the selected workflow", () => {
+  const context = initialContext;
+  const nodes = [
+    node("localization-upload-notify", context),
+    node("start-supplemental-release-notify", context, { allowedBatches: ["supplemental"] }),
+    node("unknown-action", context),
+  ];
+  const stateMachine = createReleaseProcessStateMachine({ context, nodes });
+  const candidates = selectWorkflowProcessNodes({ machine: stateMachine, nodes, includeAllBatches: true });
+  assert.deepEqual(candidates.map((item) => item.id), [
+    "localization-upload-notify",
+    "start-supplemental-release-notify",
+  ]);
+});
+
+test("supplemental entry recommends start-supplemental-release-notify after initialization", () => {
+  const stateMachine = machine(supplementalContext);
+  assert.deepEqual(recommendNextProcessNodes({
+    machine: stateMachine,
+    timeline: [{ nodeId: "release-initialization", status: "completed", contextPreparationStatus: "deferred" }],
+    pending: [],
+  }).map((item) => item.id), ["start-supplemental-release-notify"]);
+});
+
+test("supplemental entry remains executable when the platform timeline has no history", () => {
+  const stateMachine = machine(supplementalContext);
+  assert.deepEqual(recommendNextProcessNodes({
+    machine: stateMachine,
+    timeline: [],
+    pending: [],
+  }).map((item) => item.id), ["start-supplemental-release-notify"]);
+});
+
+test("creating a supplemental batch keeps the major-version timeline and advances the minor version", () => {
+  const completedInitial = { id: "initial-build", nodeId: "build-package", status: "completed" };
+  const next = createSupplementalBatch({
+    context: initialContext,
+    timeline: [completedInitial],
+    pending: [],
+    runs: { old: { status: "completed" } },
+  });
+  assert.equal(next.context.version, "5.63.1");
+  assert.equal(next.context.batch, "supplemental");
+  assert.deepEqual(next.state.timeline, [completedInitial]);
+
+  const nextAgain = createSupplementalBatch({ context: next.context, timeline: next.state.timeline, pending: [] });
+  assert.equal(nextAgain.context.version, "5.63.2");
+  assert.equal(nextAgain.context.batchIndex, 2);
+});
+
 test("uses Likee iOS workflow without rollout for initial and supplemental batches", () => {
   const iosInitial = { businessLine: "likee", platform: "ios", version: "5.63.2", batch: "initial", batchIndex: 0 };
   const iosSupplemental = { ...iosInitial, batch: "supplemental", batchIndex: 1 };
@@ -90,7 +156,7 @@ test("recommends the next capability within the current stage before advancing",
   }).map((item) => item.id), ["localization-download-merge-notify"]);
 });
 
-test("does not advance while a capability is running or failed; waiting counts as success", () => {
+test("does not advance while a capability is running, waiting, or failed", () => {
   const stateMachine = machine(initialContext, ["localization-upload-notify", "create-release-branch"]);
   for (const status of ["running", "failed"]) {
     const recommendations = recommendNextProcessNodes({
@@ -100,12 +166,12 @@ test("does not advance while a capability is running or failed; waiting counts a
     });
     assert.deepEqual(recommendations, [], status);
   }
-  // waiting = 人工闸说明项，按成功完成推进下一节点
+  // waiting = 外部/人工阻塞，必须保留当前节点，不推进下一节点
   assert.deepEqual(recommendNextProcessNodes({
     machine: stateMachine,
     timeline: [{ nodeId: "localization-upload-notify", status: "waiting" }],
     pending: [],
-  }).map((item) => item.id), ["create-release-branch"]);
+  }).map((item) => item.id), []);
   assert.equal(deriveProcessStates({
     machine: stateMachine,
     timeline: [
@@ -113,7 +179,7 @@ test("does not advance while a capability is running or failed; waiting counts a
       { nodeId: "create-release-branch", status: "completed" },
     ],
     pending: [],
-  }).get("entry"), "completed");
+  }).get("entry"), "running");
   assert.equal(deriveProcessStates({
     machine: stateMachine,
     timeline: [{ nodeId: "localization-upload-notify", status: "failed" }],
@@ -133,7 +199,7 @@ test("maps custom instance and composite aliases onto capability status", () => 
   });
   assert.ok(stateMachine.processes.find((process) => process.id === "localization"));
 
-  // custom waiting 视为该能力已成功完成
+  // custom waiting 仍是阻塞态
   assert.equal(deriveProcessStates({
     machine: stateMachine,
     timeline: [],
@@ -143,7 +209,7 @@ test("maps custom instance and composite aliases onto capability status", () => 
       compositeId: "localization-download-merge-notify",
       status: "waiting",
     }],
-  }).get("localization"), "completed");
+  }).get("localization"), "running");
 
   assert.equal(deriveProcessStates({
     machine: stateMachine,

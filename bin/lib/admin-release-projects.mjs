@@ -68,6 +68,7 @@ export function readAdminReleaseProjectsConfig() {
           platform: entry.platform,
           workspaceRoot: entry.workspaceRoot,
           ...(entry.skillRoots?.length ? { skillRoots: [...entry.skillRoots] } : {}),
+          ...(entry.tapd ? { tapd: { ...entry.tapd } } : {}),
         })),
         operators: deployment.operators || emptyReleaseProjectsDocument().operators,
       };
@@ -78,8 +79,9 @@ export function readAdminReleaseProjectsConfig() {
         id: entry.id,
         businessLine: entry.businessLine,
         platform: entry.platform,
-        workspaceRoot: entry.workspaceRoot,
-        ...(entry.skillRoots?.length ? { skillRoots: [...entry.skillRoots] } : {}),
+          workspaceRoot: entry.workspaceRoot,
+          ...(entry.skillRoots?.length ? { skillRoots: [...entry.skillRoots] } : {}),
+          ...(entry.tapd ? { tapd: { ...entry.tapd } } : {}),
       })),
       operators: deployment.operators || emptyReleaseProjectsDocument().operators,
     };

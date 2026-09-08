@@ -192,8 +192,8 @@ function buildOutcomeMarkdown({ summary }) {
 
 function statusTone(mode, item) {
   if (mode === "failed" || item?.status === "failed") return "failed";
-  // waiting 按成功展示；待办另节说明。
-  if (item?.status === "waiting") return "completed";
+  // waiting 保持待处理态，便于重试或查看外部阻塞原因。
+  if (item?.status === "waiting") return "waiting";
   if (mode === "completed" || item?.status === "completed") return "completed";
   if (item?.status === "running") return "running";
   return "pending";
@@ -202,8 +202,8 @@ function statusTone(mode, item) {
 function statusLabel(mode, item) {
   if (mode === "failed" || item?.status === "failed") return "失败";
   if (item?.status === "running") return "执行中";
-  // waiting / completed 均标成功（无交互续跑闸）。
-  if (mode === "completed" || item?.status === "completed" || item?.status === "waiting") return "成功";
+  if (mode === "completed" || item?.status === "completed") return "成功";
+  if (mode === "waiting" || item?.status === "waiting") return "待处理";
   return "待执行";
 }
 
@@ -361,7 +361,7 @@ export default function ReleaseNodeInspector({
   const waiting = asRecord(item?.waiting) || asRecord(asRecord(item?.output)?.waiting) || asRecord(asRecord(item?.details)?.waiting);
   const waitingInfo = resolveWaitingInfo(item) || (waiting ? { label: humanizeWaitingMatter(waiting), reason: String(waiting.reason || "").trim(), operatorUrl: "" } : null);
   const tone = statusTone(mode, item);
-  const completedView = mode === "completed" || item?.status === "completed" || item?.status === "waiting";
+  const completedView = mode === "completed" || item?.status === "completed";
   const outcomeMarkdown = useMemo(() => buildOutcomeMarkdown({ summary }), [summary]);
   const rawPayload = {
     status: item?.status || mode,

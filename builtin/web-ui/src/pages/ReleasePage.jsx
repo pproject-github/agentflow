@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import ReleaseWorkflowPanel from "../components/ReleaseWorkflowPanel.jsx";
 import { resolveReleaseContext } from "../lib/releaseWorkflowModel.js";
+import { releaseMajorVersion } from "../../../../shared/release-workflow-config.js";
 import { useRoute } from "../routeContext.jsx";
 
 function readSearch() {
@@ -11,12 +12,17 @@ function paramsFromSearch(search) {
   return new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
 }
 
-function buildReleaseSearch({ businessLine, platform, version, batch, workspaceId }) {
+// 用户需求点: 页面只允许进入统一的大版本时间线，首包/补包不能通过输入框或深链切换。
+function toMajorVersion(value) {
+  const major = releaseMajorVersion(value, "");
+  return /^\d+\.\d+$/.test(major) ? major : "1.0";
+}
+
+function buildReleaseSearch({ businessLine, platform, version, workspaceId }) {
   const params = new URLSearchParams();
   if (businessLine) params.set("businessLine", businessLine);
   if (platform) params.set("platform", platform);
-  if (version) params.set("version", version);
-  if (batch) params.set("batch", batch);
+  if (version) params.set("version", toMajorVersion(version));
   if (workspaceId) params.set("workspaceId", workspaceId);
   const text = params.toString();
   return text ? `?${text}` : "";
@@ -32,7 +38,6 @@ export default function ReleasePage({ authUser }) {
   const [releaseAccess, setReleaseAccess] = useState(null);
   const [navigationSearch, setNavigationSearch] = useState(readSearch);
   const [versionDraft, setVersionDraft] = useState("");
-  const [batchDraft, setBatchDraft] = useState("initial");
 
   const load = useCallback(async () => {
     // 用户需求点: 线上发版工程由服务端 allowlist 提供，页面不能使用开发机路径兜底。
@@ -88,7 +93,6 @@ export default function ReleasePage({ authUser }) {
       businessLine: membership.businessLine,
       platform: membership.platform,
       version: params.get("version") || "1.0.0",
-      batch: params.get("batch") || "initial",
       workspaceId: params.get("workspaceId") || "",
     });
     if (next !== navigationSearch) applyNavigationSearch(next);
@@ -96,8 +100,7 @@ export default function ReleasePage({ authUser }) {
 
   useEffect(() => {
     const params = paramsFromSearch(navigationSearch);
-    setVersionDraft(params.get("version") || "1.0.0");
-    setBatchDraft(params.get("batch") || "initial");
+    setVersionDraft(toMajorVersion(params.get("version") || "1.0"));
   }, [navigationSearch]);
 
   const releaseWorkspace = useMemo(() => {
@@ -131,13 +134,15 @@ export default function ReleasePage({ authUser }) {
 
   const navigationContext = useMemo(() => {
     const params = paramsFromSearch(navigationSearch);
-    const hasExplicit = params.has("businessLine") || params.has("platform") || params.has("version") || params.has("batch");
+    const hasExplicit = params.has("businessLine") || params.has("platform") || params.has("version");
     if (!hasExplicit && !membership) return null;
     const merged = new URLSearchParams(params);
+    // batch/batchIndex 仅供内部运行态使用，页面导航不携带也不接受它们。
+    merged.delete("batch");
+    merged.delete("batchIndex");
     if (!merged.get("businessLine") && membership?.businessLine) merged.set("businessLine", membership.businessLine);
     if (!merged.get("platform") && membership?.platform) merged.set("platform", membership.platform);
-    if (!merged.get("version")) merged.set("version", "1.0.0");
-    if (!merged.get("batch")) merged.set("batch", "initial");
+    merged.set("version", toMajorVersion(merged.get("version") || "1.0"));
     return resolveReleaseContext(releaseWorkspace, merged);
   }, [membershipKey, navigationSearch, releaseWorkspace]);
 
@@ -162,10 +167,9 @@ export default function ReleasePage({ authUser }) {
       businessLine,
       platform,
       version: String(versionDraft || "").trim() || "1.0.0",
-      batch: String(batchDraft || "").trim().toLowerCase() || "initial",
       workspaceId: params.get("workspaceId") || releaseWorkspace?.id || "",
     }));
-  }, [applyNavigationSearch, batchDraft, membership, navigationContext, navigationSearch, releaseWorkspace, versionDraft]);
+  }, [applyNavigationSearch, membership, navigationContext, navigationSearch, releaseWorkspace, versionDraft]);
 
   return (
     <div className="af-workspaces-page">
@@ -182,14 +186,7 @@ export default function ReleasePage({ authUser }) {
         <form className="af-release-version-switcher" onSubmit={commitVersionNavigation}>
           <label>
             <span>版本</span>
-            <input value={versionDraft} onChange={(event) => setVersionDraft(event.target.value)} placeholder="如 1.0.0" aria-label="发版版本" />
-          </label>
-          <label>
-            <span>批次</span>
-            <select value={batchDraft} onChange={(event) => setBatchDraft(event.target.value)} aria-label="发版批次">
-              <option value="initial">initial</option>
-              <option value="supplemental">supplemental</option>
-            </select>
+            <input value={versionDraft} onChange={(event) => setVersionDraft(event.target.value)} placeholder="如 5.64（大版本）" aria-label="发版大版本" />
           </label>
           <button type="submit">进入</button>
         </form>

@@ -20,8 +20,9 @@ function splitPaths(value) {
 const LOCAL_DEV_RELEASE_ROOT = "/Users/duanfengyuan/migration-workspace/test/likee_android";
 const LOCAL_DEV_RELEASE_SKILL_ROOTS = [
   path.join(LOCAL_DEV_RELEASE_ROOT, ".workspace", "release-skills"),
-  path.join(LOCAL_DEV_RELEASE_ROOT, ".workspace", "release-skills-google-play-aab"),
 ];
+
+const REMOVED_RELEASE_SKILL_ROOT_RE = /(?:^|[\\/])release-skills-google-play-aab$/i;
 
 function parseJson(value, source) {
   if (!text(value)) return {};
@@ -46,12 +47,22 @@ function normalizeProject(entry, fallbackId = "") {
   const skillRoots = Array.isArray(entry.skillRoots)
     ? entry.skillRoots.map((item) => text(item)).filter(Boolean).map((item) => path.resolve(item))
     : [];
+  const tapdSource = entry.tapd && typeof entry.tapd === "object" && !Array.isArray(entry.tapd) ? entry.tapd : {};
+  const tapd = {
+    ...(text(tapdSource.workspaceId || tapdSource.workspace_id) ? { workspaceId: text(tapdSource.workspaceId || tapdSource.workspace_id) } : {}),
+    ...(text(tapdSource.categoryId || tapdSource.category_id) ? { categoryId: text(tapdSource.categoryId || tapdSource.category_id) } : {}),
+    ...(text(tapdSource.categoryName || tapdSource.category_name) ? { categoryName: text(tapdSource.categoryName || tapdSource.category_name) } : {}),
+    ...(text(tapdSource.iterationName || tapdSource.iteration_name) ? { iterationName: text(tapdSource.iterationName || tapdSource.iteration_name) } : {}),
+    ...(text(tapdSource.apiBaseUrl || tapdSource.api_base_url) ? { apiBaseUrl: text(tapdSource.apiBaseUrl || tapdSource.api_base_url) } : {}),
+    ...(text(tapdSource.accessTokenEnv || tapdSource.access_token_env) ? { accessTokenEnv: text(tapdSource.accessTokenEnv || tapdSource.access_token_env) } : {}),
+  };
   return {
     id,
     businessLine,
     platform: platform === "ios" || platform === "iphone" ? "ios" : platform,
     workspaceRoot: path.resolve(workspaceRoot),
     ...(skillRoots.length ? { skillRoots: [...new Set(skillRoots)] } : {}),
+    ...(Object.keys(tapd).length ? { tapd } : {}),
     ...(entry.enabled === false ? { enabled: false } : {}),
   };
 }
@@ -74,7 +85,7 @@ function projectsFromJson(raw) {
 
 const DEFAULT_DEV_OPERATORS = Object.freeze({
   likee: Object.freeze({
-    android: Object.freeze(["duanfengyuan", "suruijia", "wangfang"]),
+    android: Object.freeze(["duanfengyuan", "suruijia", "wangfang", "local-dev"]),
     ios: Object.freeze(["liangjiajian", "yangcaimu"]),
   }),
   bigolive: Object.freeze({ android: Object.freeze([]), ios: Object.freeze([]) }),
@@ -253,6 +264,7 @@ export function emptyReleaseProjectsDocument() {
         platform: "android",
         workspaceRoot: "",
         skillRoots: [],
+        tapd: { workspaceId: "33202860" },
       },
       {
         id: "likee-ios-prod",
@@ -260,6 +272,7 @@ export function emptyReleaseProjectsDocument() {
         platform: "ios",
         workspaceRoot: "",
         skillRoots: [],
+        tapd: { workspaceId: "33202860" },
       },
     ],
     operators: {
@@ -280,6 +293,7 @@ export function defaultReleaseProjectsSeedDocument() {
         platform: "android",
         workspaceRoot: "/data1/services/mengmai/workspace/repos/likee_android",
         skillRoots: ["/data1/services/mengmai/agentflow/workspaces/repos/ws_mtmeszw3_lojgr"],
+        tapd: { workspaceId: "33202860" },
       },
       {
         id: "likee-ios-prod",
@@ -287,6 +301,7 @@ export function defaultReleaseProjectsSeedDocument() {
         platform: "ios",
         workspaceRoot: "/data1/services/mengmai/workspace/repos/likee_ios",
         skillRoots: ["/data1/services/mengmai/agentflow/workspaces/repos/ws_mtmeszw3_lojgr"],
+        tapd: { workspaceId: "33202860" },
       },
     ],
     operators: {
@@ -324,6 +339,7 @@ export function normalizeReleaseProjectsDocument(raw = {}) {
         platform: entry.platform,
         workspaceRoot: entry.workspaceRoot,
         ...(entry.skillRoots?.length ? { skillRoots: [...entry.skillRoots] } : {}),
+        ...(entry.tapd ? { tapd: { ...entry.tapd } } : {}),
         ...(entry.enabled === false ? { enabled: false } : {}),
       })),
       operators,
@@ -366,6 +382,8 @@ export function writeReleaseProjectsDocument(filePath, raw = {}) {
  */
 export function readReleaseDeploymentConfig(env = process.env, options = {}) {
   const envObject = env && typeof env === "object" ? env : {};
+  const isDevTest = text(envObject.AGENTFLOW_DEV) === "1" && text(envObject.AGENTFLOW_RELEASE_TEST_MODE) === "1";
+  const hasExplicitProjectConfig = Boolean(text(envObject.AGENTFLOW_RELEASE_PROJECTS_JSON) || text(envObject.AGENTFLOW_RELEASE_PROJECTS_FILE));
   let projectsSource = "none";
   let projectsFilePath = "";
   let raw = parseJson(envObject.AGENTFLOW_RELEASE_PROJECTS_JSON, "AGENTFLOW_RELEASE_PROJECTS_JSON");
@@ -394,10 +412,17 @@ export function readReleaseDeploymentConfig(env = process.env, options = {}) {
       }
     }
   }
+  // 本地开发与线上数据根隔离：npm run dev 不得误读数据根中残留的生产路径和 Skill 根。
+  // 只有显式传入本地配置时才允许覆盖这一默认行为。
+  const useLocalDevDefaults = isDevTest && !hasExplicitProjectConfig && fs.existsSync(LOCAL_DEV_RELEASE_ROOT);
+  if (useLocalDevDefaults) {
+    raw = {};
+    projectsSource = "dev-default";
+    projectsFilePath = "";
+  }
   let projects = projectsFromJson(raw).filter((entry) => entry.enabled !== false);
   // 用户需求点: 本地 npm run dev 应默认连接 likee Android 测试发版工程，重试节点时不能因服务端根目录不同而被 allowlist 拒绝。
   // 仅限开发+测试模式且本机目录确实存在；线上和普通测试仍必须显式配置项目 allowlist。
-  const isDevTest = text(envObject.AGENTFLOW_DEV) === "1" && text(envObject.AGENTFLOW_RELEASE_TEST_MODE) === "1";
   if (!raw.configError && !projects.length && isDevTest && fs.existsSync(LOCAL_DEV_RELEASE_ROOT)) {
     projects = [normalizeProject({
       id: "likee-android-local",
@@ -494,12 +519,11 @@ export function releaseSkillRoots(config, project = null, workspaceRoot = "") {
   const explicit = [
     ...(Array.isArray(config?.skillRoots) ? config.skillRoots : []),
     ...(Array.isArray(project?.skillRoots) ? project.skillRoots : []),
-  ].filter(Boolean).map((item) => path.resolve(String(item)));
+  ].filter(Boolean).map((item) => path.resolve(String(item))).filter((item) => !REMOVED_RELEASE_SKILL_ROOT_RE.test(item));
   if (explicit.length) return [...new Set(explicit)];
   if (config?.allowWorkspaceSkillRoots && workspaceRoot) {
     return [
       path.join(path.resolve(workspaceRoot), ".workspace", "release-skills"),
-      path.join(path.resolve(workspaceRoot), ".workspace", "release-skills-google-play-aab"),
     ].filter((entry) => fs.existsSync(entry));
   }
   return [];
