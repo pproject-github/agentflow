@@ -10,6 +10,7 @@
 
 import { parseBool } from "../pipeline/parse-bool.mjs";
 import { readAuthUsers } from "./auth.mjs";
+import { isWorkspacePreviewFlowId } from "./workspace-preview.mjs";
 import { listFlowsJson, listNodesJson } from "./catalog-flows.mjs";
 import { startComposerAgent } from "./composer-agent.mjs";
 import { loadResourcesForSkillKeys } from "./composer-skill-router.mjs";
@@ -2001,6 +2002,11 @@ export function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {})
     : opts;
   const result = getPipelineFiles(workspaceRoot, flowId, physicalFlowSource, archived, physicalOpts);
   if (result.error || !result.path) {
+    // 预览目录带 TTL，到期会被清掉。透传 "Pipeline directory not found" 只会让人以为
+    // 流程没了——其实是这条临时预览链接过期了。
+    if (isWorkspacePreviewFlowId(flowId)) {
+      return { root: "", error: "预览链接已过期，请回到流程仓库重新打开预览", status: 410 };
+    }
     return { root: "", error: result.error || "Pipeline workspace not found" };
   }
   return {

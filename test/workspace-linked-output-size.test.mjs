@@ -54,3 +54,13 @@ test("a runaway file is still bounded and says so", (t) => {
   assert.ok(resolved.length < huge.length);
   assert.match(resolved, /\[truncated 50 chars\]$/);
 });
+
+// 用户需求点: 预览链接过期后透传的是内部错误 "Pipeline directory not found"，
+// 看起来像流程没了，其实只是这条临时链接到期被清理了。
+test("an expired preview link says so instead of leaking the directory error", async () => {
+  const { isWorkspacePreviewFlowId } = await import("../bin/lib/workspace-preview.mjs");
+  assert.equal(isWorkspacePreviewFlowId("preview_e35840775c4c1a503170"), true);
+  assert.equal(isWorkspacePreviewFlowId("daily_task"), false);
+  assert.equal(isWorkspacePreviewFlowId("preview_short"), false);
+  assert.equal(isWorkspacePreviewFlowId(""), false);
+});
