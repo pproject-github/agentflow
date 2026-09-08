@@ -225,6 +225,8 @@ function readFilesRecursive(dir, baseDir, maxDepth = 2, currentDepth = 0) {
 export function getPipelineFiles(workspaceRoot, flowId, flowSource, archived = false, opts = {}) {
   const root = path.resolve(workspaceRoot);
   let pipelineDir = null;
+  // 请求里写的作用域只是"从哪儿开始找"；真相是最后落到哪个目录。
+  let resolvedFlowSource = flowSource;
   const userPipelinesRoot = getUserPipelinesRoot(opts.userId);
 
   if (archived) {
@@ -246,11 +248,14 @@ export function getPipelineFiles(workspaceRoot, flowId, flowSource, archived = f
       pipelineDir = path.join(userPipelinesRoot, flowId);
       if (!fs.existsSync(pipelineDir)) {
         const alt = path.join(root, PIPELINES_DIR, flowId);
-        if (fs.existsSync(alt)) pipelineDir = alt;
+        // 个人空间没有就改道去共享空间。这条兜底本身要留（历史流程依赖它），
+        // 但必须把改道后的真实作用域报出去——否则 flowSource=user 的错标签会静默生效，
+        // 定时登记、运行记录、admin 链接全部继承它，形成一套平行的错误身份。
+        if (fs.existsSync(alt)) { pipelineDir = alt; resolvedFlowSource = "workspace"; }
       }
       if (!fs.existsSync(pipelineDir)) {
         const altLeg = path.join(root, LEGACY_PIPELINES_DIR, flowId);
-        if (fs.existsSync(altLeg)) pipelineDir = altLeg;
+        if (fs.existsSync(altLeg)) { pipelineDir = altLeg; resolvedFlowSource = "workspace"; }
       }
     } else if (flowSource === "workspace") {
       pipelineDir = path.join(root, PIPELINES_DIR, flowId);
@@ -266,5 +271,5 @@ export function getPipelineFiles(workspaceRoot, flowId, flowSource, archived = f
   }
 
   const files = readFilesRecursive(pipelineDir, pipelineDir, 2, 0);
-  return { files, path: pipelineDir };
+  return { files, path: pipelineDir, flowSource: resolvedFlowSource };
 }

@@ -35,7 +35,7 @@ import { advanceJenkinsBuild, createJenkinsHttpInvoker, jenkinsBuildStatePath, n
 import { log } from "./log.mjs";
 import { resolveMarketplaceNodePackage } from "./marketplace.mjs";
 import { marketplaceResourcesForRun, recordMarketplaceRunUsage } from "./marketplace-usage.mjs";
-import { PACKAGE_ROOT, getAgentflowDataRoot, getAgentflowUserDataRoot, listAgentflowUserIds } from "./paths.mjs";
+import { ARCHIVED_PIPELINES_DIR_NAME, PACKAGE_ROOT, PIPELINES_DIR, getAgentflowDataRoot, getAgentflowUserDataRoot, getUserPipelinesRoot, listAgentflowUserIds } from "./paths.mjs";
 import { emitRepositoryRunFinished } from "./repository-index-events.mjs";
 import { appendRunLedgerEvent, readRunLedgerEvents, runLedgerId } from "./run-ledger.mjs";
 import { computeNextRunAt } from "./schedule-config.mjs";
@@ -1996,11 +1996,14 @@ export function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {})
       return { root: "", error: "Workspace collaboration permission denied", status: 403 };
     }
   }
-  const physicalFlowSource = collaboration?.projectSource || collaboration?.flowSource || flowSource;
+  let physicalFlowSource = collaboration?.projectSource || collaboration?.flowSource || flowSource;
   const physicalOpts = collaboration && physicalFlowSource === "user"
     ? { ...opts, userId: collaboration.ownerId }
     : opts;
   const result = getPipelineFiles(workspaceRoot, flowId, physicalFlowSource, archived, physicalOpts);
+  // 目录在哪，作用域就是什么。请求里写 user、实际落在共享空间的，按共享空间算，
+  // 否则这个错标签会被写进定时登记和运行记录，再也追不回来。
+  if (result.flowSource) physicalFlowSource = result.flowSource;
   if (result.error || !result.path) {
     // 预览目录带 TTL，到期会被清掉。透传 "Pipeline directory not found" 只会让人以为
     // 流程没了——其实是这条临时预览链接过期了。
@@ -8096,6 +8099,27 @@ function workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config = {
     : "";
 }
 
+/**
+ * 这个作用域下到底有没有这个流程的目录。
+ * 必须严格按作用域查——getPipelineFiles 会在个人空间找不到时改道去共享空间，
+ * 拿它来判断只会永远答"有"，那正是要检测的错标签本身。
+ */
+function workspaceFlowDirExistsForScope(root, flowId, flowSource, archived, userId) {
+  const scope = String(flowSource || "").trim();
+  const parts = archived === true ? [ARCHIVED_PIPELINES_DIR_NAME, flowId] : [flowId];
+  const dir = scope === "user"
+    ? path.join(getUserPipelinesRoot(userId), ...parts)
+    : scope === "workspace"
+      ? path.join(path.resolve(root), PIPELINES_DIR, ...parts)
+      : "";
+  if (!dir) return true; // 不认识的作用域，宁可不删
+  try {
+    return fs.existsSync(dir) && fs.statSync(dir).isDirectory();
+  } catch {
+    return true;
+  }
+}
+
 export function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, userCtx = {}) {
   const flowId = String(scoped?.flowId || "").trim();
   const flowSource = String(scoped?.flowSource || "user");
@@ -8117,7 +8141,16 @@ export function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, us
       && String(entry?.flowSource || "") === flowSource
       && String(entry?.flowId || "") === flowId
     );
-    if (sameSharedFlow || key.startsWith(prefix)) delete schedules[key];
+    // 同一个流程在别的作用域下还留着一条登记，且那个作用域根本没有这个流程的目录——
+    // 它是作用域标签写错时留下的平行登记，会和正牌那条各自触发，同一个窗口执行两次。
+    // 只清能证明为假的，同名但真实存在的流程不动。
+    const staleOtherScope = (
+      String(entry?.flowId || "") === flowId
+      && String(entry?.userId || "") === userId
+      && String(entry?.flowSource || "") !== flowSource
+      && !workspaceFlowDirExistsForScope(root, flowId, entry?.flowSource, entry?.archived === true, userId)
+    );
+    if (sameSharedFlow || staleOtherScope || key.startsWith(prefix)) delete schedules[key];
   }
   if (isWorkspaceDraftDir(scoped?.root || "")) {
     writeWorkspaceScheduleRegistry({ version: 1, schedules });
