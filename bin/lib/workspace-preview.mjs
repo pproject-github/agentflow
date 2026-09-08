@@ -12,6 +12,11 @@ function safePreviewId(value = "") {
   return /^preview_[a-z0-9_-]{8,100}$/i.test(raw) ? raw : "";
 }
 
+/** 这个 flowId 是不是一个临时预览。预览目录到期会被清掉，报错要说人话。 */
+export function isWorkspacePreviewFlowId(value = "") {
+  return Boolean(safePreviewId(value));
+}
+
 export function workspacePreviewMetadataPath(flowDir) {
   return path.join(flowDir, WORKSPACE_PREVIEW_METADATA_FILENAME);
 }

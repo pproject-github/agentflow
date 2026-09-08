@@ -239,6 +239,22 @@ export function resetAuthUserPassword(userId, password) {
   };
 }
 
+/**
+ * 旧账号 → 关联到的 CAS 账号。同一个人用两个身份跑过流程时，运行记录会分散在两个
+ * userId 下；按 owner 聚合的统计（流程仓库使用次数）必须先把旧身份折算过来，
+ * 否则关联之后旧账号名下的运行仍然全部不计。
+ */
+export function agentflowUserIdAliases() {
+  const aliases = new Map();
+  for (const [userId, user] of Object.entries(readAuthUsers())) {
+    for (const legacyId of Array.isArray(user?.legacyUserIds) ? user.legacyUserIds : []) {
+      const legacy = String(legacyId || "").trim();
+      if (legacy && legacy !== userId) aliases.set(legacy, userId);
+    }
+  }
+  return aliases;
+}
+
 export function legacyAccountLinkStatus(targetUserId) {
   const targetId = sanitizeAgentflowUserId(targetUserId);
   const user = targetId ? readAuthUsers()[targetId] : null;

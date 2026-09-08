@@ -10,6 +10,7 @@ import {
   getUserPipelinesRoot,
   listAgentflowUserIds,
 } from "./paths.mjs";
+import { agentflowUserIdAliases } from "./auth.mjs";
 import { getWorkspaceCollaborationByFlow } from "./workspace-collaboration.mjs";
 import { onRepositoryRunFinished } from "./repository-index-events.mjs";
 import { workspaceDesignRevision } from "./workspace-graph-merge.mjs";
@@ -100,10 +101,14 @@ function runUsageKey(ownerId, flowSource, flowId, runNodeId = "") {
 
 function aggregateSuccessfulRuns() {
   const aggregate = new Map();
+  // 关联过旧账号的人会有两个 userId，运行记录分散在两边。流程按目录归属统计，
+  // 不折算别名的话，旧身份跑出来的那部分次数一条都不会被算进去。
+  const aliases = agentflowUserIdAliases();
   for (const run of readWorkspaceRunUsageRecords()) {
     if (run?.status !== "success") continue;
     const flowSource = String(run.flowSource || "user");
-    const ownerId = flowSource === "user" ? String(run.userId || "") : "";
+    const runUserId = String(run.userId || "");
+    const ownerId = flowSource === "user" ? (aliases.get(runUserId) || runUserId) : "";
     const key = runUsageKey(ownerId, flowSource, run.flowId, run.runNodeId || "");
     const current = aggregate.get(key) || { count: 0, lastUsedAt: "" };
     current.count += 1;
