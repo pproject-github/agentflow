@@ -11329,6 +11329,8 @@ button.af-project-card {
 .af-work-flow-node {
   box-sizing: border-box;
   position: relative;
+  display: flex;
+  flex-direction: column;
   width: max-content;
   height: max-content;
   min-width: 100%;
@@ -11413,12 +11415,15 @@ button.af-project-card {
   white-space: nowrap;
 }
 
+/* height:100% 会把节点钉死在外壳高度上：body 是 flex:1 1 auto + min-height:0，
+   一旦内容比外壳高就被压扁，多出来的卡片直接溢出到节点外面（画布 overflow 是 visible）。
+   改成只涨不缩：撑满被手动拉大的外壳，但绝不缩到内容高度以下。 */
 .af-work-flow-node .af-flow-node {
   box-sizing: border-box;
   margin: 0;
   width: 100%;
-  height: 100%;
-  min-height: 100%;
+  height: auto;
+  flex: 1 0 auto;
 }
 
 /* Structural call nodes are contract cards, not free-size work surfaces. */
@@ -14261,6 +14266,14 @@ button.af-project-card {
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+/* 行内加载提示：不占独立一行，出现和消失都不改变列表高度。 */
+.af-work-run-logs__section-status {
+  margin-left: 0.5rem;
+  color: rgba(255, 255, 255, 0.28);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
 
 .af-work-run-logs__run {
   width: 100%;
@@ -14587,6 +14600,9 @@ button.af-project-card {
 .af-run-state__stage.is-error > .material-symbols-outlined { color: #df716b; }
 .af-run-state__stage.is-waiting > .material-symbols-outlined { color: #d39c55; }
 .af-run-state__stage.is-running > .material-symbols-outlined { color: #8fb7ee; }
+/* 没参与本次执行：压下去，别和真正待执行的阶段抢注意力。 */
+.af-run-state__stage.is-not_run { opacity: 0.45; }
+.af-run-state__stage.is-not_run > .material-symbols-outlined { color: rgba(255, 255, 255, 0.32); }
 .af-run-state__stage > div { min-width: 0; }
 .af-run-state__stage strong { display: block; overflow: hidden; color: rgba(235,232,239,.78); font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
 .af-run-state__stage small { display: block; margin-top: .16rem; color: rgba(229,226,225,.35); font: .56rem var(--af-mono); }

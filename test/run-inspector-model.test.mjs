@@ -142,7 +142,9 @@ test("Run trigger nodes do not appear as an executing stage or inflate progress"
   ];
   const state = buildRunStateSnapshot(events, { runId: "trigger-1", status: "success", startedAt: 10, endedAt: 40 }, flowNodes);
   assert.equal(state.status, "success");
-  assert.deepEqual(state.progress, { completed: 1, total: 2, percent: 50 });
+  // finish 一个事件都没有：它不在这次 Run 的执行计划里，不该占进度分母。
+  assert.deepEqual(state.progress, { completed: 1, total: 1, percent: 100 });
+  assert.equal(state.stages.find((stage) => stage.id === "finish").status, "not_run");
   assert.equal(state.currentStage.id, "plan");
   assert.equal(state.currentStage.status, "success");
   assert.equal(state.stages.some((stage) => stage.id === "run"), false);
@@ -181,4 +183,59 @@ test("Run-level failure closes an active stage when node-error is missing", () =
   assert.equal(state.status, "error");
   assert.equal(state.currentStage.status, "error");
   assert.equal(state.stages[0].status, "error");
+});
+
+// 用户需求点: 工作台把整张图当阶段列表，没跑到的节点一律显示"待执行"。数据提供型节点
+// （文本、密码、Load Skills…）是作为输入就地解析的，从不作为阶段执行，于是一个成功的 Run
+// 看上去卡在 2/33，像是执行过却显示未执行。
+test("Run State separates nodes outside the plan from nodes still pending", () => {
+  const flowNodes = [
+    { id: "agent", data: { label: "子 Agent", definitionId: "agent_subAgent" } },
+    { id: "wecom", data: { label: "企业微信应用 Markdown", definitionId: "tool_wecom_send_app_markdown" } },
+    { id: "text_1", data: { label: "文本", definitionId: "provide_text" } },
+    { id: "skills", data: { label: "Load Skills", definitionId: "control_load_skills" } },
+  ];
+  const events = [
+    { type: "node-start", nodeId: "agent", ts: 10 },
+    { type: "node-done", nodeId: "agent", status: "success", ts: 20 },
+    { type: "node-start", nodeId: "wecom", ts: 21 },
+    { type: "node-done", nodeId: "wecom", status: "success", ts: 22 },
+    { type: "run-finish", status: "success", ts: 23 },
+  ];
+  const state = buildRunStateSnapshot(events, { runId: "r-plan", status: "success", startedAt: 10, endedAt: 23 }, flowNodes);
+  assert.deepEqual(
+    state.stages.map((stage) => [stage.id, stage.status]),
+    [["agent", "success"], ["wecom", "success"], ["text_1", "not_run"], ["skills", "not_run"]],
+  );
+  assert.deepEqual(state.progress, { completed: 2, total: 2, percent: 100 });
+  assert.deepEqual(state.pending, []);
+});
+
+test("Run State keeps event-less nodes pending while the Run is still going", () => {
+  const flowNodes = [
+    { id: "agent", data: { label: "子 Agent" } },
+    { id: "later", data: { label: "后面的节点" } },
+  ];
+  const events = [{ type: "node-start", nodeId: "agent", ts: 10 }];
+  const state = buildRunStateSnapshot(events, { runId: "r-live", status: "running", startedAt: 10 }, flowNodes, [], 20);
+  assert.equal(state.stages.find((stage) => stage.id === "later").status, "pending");
+  assert.deepEqual(state.pending, [{ id: "later", label: "后面的节点" }]);
+});
+
+// 用户需求点: control_if 执行完也看不出走的是 true 还是 false。
+test("Run State surfaces which branch a control_if took", () => {
+  const flowNodes = [
+    { id: "gate", data: { label: "是否发送", definitionId: "control_if" } },
+    { id: "gate2", data: { label: "第二个判断", definitionId: "control_if" } },
+  ];
+  const events = [
+    { type: "node-start", nodeId: "gate", ts: 10 },
+    { type: "status", nodeId: "gate", line: "control_if branch: true", ts: 11 },
+    { type: "node-done", nodeId: "gate", definitionId: "control_if", branch: "true", status: "success", ts: 12 },
+    { type: "node-start", nodeId: "gate2", ts: 13 },
+    { type: "node-done", nodeId: "gate2", definitionId: "control_if", branch: "false", status: "success", ts: 14 },
+  ];
+  const state = buildRunStateSnapshot(events, { runId: "r-if", status: "success", startedAt: 10, endedAt: 14 }, flowNodes);
+  assert.equal(state.stages.find((stage) => stage.id === "gate").branch, "true");
+  assert.equal(state.stages.find((stage) => stage.id === "gate2").branch, "false");
 });

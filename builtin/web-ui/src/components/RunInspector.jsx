@@ -26,6 +26,8 @@ function statusIcon(status) {
   if (status === "retrying") return "sync";
   if (status === "cancelled") return "cancel";
   if (status === "running") return "progress_activity";
+  if (status === "skipped") return "skip_next";
+  if (status === "not_run") return "remove_circle_outline";
   return "radio_button_unchecked";
 }
 
@@ -72,6 +74,7 @@ function stateStatusLabel(status) {
     cancelled: "已停止",
     skipped: "已跳过",
     pending: "待执行",
+    not_run: "未参与本次执行",
   })[status] || "未知状态";
 }
 
@@ -266,7 +269,7 @@ export default function RunInspector({ run, events = [], rawLines = [], loading 
             {runState.stages.length ? <div className="af-run-state__stages">{runState.stages.map((stage) => (
               <div className={`af-run-state__stage is-${stage.status}`} key={stage.id}>
                 <span className="material-symbols-outlined">{statusIcon(stage.status)}</span>
-                <div><strong>{stage.label}</strong><small>{stateStatusLabel(stage.status)}{stage.lastEvent?.type ? ` · ${stage.lastEvent.type}` : ""}</small></div>
+                <div><strong>{stage.label}</strong><small>{stateStatusLabel(stage.status)}{stage.branch ? ` · 分支 ${stage.branch.toUpperCase()}` : ""}{stage.lastEvent?.type ? ` · ${stage.lastEvent.type}` : ""}</small></div>
                 <span className="af-run-state__stage-duration">{stage.durationMs ? formatRunInspectorDuration(stage.durationMs) : "—"}</span>
               </div>
             ))}</div> : <p className="af-run-state__empty">流程图暂无节点；状态将在 Run 事件到达后补充。</p>}

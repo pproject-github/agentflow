@@ -661,6 +661,20 @@ function stateEventSummary(event) {
 }
 
 /**
+ * 分支节点走了哪一边。运行时把它报在 node-done 的 `branch` 字段上，也写进
+ * `control_if branch: true` 这行状态里；不摊开的话，看完整个面板也不知道 if 判成了什么。
+ */
+function stageBranchTaken(nodeEvents = []) {
+  for (const event of [...nodeEvents].reverse()) {
+    const direct = String(event?.branch ?? "").trim();
+    if (direct) return direct.toLowerCase();
+    const fromLine = /branch:\s*(true|false)/i.exec(String(event?.line || event?.text || ""));
+    if (fromLine) return fromLine[1].toLowerCase();
+  }
+  return "";
+}
+
+/**
  * Builds a stable, UI-safe projection of the current Workspace Run state.
  * This is an execution-state projection (events + graph), not a replacement
  * for a future business Graph State/Reducer implementation.
@@ -678,12 +692,16 @@ export function buildRunStateSnapshot(rawEvents = [], run = {}, flowNodes = [], 
     const definitionId = String(node?.data?.definitionId || node?.definitionId || "").trim();
     return !["workspace_run", "workspace_scheduled_run"].includes(definitionId);
   });
+  const runTerminal = ["success", "error", "cancelled"].includes(stateStatus(run?.status, ""));
   const stages = graphNodes.map((node) => {
     const id = String(node?.id || node?.nodeId || node?.definitionId || "");
     const execution = executed.get(id);
     const nodeEvents = execution?.events || events.filter((event) => String(event.nodeId || "") === id);
     const latest = [...nodeEvents].reverse().find(Boolean);
-    let status = execution?.status || "pending";
+    // 一次 Run 的执行计划只覆盖入口可达的那部分图；数据提供型节点（文本、密码、Load Skills…）
+    // 作为输入被就地解析，从不作为阶段执行。Run 已经终结后还把它们显示成"待执行"，既像卡住了，
+    // 又把进度分母撑大（成功的 Run 卡在 2/33）。它们是没参与这次执行，不是等着执行。
+    let status = execution?.status || (runTerminal && !nodeEvents.length ? "not_run" : "pending");
     if (nodeEvents.some((event) => ["node-waiting", "run-waiting"].includes(event.type) || event.status === "waiting")) status = "waiting";
     else if (nodeEvents.some((event) => event.type === "node-skipped" || event.status === "skipped")) status = "skipped";
     else if (nodeEvents.some((event) => event.type === "node-error" || event.status === "error")) status = "error";
@@ -695,6 +713,7 @@ export function buildRunStateSnapshot(rawEvents = [], run = {}, flowNodes = [], 
       id,
       label: flowNodeLabel(node),
       status,
+      branch: stageBranchTaken(nodeEvents),
       startedAt: execution?.startedAt || 0,
       endedAt: execution?.endedAt || 0,
       durationMs: execution?.durationMs || 0,
@@ -735,7 +754,9 @@ export function buildRunStateSnapshot(rawEvents = [], run = {}, flowNodes = [], 
   const current = [...stages].reverse().find((stage) => ["running", "waiting", "error"].includes(stage.status))
     || [...stages].reverse().find((stage) => stage.status === "success")
     || null;
-  const completed = stages.filter((stage) => ["success", "skipped"].includes(stage.status)).length;
+  // 没参与本次执行的节点不该进分母，否则一个成功的 Run 会显示成 2/33 · 6%。
+  const plannedStages = stages.filter((stage) => stage.status !== "not_run");
+  const completed = plannedStages.filter((stage) => ["success", "skipped"].includes(stage.status)).length;
   const waiting = stages.filter((stage) => stage.status === "waiting").map((stage) => ({ id: stage.id, label: stage.label }));
   const pending = stages.filter((stage) => stage.status === "pending").map((stage) => ({ id: stage.id, label: stage.label }));
   const last = events.at(-1);
@@ -744,7 +765,11 @@ export function buildRunStateSnapshot(rawEvents = [], run = {}, flowNodes = [], 
     runId: safeStateValue(run?.runId),
     status: runStatus,
     currentStage: current ? { id: current.id, label: current.label, status: current.status } : null,
-    progress: { completed, total: stages.length, percent: stages.length ? Math.round((completed / stages.length) * 100) : 0 },
+    progress: {
+      completed,
+      total: plannedStages.length,
+      percent: plannedStages.length ? Math.round((completed / plannedStages.length) * 100) : 0,
+    },
     pending,
     waiting,
     stages,

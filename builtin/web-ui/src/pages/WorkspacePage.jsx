@@ -2740,6 +2740,15 @@ function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, Math.round(n)));
 }
 
+/**
+ * 手动拉过的高度是下限，不是定值。节点内容会长（比如 decision 区在运行期多出
+ * AWAITING DECISION 一行），钉死高度只会把多出来的卡片挤到节点外面去。
+ */
+function workspaceFlowNodeShellStyle(isSubflowCall, nodeSize) {
+  if (isSubflowCall || !nodeSize) return undefined;
+  return { width: nodeSize.width, minHeight: nodeSize.height };
+}
+
 function normalizeWorkspaceNodeSize(size, { display = false } = {}) {
   if (!size || typeof size !== "object") return null;
   const rawWidth = Number(size.width);
@@ -6176,7 +6185,7 @@ function WorkspaceFlowNode(props) {
         (props.data?.nodeStatus === "failed" ? " af-work-flow-node--failed" : "") +
         (props.data?.nodeStatus === "stopped" ? " af-work-flow-node--stopped" : "")
       }
-      style={!isSubflowCall && nodeSize ? { width: nodeSize.width, height: nodeSize.height } : undefined}
+      style={workspaceFlowNodeShellStyle(isSubflowCall, nodeSize)}
       onPointerDownCapture={onSelectNodePointerDown}
     >
       {!readOnly && !isSubflowCall ? (

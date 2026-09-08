@@ -249,12 +249,18 @@ export default function WorkspaceRunLogsDrawer({
         <div className="af-work-run-logs__list af-work-run-flow">
           <div className="af-work-run-flow__head"><span>RUN 流程</span><small>只读 · 当前 Run</small></div>
           <RunFlowCanvas nodes={flowNodes} edges={flowEdges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} runTrace={runTrace} />
-          <div className="af-work-run-logs__section-title">最近执行</div>
-          {loadingRuns ? <div className="af-work-run-logs__empty">正在读取执行记录…</div> : null}
-          {!loadingRuns && runs.length === 0 ? (
+          {/* Run 进行中时列表每 2 秒刷新一次。加载态若自己占一行，就会不停地插入又移除，
+              整个列表跟着上下跳。改成标题行里的一段行内提示，布局高度始终不变。 */}
+          <div className="af-work-run-logs__section-title">
+            最近执行
+            {loadingRuns ? (
+              <span className="af-work-run-logs__section-status" aria-live="polite">读取中…</span>
+            ) : null}
+          </div>
+          {runs.length === 0 ? (
             <div className="af-work-run-empty af-work-run-empty--list">
               <span className="material-symbols-outlined" aria-hidden>history</span>
-              <strong>暂无执行记录</strong>
+              <strong>{loadingRuns ? "正在读取执行记录…" : "暂无执行记录"}</strong>
               <p>运行流程后，记录会显示在这里。</p>
             </div>
           ) : null}

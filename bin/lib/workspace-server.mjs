@@ -2263,14 +2263,22 @@ function workspaceIsPrimaryOutputSlot(slot, slots) {
   return name === workspacePrimaryOutputSlotName({ output: slots });
 }
 
-function workspaceResolveLinkedOutputForTarget(value, targetSlot, scopedRoot = "") {
+/**
+ * 节点之间传数据不是喂 prompt。上游产出的报告动辄几百 KB，按 prompt 的尺寸截断，
+ * 下游 display_html 拿到的就是一个被腰斩、末尾还带 `...[truncated N chars]` 的坏文档，
+ * 界面再反过来提示"可能是生成或保存时被截断"——文件在磁盘上其实是完整的。
+ * 这里只保留一个防失控的上限，正常产物不该碰到它。
+ */
+const WORKSPACE_LINKED_OUTPUT_MAX_CHARS = 5_000_000;
+
+export function workspaceResolveLinkedOutputForTarget(value, targetSlot, scopedRoot = "") {
   const text = String(value ?? "");
   if (!text.trim() || workspaceLinkedOutputShouldStayPath(targetSlot)) return text;
   const outputRel = workspaceSafeNodeOutputRelPath(text);
   if (!outputRel || !String(scopedRoot || "").trim()) return text;
   try {
     const abs = workspaceResolveFlowFile(scopedRoot, outputRel, "linked output");
-    const content = workspaceReadTextFileIfExists(abs, 120000);
+    const content = workspaceReadTextFileIfExists(abs, WORKSPACE_LINKED_OUTPUT_MAX_CHARS);
     return content || text;
   } catch {
     return text;
