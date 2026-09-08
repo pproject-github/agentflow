@@ -2206,6 +2206,9 @@ function workspaceGroupNodesFromGraph(graph, resolvedPositions = {}, resolvedSiz
     dragHandle: ".af-work-group-node__drag-handle",
     selectable: true,
     zIndex: 0,
+    // 分组是一块很大的矩形。它只在标题条上可交互，框体本身必须让事件穿过去，
+    // 否则整个分组区域都拖不动画布、也框选不了——React Flow 只在 pane 上平移。
+    style: { pointerEvents: "none" },
     data: {
       isWorkspaceGroup: true,
       isSubflowGroup: group.id.startsWith("subflow-group:"),

@@ -410,11 +410,14 @@ export function NodePropertiesPanel({
   const [bodyExpanded, setBodyExpanded] = useState(false);
   const [scriptExpanded, setScriptExpanded] = useState(false);
   const [publishState, setPublishState] = useState({ status: "idle", message: "" });
-  const [panelTab, setPanelTab] = useState(disabled ? "review" : "config");
+  // 双击节点问的是"这个节点是什么"，不是"它上次跑出了什么"。只读流程（仓库预览、
+  // 跨账号查看）同样如此，而且预览流程根本没有执行记录——开在执行内容页就是一片空白，
+  // 看上去像"双击没反应"。执行内容永远只差一次点击。
+  const [panelTab, setPanelTab] = useState("config");
 
   useEffect(() => {
-    setPanelTab(disabled ? "review" : "config");
-  }, [disabled, draft?.id]);
+    setPanelTab("config");
+  }, [draft?.id]);
 
   const update = useCallback(
     (patch) => {
