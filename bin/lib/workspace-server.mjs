@@ -6002,6 +6002,14 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     events.push(enriched);
     if (typeof opts.onEvent === "function") opts.onEvent(enriched);
   };
+  if (!execution.unattended) {
+    // 受限模式下 cursor-agent 停在 permissionMode: default，webSearch / webFetch 这类
+    // 需要审批的工具会被自动 User Rejected。Agent 只会说"外网检索被拒绝"，不说是谁拒的。
+    emit({
+      type: "status",
+      line: "受限执行模式：需要审批的工具（webSearch / webFetch 等）会被自动拒绝",
+    });
+  }
   const emitTiming = (nodeId, label, startedAt, extra = {}) => {
     const elapsedMs = Math.max(0, Date.now() - startedAt);
     emit({ type: "status", nodeId, line: `Timing ${label}: ${elapsedMs}ms`, timing: { label, elapsedMs, ...extra } });
@@ -8413,9 +8421,9 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       graph,
     }, userCtx, {
       runtimeRoot: scoped.root,
-      execution: {
-        unattended: Boolean(stableRelease?.release?.id) && entry.enabled === true && config.enabled === true,
-      },
+      // 定时执行和手动执行拿同一套工具授权。以前这里按「发布过稳定版本」降级，
+      // 结果没发布过的流程定时跑时 cursor-agent 停在 permissionMode: default，
+      // webSearch 之类要审批的工具被自动 User Rejected，报告天天是空的却不报错。
       signal: controller.signal,
       onActiveChild: setActiveChild,
       onEvent: (event) => appendWorkspaceRunLogEvent(runLog.runId, event),
@@ -8570,7 +8578,6 @@ async function runWorkspaceDeferredEntry(root, claimed) {
       graph,
     }, userCtx, {
       runtimeRoot: scoped.root,
-      execution: { unattended: claimed.scheduled === true && Boolean(claimed.releaseId) },
       signal: controller.signal,
       onActiveChild: (child, options = {}) => runControl.setChild(child, options),
       onEvent: (event) => appendWorkspaceRunLogEvent(claimed.runId, event),
