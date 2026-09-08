@@ -156,6 +156,16 @@ This is forced: handle indices depend on the instance's own slot order, and slot
 So indices are restored from `pinOrder` in `layout.json`, recorded only for instances that
 deviate; everything else is rebuilt as "definition order + custom slots seen in the code".
 
+**The canvas has more than one loading entry.** On disk and over the API an edge is
+identified by slot name; a React Flow handle is the pin's index in the slot table being
+rendered (`FlowNodePortRail` emits `output-<i>` by array index, hidden slots included).
+The conversion lives in `edgesWithCanvasHandles`, shared by `flowFormat.js` and the
+Workspace canvas -- writing it twice is how one entry gets missed, and under that entry
+every edge in the graph disappears: the handle names match no rendered handle, so React
+Flow keeps the edges and draws none of them. Resolve an index against the table the edge
+was **written** against, and convert to an index against the table being **rendered** --
+they are not the same table, since merging the definition adds slots and reorders them.
+
 ## Key design: the definition owns the slot table
 
 A slot table stored in the graph is only a snapshot of what the definition looked like the

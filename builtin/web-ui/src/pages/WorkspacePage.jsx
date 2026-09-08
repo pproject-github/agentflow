@@ -19,7 +19,7 @@ import {
   useStoreApi,
   useUpdateNodeInternals,
 } from "@xyflow/react";
-import { slotNameFromHandle } from "../../../../shared/slot-handles.js";
+import { edgesWithCanvasHandles, slotNameFromHandle } from "../../../../shared/slot-handles.js";
 import "@xyflow/react/dist/style.css";
 import { Fragment, Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -2370,6 +2370,13 @@ function graphToFlow(graph, palette, { preserveRuntimeOutputs = false } = {}) {
   const rawInstances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const instances = preserveRuntimeOutputs ? rawInstances : sanitizeRuntimeOutputsForCanvas(rawInstances, palette);
   const rawEdges = Array.isArray(graph?.edges) ? graph.edges : [];
+  // 磁盘和 API 上边的身份是槽位名，画布的句柄是引脚位置。**换算只在这个入口做一次**，
+  // 下游（子流程投影、虚拟调用边、revealConnectedSlotsForEdges）继续按下标工作。
+  // 先统一成名字：历史图里是下标，还原必须用这张图当时的槽位表，原意只在原表里存在。
+  const storedSlotsOf = (id) => instances[id];
+  // 投影按 instances 的槽位表算下标，最终渲染的边按合并后那张算——合并会补槽、会改顺序，
+  // 两张表不是一回事，各用各的。
+  const instanceEdges = edgesWithCanvasHandles(rawEdges, storedSlotsOf);
   // 缺坐标通常来自 AI 新写的 DSL。统一走 CLI 同款确定性排版；原有坐标保持不动，避免打开
   // 页面时覆盖用户手工拖拽结果。
   const positions = layoutWorkspaceNodePositions(graph, { preserveExisting: true });
@@ -2377,7 +2384,7 @@ function graphToFlow(graph, palette, { preserveRuntimeOutputs = false } = {}) {
   const subflowProjection = buildWorkspaceSubflowProjection({
     instances,
     subflows: graph?.subflows || {},
-    edges: rawEdges,
+    edges: instanceEdges,
     positions,
     sizes,
     boundaryPositions: graph?.ui?.subflowBoundaryPositions || {},
@@ -2495,15 +2502,24 @@ function graphToFlow(graph, palette, { preserveRuntimeOutputs = false } = {}) {
       },
     };
   });
-  const edges = rawEdges
+  // 磁盘和 API 上边的身份是槽位名；React Flow 的句柄是引脚在**合并后**那张槽位表里的
+  // 位置（FlowNodePortRail 就是按数组下标发 `output-<i>` 的，隐藏的槽也占一个位置）。
+  // 换算必须用这张表，不能用 instances 里的——合并会补槽、会改顺序。
+  // 漏掉这次换算的后果是整张图的连线全不见：句柄名对不上任何一个渲染出来的 handle，
+  // React Flow 保留边但一条都画不出来。
+  const mergedSlots = new Map(merged.map((node) => [
+    String(node.id),
+    { input: node.data?.inputs || [], output: node.data?.outputs || [] },
+  ]));
+  const edges = edgesWithCanvasHandles(rawEdges, storedSlotsOf, (id) => mergedSlots.get(id))
     .filter((e) => e?.source && e?.target)
     .filter((e) => !groupNodes.some((node) => node.id === String(e.source) || node.id === String(e.target)))
     .map((e, idx) => ({
       id: e.id || `we-${e.source}-${e.target}-${idx}`,
       source: String(e.source),
       target: String(e.target),
-      sourceHandle: e.sourceHandle ?? undefined,
-      targetHandle: e.targetHandle ?? undefined,
+      sourceHandle: e.sourceHandle,
+      targetHandle: e.targetHandle,
       hidden: hiddenSubflowInputNodeIds.has(String(e.source)) || hiddenSubflowInputNodeIds.has(String(e.target)),
       markerEnd: { type: MarkerType.ArrowClosed },
     }));
@@ -2519,7 +2535,7 @@ function graphToFlow(graph, palette, { preserveRuntimeOutputs = false } = {}) {
     selectable: false,
     deletable: false,
   })));
-  edges.push(...workspaceVirtualSubflowCallEdges(instances, graph?.subflows || {}, rawEdges));
+  edges.push(...workspaceVirtualSubflowCallEdges(instances, graph?.subflows || {}, instanceEdges));
   // 首次加载的边和用户刚拉出的边遵守同一条规则：边存在，端点 handle 就必须可见。
   // 否则 React Flow 会保留语义边，但因为端点没有渲染而完全画不出来。
   const edgeAwareNodes = revealConnectedSlotsForEdges(merged, edges.filter((edge) => !edge.hidden));

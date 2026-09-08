@@ -100,3 +100,33 @@ export function edgesWithSlotNamesPreserving(graph) {
     };
   });
 }
+
+/**
+ * 一条边 -> React Flow 的句柄形态。
+ *
+ * 画布的句柄是引脚在**渲染用的那张槽位表**里的下标（`FlowNodePortRail` 按数组下标发
+ * `output-<i>`，隐藏的槽也占位置）。磁盘和 API 上是槽位名。这个换算是加载路径上唯一
+ * 要做的事，而画布有不止一个加载入口——漏掉任何一个，那个入口下整张图的连线全不见：
+ * 句柄名对不上任何一个渲染出来的 handle，React Flow 留着边但一条都画不出来。
+ *
+ * 还原下标要用**这条边写下时那张表**，换算成下标要用**现在渲染的那张表**，两者可能
+ * 不是同一张（合并定义表会补槽、会改顺序），所以分成两步、各传各的。
+ *
+ * @param {Array} edges
+ * @param {(nodeId: string) => ({input?: Array, output?: Array}|undefined)} storedSlotsOf 边写下时的槽位表
+ * @param {(nodeId: string) => ({input?: Array, output?: Array}|undefined)} [renderSlotsOf] 渲染用的槽位表，默认同上
+ * @returns {Array} 句柄换成 `input-N` / `output-N` 的边；换不出来的留 undefined 交给调用方
+ */
+export function edgesWithCanvasHandles(edges, storedSlotsOf, renderSlotsOf = storedSlotsOf) {
+  return (Array.isArray(edges) ? edges : []).map((edge) => {
+    const source = String(edge?.source ?? "");
+    const target = String(edge?.target ?? "");
+    const fromName = slotNameFromHandle(edge?.sourceHandle, storedSlotsOf(source)?.output);
+    const toName = slotNameFromHandle(edge?.targetHandle, storedSlotsOf(target)?.input);
+    return {
+      ...edge,
+      sourceHandle: indexHandleFromSlotName(fromName, renderSlotsOf(source)?.output, "output") || undefined,
+      targetHandle: indexHandleFromSlotName(toName, renderSlotsOf(target)?.input, "input") || undefined,
+    };
+  });
+}

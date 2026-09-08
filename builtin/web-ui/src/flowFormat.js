@@ -1,7 +1,7 @@
 /**
  * 与 AI_Workspace agentflow/flowFormat.ts 对齐：统一 flow.yaml（instances / edges / ui）
  */
-import { indexHandleFromSlotName, slotNameFromHandle } from "../../../shared/slot-handles.js";
+import { edgesWithCanvasHandles } from "../../../shared/slot-handles.js";
 import { MarkerType } from "@xyflow/react";
 import yaml from "js-yaml";
 
@@ -128,22 +128,17 @@ export function deserializeFromFlowYaml(flowYamlContent) {
     });
 
     // 磁盘和 API 上边的身份是槽位名；React Flow 的句柄是位置坐标。换算只发生在这条边界上。
-    const edges = edgesRaw
-      .filter((e) => e?.source && e?.target)
-      .map((e, i) => {
-        const from = instances[String(e.source)];
-        const to = instances[String(e.target)];
-        const sourceName = slotNameFromHandle(e.sourceHandle, from?.output);
-        const targetName = slotNameFromHandle(e.targetHandle, to?.input);
-        return {
-          id: `e-${e.source}-${e.target}-${i}`,
-          source: String(e.source),
-          target: String(e.target),
-          sourceHandle: indexHandleFromSlotName(sourceName, from?.output, "output") || undefined,
-          targetHandle: indexHandleFromSlotName(targetName, to?.input, "input") || undefined,
-          markerEnd: { type: MarkerType.ArrowClosed },
-        };
-      });
+    const edges = edgesWithCanvasHandles(
+      edgesRaw.filter((e) => e?.source && e?.target),
+      (id) => instances[id],
+    ).map((e, i) => ({
+      id: `e-${e.source}-${e.target}-${i}`,
+      source: String(e.source),
+      target: String(e.target),
+      sourceHandle: e.sourceHandle,
+      targetHandle: e.targetHandle,
+      markerEnd: { type: MarkerType.ArrowClosed },
+    }));
 
     return { nodes, edges, instances, description, ...(viewport ? { viewport } : {}) };
   } catch (err) {
