@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import {
   ARCHIVED_PIPELINES_DIR_NAME,
+  agentflowUserIdFromExternalName,
   getAgentflowDataRoot,
   getUserPipelinesRoot,
   sanitizeAgentflowUserId,
@@ -854,12 +855,44 @@ export function loginAdminUser(username, password) {
   };
 }
 
+const CAS_USER_ID_COLLISION_LIMIT = 50;
+
+/**
+ * 认人靠 CAS 用户名，不靠从它算出来的 id。
+ *
+ * 派生规则以后可能会变（收紧、放宽、换 IdP），但一个人的账号不能因此改指向别处。
+ * 所以先按 casUsername 精确找回已有账号；只有第一次见到这个人时才去算 id。
+ *
+ * 算出来的 id 撞上别人时往后让位，绝不顶掉已经绑定的账号——顶掉就是串号。
+ * 撞上一个没绑过 CAS 的同名老密码账号则照旧认领，那是原有的账号合并行为。
+ */
+function resolveCasUserRecord(users, casUsername) {
+  for (const [id, user] of Object.entries(users || {})) {
+    if (String(user?.casUsername || "").trim().toLowerCase() === casUsername) {
+      return { userId: id, existing: user };
+    }
+  }
+  const base = agentflowUserIdFromExternalName(casUsername);
+  if (!base) return null;
+  for (let n = 1; n <= CAS_USER_ID_COLLISION_LIMIT; n += 1) {
+    const suffix = n === 1 ? "" : `-${n}`;
+    const candidate = `${base.slice(0, 64 - suffix.length)}${suffix}`;
+    const existing = users?.[candidate];
+    if (!existing) return { userId: candidate, existing: undefined };
+    // 管理员同名要走管理员入口，交给调用方回 403，不在这里绕开。
+    if (existing.isAdmin) return { userId: candidate, existing };
+    if (!String(existing.casUsername || "").trim()) return { userId: candidate, existing };
+  }
+  return null;
+}
+
 export function loginCasUser(identity = {}) {
   const casUsername = String(identity?.username || "").trim().toLowerCase();
-  const userId = sanitizeAgentflowUserId(casUsername);
-  if (!userId) return { ok: false, status: 400, error: "CAS 用户名无法映射为 AgentFlow 用户 ID" };
+  if (!casUsername) return { ok: false, status: 400, error: "CAS 未返回用户名" };
   const users = readAuthUsers();
-  const existing = users[userId];
+  const resolved = resolveCasUserRecord(users, casUsername);
+  if (!resolved) return { ok: false, status: 400, error: `CAS 用户名 ${casUsername} 无法映射为可用的 AgentFlow 用户 ID` };
+  const { userId, existing } = resolved;
   if (existing?.isAdmin) {
     return { ok: false, status: 403, error: "管理员账号请从 /admin/login 使用密码登录" };
   }

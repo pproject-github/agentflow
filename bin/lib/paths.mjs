@@ -1,6 +1,7 @@
 /**
  * 包路径与 CLI 常量（供 bin/agentflow 与各 lib 模块使用）。
  */
+import crypto from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -146,6 +147,42 @@ export function sanitizeAgentflowUserId(userId) {
   const normalized = raw.toLowerCase();
   if (!/^[a-z][a-z0-9_-]{0,63}$/.test(normalized)) return AGENTFLOW_DEFAULT_USER_ID;
   return normalized;
+}
+
+/** 派生出来的 id 必须仍然过得了 sanitizeAgentflowUserId——全系统都拿它当归一化入口。 */
+const AGENTFLOW_USER_ID_MAX = 64;
+
+/**
+ * 把一个**我们说了不算**的外部账号名（CAS 主体、以后可能是别的 IdP）落成一个
+ * AgentFlow 用得了的用户 ID。
+ *
+ * 注册表单那条正则是我们对自己用户的规定，拿它去校验企业账号是越界：
+ * 公司账号叫 `li.xiang` 还是 `08123`，不该由我们批准。这里只做转写，不做否决。
+ *
+ * 唯一的硬约束是它得能当目录名（`<dataRoot>/users/<id>`），并且能塞进
+ * `project-flow:<owner>:<source>:<flowId>` 这种冒号分隔的资源 id。
+ *
+ * @param {string} externalName
+ * @returns {string} 满足 sanitizeAgentflowUserId 的 id；派生不出来时返回 ""
+ */
+export function agentflowUserIdFromExternalName(externalName) {
+  const raw = String(externalName ?? "").trim().toLowerCase();
+  if (!raw) return "";
+  // 邮箱形态取本地部分：`lixiang@bigo.sg` 的身份是 lixiang，域名是噪音。
+  const local = raw.includes("@") ? raw.slice(0, raw.indexOf("@")) : raw;
+  const mapped = local
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/-{2,}/g, "-")
+    .replace(/^[-_]+|[-_]+$/g, "");
+  // 整串都落在字母数字之外（比如纯中文名）——补前缀只会让所有人都撞成 "u"，
+  // 这种必须走摘要。
+  if (!mapped) return `u${crypto.createHash("sha256").update(raw).digest("hex").slice(0, 12)}`;
+  // 首字符必须是字母（历史规则，全系统都在按它归一化），补一个前缀而不是拒绝。
+  const headed = /^[a-z]/.test(mapped) ? mapped : `u${mapped}`;
+  const trimmed = headed.slice(0, AGENTFLOW_USER_ID_MAX);
+  if (sanitizeAgentflowUserId(trimmed) === trimmed) return trimmed;
+  // 整串都落在字母数字之外（比如纯中文），退到摘要，仍然是稳定可重现的。
+  return `u${crypto.createHash("sha256").update(raw).digest("hex").slice(0, 12)}`;
 }
 
 export function getAgentflowUserDataRoot(userId) {
