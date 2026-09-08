@@ -156,6 +156,34 @@ This is forced: handle indices depend on the instance's own slot order, and slot
 So indices are restored from `pinOrder` in `layout.json`, recorded only for instances that
 deviate; everything else is rebuilt as "definition order + custom slots seen in the code".
 
+## Key design: the definition owns the slot table
+
+A slot table stored in the graph is only a snapshot of what the definition looked like the
+last time the flow was saved. Change the definition and the snapshot does not follow, so the
+same `agent_subAgent` ends up with different pins in different flows: deployed flows have
+nodes with no `prev` at all (that version of the definition did not have one yet), leaving a
+control edge nowhere to land, and a batch of nodes still carrying long-since-edited
+descriptions.
+
+So the slot table is reconciled against the definition on read and before every write: the
+**definition** decides which slots exist and their type, description and required flag, and
+it decides the order (definition slots first, custom slots after them in graph order). The
+graph keeps only what is genuinely its own — slot values, whether a pin shows on the card
+(`showOnNode`), and custom slots the definition does not have.
+
+A code node package owns its own slot table, not the runtime it happens to use
+(`tool_nodejs` says how it runs, not which pins it has). A package's slot table always
+starts with its control slot — the `node.yaml` path skips `slotMapToList`, so the scanner
+adds it uniformly.
+
+Reconciliation **must happen after edge handles have been resolved to slot names**. An
+`input-3` stored in the graph was written against the slot table of that moment; reconciling
+first means reading old indices against a new table. Across 85 deployed flows, doing it in
+the wrong order rewires edges in 5 of them.
+
+When the definition cannot be read (the node package is not installed yet) nothing is
+touched: better to leave the table alone than to strip every pin off it based on an empty one.
+
 ## Body interpolation: one `${}`, two meanings
 
 The runtime's body placeholders only understand slot names — the regex in

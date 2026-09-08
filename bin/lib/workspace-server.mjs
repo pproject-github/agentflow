@@ -1022,7 +1022,13 @@ export function readWorkspaceStableRelease(workspaceRoot, marketplaceRoot = "", 
 
 export function publishWorkspaceRelease(workspaceRoot, marketplaceRoot = "", options = {}) {
   const graph = readWorkspaceGraph(workspaceRoot, marketplaceRoot).graph;
-  const workspaceRevision = workspaceDesignRevision(graph);
+  // 客户端手里的 `expectedRevision` 是存图接口给的，那个值算在**注水后**的图上
+  // （definitionId 改写成运行方式、script 推导出绝对路径…）。这里拿没注水的图算一遍就
+  // 永远对不上——存完立刻发布必然 409。基线要和发的那一版是同一种图。
+  const revisionGraph = options.scoped
+    ? hydrateWorkspaceGraphForRuntime(marketplaceRoot || workspaceRoot, options.scoped, graph, options.userCtx || {})
+    : graph;
+  const workspaceRevision = workspaceDesignRevision(revisionGraph);
   const expectedRevision = String(options.expectedRevision || "").trim();
   if (expectedRevision && expectedRevision !== workspaceRevision) {
     return {
@@ -1758,7 +1764,11 @@ function hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped = {}, gra
   let changed = false;
   for (const [nodeId, instance] of Object.entries(instances)) {
     if (!instance || typeof instance !== "object") continue;
-    const def = defById.get(String(instance.definitionId || ""));
+    // 代码节点包的槽位表归包所有。此时 definitionId 已经被 `withMarketplaceRuntime`
+    // 改写成运行方式（tool_nodejs），照它取定义会把 tool_nodejs 的 result 槽元数据
+    // （required: true）盖到包自己的槽上——存图返回的 revision 和磁盘上那张对不上。
+    const ref = String(instance.marketplaceRef || "").trim();
+    const def = (ref && defById.get(ref)) || defById.get(String(instance.definitionId || ""));
     if (!def) continue;
     const input = workspaceMergeSlotsWithDefinitionMeta(instance.input, def.inputs);
     const output = workspaceMergeSlotsWithDefinitionMeta(instance.output, def.outputs);

@@ -260,6 +260,7 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
           value: "",
         };
         if (d?.description) slot.description = d.description;
+        if (!d && overrides.description) slot.description = overrides.description;
         if (d?.required) slot.required = true;
         if (d?.showOnNode) slot.showOnNode = true;
         for (const key of ["showOnNode", "required"]) {

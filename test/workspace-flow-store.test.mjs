@@ -11,6 +11,14 @@ import {
   writeWorkspaceDesign,
 } from "../bin/lib/workspace-flow-store.mjs";
 import { splitWorkspaceGraph } from "../bin/lib/workspace-state.mjs";
+import { reconcileGraphSlots } from "../bin/lib/workspace-slot-reconcile.mjs";
+
+/**
+ * 手写一张图时槽位表通常只写关心的那几个槽。**槽位表归节点定义所有**，读图会按定义
+ * 对账补齐，所以「写进去的」和「读回来的」本来就不是同一份槽位表——比对时拿这个函数
+ * 把期望值对齐到同一个基准，而不是把 sampleGraph 写成一张谁也不会手写的完整表。
+ */
+const asStored = (design) => reconcileGraphSlots(design);
 
 function tempDir() {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-flow-store-")));
@@ -121,7 +129,7 @@ test("读回来与写进去是同一张图", () => {
   writeWorkspaceDesign(dir, design);
   const back = readWorkspaceDesign(dir);
   assert.equal(back.format, "dsl");
-  assert.equal(designFingerprint(back.graph), designFingerprint(design));
+  assert.equal(designFingerprint(back.graph), designFingerprint(asStored(design)));
 });
 
 test("子流程 Start 和 Return 的人工布局能随代码化流程往返", () => {
@@ -198,7 +206,7 @@ test("没有 flow.js 时回落读历史 graph.json", () => {
   fs.writeFileSync(path.join(dir, "workspace.graph.json"), JSON.stringify(design, null, 2), "utf-8");
   const back = readWorkspaceDesign(dir);
   assert.equal(back.format, "json");
-  assert.equal(designFingerprint(back.graph), designFingerprint(design));
+  assert.equal(designFingerprint(back.graph), designFingerprint(asStored(design)));
 });
 
 test("flow.js 里出现表达不了的语句时抛错，绝不降级成空图", () => {
@@ -223,7 +231,7 @@ test("生成的代码解析不回原图时退回 graph.json，不留下残缺的
   assert.equal(result.format, "json");
   assert.ok(result.degradedReason, "退回时必须说明原因");
   assert.ok(!exists(dir, "workspace.flow.js"), "退回时不能留下优先级更高的 flow.js");
-  assert.equal(designFingerprint(readWorkspaceDesign(dir).graph), designFingerprint(design));
+  assert.equal(designFingerprint(readWorkspaceDesign(dir).graph), designFingerprint(asStored(design)));
 });
 
 test("已经是代码形态的流程退回 JSON 时，旧的 flow.js 必须被清掉", () => {
@@ -240,7 +248,7 @@ test("已经是代码形态的流程退回 JSON 时，旧的 flow.js 必须被�
   }
   const back = readWorkspaceDesign(dir);
   assert.equal(back.format, "json");
-  assert.equal(designFingerprint(back.graph), designFingerprint(design));
+  assert.equal(designFingerprint(back.graph), designFingerprint(asStored(design)));
 });
 
 test("迁移历史图：运行产出还内联在 graph.json 里也能转成代码", async () => {
@@ -263,7 +271,7 @@ test("迁移历史图：运行产出还内联在 graph.json 里也能转成代�
 
   // 重新读回来的完整图与迁移前语义一致
   const { readWorkspaceGraphFiles } = await import("../bin/lib/workspace-flow-store.mjs");
-  assert.equal(designFingerprint(readWorkspaceGraphFiles(dir).graph), designFingerprint(full));
+  assert.equal(designFingerprint(readWorkspaceGraphFiles(dir).graph), designFingerprint(asStored(full)));
 
   assert.equal(migrateFlowDirToDsl(dir).migrated, false, "已经是代码形态时不该重复迁移");
 });

@@ -27,7 +27,8 @@ import {
   graphToFlowFiles,
 } from "./flow-dsl/index.mjs";
 import { definitionOf } from "./flow-dsl/defs.mjs";
-import { edgesWithSlotNames, edgesWithSlotNamesPreserving, slotNameFromHandle } from "../../shared/slot-handles.js";
+import { edgesWithSlotNames, edgesWithSlotNamesPreserving } from "../../shared/slot-handles.js";
+import { reconcileGraphSlots } from "./workspace-slot-reconcile.mjs";
 import { packageBindingsForGraph, packageResolverFor, scanAvailableNodePackages } from "./flow-dsl/packages.mjs";
 import { NODE_META_KEYS } from "./flow-dsl/ir.mjs";
 import {
@@ -243,6 +244,18 @@ export function designFingerprint(graph) {
 // ── 读 ──────────────────────────────────────────────────────────────────────
 
 /**
+ * 按定义对账槽位表。
+ *
+ * **顺序不能反**：先把边的句柄译成槽位名，再动槽位表。图里存的 `input-3` 是按
+ * **落盘时那张槽位表**写的；对账会补槽、会重排，先对账再译下标 = 拿新表解释旧下标，
+ * 每条边都可能指到别的槽上。85 个线上流程的演练里，把顺序反过来会让 5 个流程的边改指向。
+ */
+function reconcileDesign(design, packages) {
+  const named = { ...design, edges: edgesWithSlotNamesPreserving(design) };
+  return reconcileGraphSlots(named, { resolvePackage: packageResolverFor(packages) });
+}
+
+/**
  * 读一个流程目录的设计态图。
  *
  * @param {string} flowDir
@@ -253,6 +266,7 @@ export function readWorkspaceDesign(flowDir, opts = {}) {
   const dir = path.resolve(flowDir);
   const sourcePath = path.join(dir, FLOW_SOURCE_FILENAME);
   const source = readTextOrNull(sourcePath);
+  const packages = scanAvailableNodePackages(dir, opts.marketplaceRoot || "");
   if (source !== null && source.trim()) {
     let graph;
     try {
@@ -263,7 +277,7 @@ export function readWorkspaceDesign(flowDir, opts = {}) {
         files: collectExternalFiles(dir),
         // 和 lint 用同一份包扫描。不传的话 `import x from "./nodes/x"` 会读成一个
         // 槽位表为空的节点，控制边跟着串位——lint 绿灯、画布是错图。
-        resolvePackage: packageResolverFor(scanAvailableNodePackages(dir, opts.marketplaceRoot || "")),
+        resolvePackage: packageResolverFor(packages),
       });
     } catch (e) {
       throw new WorkspaceFlowParseError(
@@ -271,13 +285,13 @@ export function readWorkspaceDesign(flowDir, opts = {}) {
         sourcePath,
       );
     }
-    return { format: "dsl", path: sourcePath, graph: normalizeDesignShape(graph), source };
+    return { format: "dsl", path: sourcePath, graph: reconcileDesign(normalizeDesignShape(graph), packages), source };
   }
 
   const graphPath = path.join(dir, WORKSPACE_GRAPH_FILENAME);
   const rawJson = readTextOrNull(graphPath);
   if (rawJson !== null && rawJson.trim()) {
-    return { format: "json", path: graphPath, graph: normalizeDesignShape(JSON.parse(rawJson)), source: null };
+    return { format: "json", path: graphPath, graph: reconcileDesign(normalizeDesignShape(JSON.parse(rawJson)), packages), source: null };
   }
 
   return { format: "empty", path: sourcePath, graph: emptyDesignGraph(), source: null };
@@ -366,7 +380,11 @@ export function writeWorkspaceDesign(flowDir, designGraph, opts = {}) {
 
   const packages = scanAvailableNodePackages(dir, opts.marketplaceRoot || "");
   const bindings = packageBindingsForGraph(design, packages);
-  const written = stripDerivedPackageScripts(design, bindings);
+  // 槽位表归定义所有。落盘前对账一次，磁盘上就不会再存一份过期的定义快照——
+  // 生成的代码本来就按定义重建槽位表，不对账的话往返比对每次都判「与原图不一致」。
+  const written = reconcileGraphSlots(stripDerivedPackageScripts(design, bindings), {
+    resolvePackage: packageResolverFor(packages),
+  });
 
   let generated = null;
   let persisted = null;
@@ -399,8 +417,10 @@ export function writeWorkspaceDesign(flowDir, designGraph, opts = {}) {
     // 退回历史格式。此时绝不能留下 workspace.flow.js——它的优先级更高，留着就等于让残缺的
     // 那张图接管。
     for (const file of [sourcePath, layoutPath, nodesPath]) fs.rmSync(file, { force: true });
-    writeTextAtomic(graphPath, `${JSON.stringify(design, null, 2)}\n`);
-    return { format: "json", changed: true, degradedReason, externals: [], design };
+    // 落的是对账过的那张图。落原图的话，下次读会再对账一遍，读回来的和写进去的不是
+    // 同一张——调用方拿写返回的 revision 去做下一个请求就直接 409。
+    writeTextAtomic(graphPath, `${JSON.stringify(written, null, 2)}\n`);
+    return { format: "json", changed: true, degradedReason, externals: [], design: written };
   }
 
   const externals = generated.files.map((f) => f.path).sort();
@@ -416,7 +436,8 @@ export function writeWorkspaceDesign(flowDir, designGraph, opts = {}) {
     && readTextOrNull(nodesPath) === (wantNodesFile ? nodesText : null)
     && !fs.existsSync(graphPath)
     && generated.files.every((f) => readTextOrNull(path.join(dir, f.path)) === f.text);
-  if (unchanged) return { format: "dsl", changed: false, degradedReason: null, externals, design: persisted };
+  const settled = reconcileDesign(persisted, packages);
+  if (unchanged) return { format: "dsl", changed: false, degradedReason: null, externals, design: settled };
 
   const previousExternals = readJsonFile(nodesPath, {}).externals;
 
@@ -434,7 +455,7 @@ export function writeWorkspaceDesign(flowDir, designGraph, opts = {}) {
   // 迁移完成：历史格式退场。往返已经逐字段比对过，这里删的是一份可以再生成的副本。
   fs.rmSync(graphPath, { force: true });
 
-  return { format: "dsl", changed: true, degradedReason: null, externals, design: persisted };
+  return { format: "dsl", changed: true, degradedReason: null, externals, design: settled };
 }
 
 // ── 完整图（设计态 + 运行态）────────────────────────────────────────────────

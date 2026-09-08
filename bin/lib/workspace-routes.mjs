@@ -3389,6 +3389,8 @@ async function workspaceRoutes(req, res, ctx) {
           return;
         }
         const result = publishWorkspaceRelease(scoped.root, root, {
+          scoped,
+          userCtx,
           expectedRevision: payload.expectedRevision || "",
           createdBy: userCtx.userId || authUser?.userId || "",
           notes: payload.notes || "",

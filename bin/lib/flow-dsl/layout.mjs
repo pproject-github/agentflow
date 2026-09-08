@@ -81,6 +81,10 @@ export function extractLayout(designGraph, ir) {
         // 记了也只是重复的不记，否则存量流程的 layout 会平白多出 diff。
         const extras = (kind === "in" ? irNode?.extraIn : irNode?.extraOut) || [];
         if (d || !extras.includes(slot.name)) continue;
+        // 自定义槽的说明文字是作者写的，代码里没有它的位置——不记在这儿就每次往返都丢，
+        // 往返比对随即判「与原图不一致」，整个流程退回写 workspace.graph.json。
+        const description = String(slot.description || "");
+        if (description) ((pins[kind] ||= {})[slot.name] ||= {}).description = description;
         const actual = String(slot.type || "text");
         if (kind === "in") {
           if (actual === inferInputType(id, slot.name)) continue;

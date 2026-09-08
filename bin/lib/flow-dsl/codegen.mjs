@@ -329,6 +329,10 @@ export function generateFlowSource(ir, opts = {}) {
 
   function declare(id, exported) {
     if (declared.has(id)) return;
+    // 运行入口由 flow()/flow.schedule() 那一趟单独写出来。数据边指向它时（`run.next`
+    // 被接进了某个数据槽，线上确实有这种图）这里会再声明一次同名 const，生成的文件
+    // 直接解析不回来——整个流程因此退回写 workspace.graph.json。
+    if (RUN_DEFINITIONS.has(N[id]?.definitionId)) { declared.add(id); return; }
     declared.add(id);
     // 上游数据依赖必须先声明，否则引用的变量还不存在
     for (const dep of dataIn.get(id) || []) if (!declared.has(dep.from)) declare(dep.from, true);
