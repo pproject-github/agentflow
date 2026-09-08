@@ -251,7 +251,7 @@ function AuthGate({ children }) {
               <span className="material-symbols-outlined">shield_person</span>
               <div><h1>AgentFlow</h1><p>{!auth.casEnabled ? "CAS 登录尚未配置" : authError ? "CAS 登录未完成" : "正在前往 CAS 统一认证"}</p></div>
             </div>
-            {!auth.casEnabled ? <p className="af-auth-error">普通用户仅支持 CAS 登录，请联系管理员启用 CAS。</p> : authError ? <p className={authError === "logged_out" ? "af-auth-note" : "af-auth-error"}>{authError === "logged_out" ? "你已退出 AgentFlow。" : authError === "cas_forbidden" ? "该账号是 AgentFlow 管理员，请从管理员入口使用密码登录。" : authError === "cas_unavailable" ? "CAS 服务暂时不可用，请稍后重试。" : "登录状态已过期或 ticket 无效，请重新登录。"}</p> : null}
+            {!auth.casEnabled ? <p className="af-auth-error">普通用户仅支持 CAS 登录，请联系管理员启用 CAS。</p> : authError ? <p className={authError === "logged_out" ? "af-auth-note" : "af-auth-error"}>{authError === "logged_out" ? "你已退出 AgentFlow。" : authError === "cas_forbidden" ? "该账号是 AgentFlow 管理员，请从管理员入口使用密码登录。" : authError === "cas_unavailable" ? "CAS 服务暂时不可用，请稍后重试。" : authError === "cas_user_unmappable" ? "CAS 认证通过了，但你的账号名不能作为 AgentFlow 用户 ID（只允许字母开头、字母数字和 - _）。重登没用，请联系管理员。" : authError === "cas_flow_expired" ? "这次登录的往返凭据没能带回来：可能是停留太久（超过 10 分钟），也可能是进来和跳回来用的不是同一个域名。请回到首页重新登录。" : "CAS 校验未通过，请重新登录。"}</p> : null}
             <button className="af-auth-submit" type="button" disabled={!auth.casEnabled} onClick={() => {
               const returnTo = `${window.location.pathname}${window.location.hash}`;
               window.location.assign(`${auth.casLoginUrl}?returnTo=${encodeURIComponent(returnTo)}`);

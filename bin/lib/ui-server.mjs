@@ -2350,8 +2350,12 @@ export function startUiServer({
     if (url.pathname === "/api/auth/cas/callback" && req.method === "GET") {
       const publicBaseUrl = serverPublicBaseUrl(req, host, uiPort);
       const secure = requestUsesHttps(req);
-      const flow = consumeCasLoginFlow(getCasFlowTokenFromRequest(req));
+      const flowToken = getCasFlowTokenFromRequest(req);
+      const flow = consumeCasLoginFlow(flowToken);
       if (!flow) {
+        // 三种失败在页面上长得一模一样，只有这行日志能分开它们。回不来的 cookie
+        // 通常意味着来回跳转的域名不是同一个——service 是按 Host 头算出来的。
+        log.warn(`[auth] CAS 回调没有登录流水：cookie ${flowToken ? "带回来了，但已被用掉或已过期" : "根本没带回来"}，host=${req.headers.host || "-"}，service=${readCasAuthConfig(publicBaseUrl).serviceUrl || "-"}`);
         res.writeHead(303, {
           Location: "/projects?authError=cas_flow_expired",
           "Set-Cookie": buildClearCasFlowCookie({ secure }),
@@ -2364,7 +2368,10 @@ export function startUiServer({
         const identity = await validateCasTicket(url.searchParams.get("ticket") || "", publicBaseUrl);
         const result = identity ? loginCasUser(identity) : { ok: false, status: 401, error: "CAS ticket 无效" };
         if (!result.ok) {
-          const reason = result.status === 403 ? "cas_forbidden" : "invalid_ticket";
+          // 400 = CAS 认了这个人，但用户名落不进 AgentFlow 的 ID 规则（含点、以数字开头等）。
+          // 这跟"ticket 无效"是两回事，混成一句话会让人一直去重登。
+          const reason = result.status === 403 ? "cas_forbidden" : result.status === 400 ? "cas_user_unmappable" : "invalid_ticket";
+          log.warn(`[auth] CAS 登录被拒（${reason}）：${result.error || "-"}${identity ? `，CAS 用户名=${identity.username}` : "，CAS 未返回 authenticationSuccess"}`);
           res.writeHead(303, {
             Location: localPathWithQueryParam(flow.returnTo, "authError", reason),
             "Set-Cookie": buildClearCasFlowCookie({ secure }),
