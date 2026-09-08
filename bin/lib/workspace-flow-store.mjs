@@ -113,19 +113,50 @@ export function emptyDesignGraph() {
   return { version: 1, instances: {}, edges: [], subflows: {}, ui: { nodePositions: {} } };
 }
 
+/**
+ * 子流程成员表只能点名**存在的节点**。
+ *
+ * `parser.mjs` 早就在代码那条路上执行了这一条（`nodeIds.filter(id => nodes[id]).sort()`），
+ * JSON 那条路没人管：线上有张图的 `nodeIds` 里躺着两个早已删掉的节点 id，既没有实例、
+ * 没有坐标、也没有任何边引用。往返比对因此永远判「不一致」——只为两个字符串，整张图
+ * 就存不成代码。两条路执行同一条不变量，差异自然消失。
+ *
+ * 顺序也归一：解析回来的成员表是排过序的，这边不排就又是一处假差异。
+ */
+function normalizeSubflows(subflows, instances) {
+  const out = {};
+  for (const [id, subflow] of Object.entries(subflows)) {
+    if (!subflow || typeof subflow !== "object") continue;
+    const has = (nodeId) => Object.prototype.hasOwnProperty.call(instances, String(nodeId ?? ""));
+    const bindings = (map) => Object.fromEntries(
+      Object.entries(map && typeof map === "object" ? map : {}).filter(([, b]) => has(b?.nodeId)),
+    );
+    out[id] = {
+      ...subflow,
+      nodeIds: (Array.isArray(subflow.nodeIds) ? subflow.nodeIds : []).filter(has).map(String).sort(),
+      roots: (Array.isArray(subflow.roots) ? subflow.roots : []).filter(has).map(String),
+      inputs: bindings(subflow.inputs),
+      outputs: bindings(subflow.outputs),
+    };
+  }
+  return out;
+}
+
 function normalizeDesignShape(raw) {
   const graph = raw && typeof raw === "object" ? raw : {};
+  const instances =
+    graph.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances)
+      ? graph.instances
+      : {};
+  const subflows =
+    graph.subflows && typeof graph.subflows === "object" && !Array.isArray(graph.subflows)
+      ? graph.subflows
+      : {};
   return {
     version: Number(graph.version) || 1,
-    instances:
-      graph.instances && typeof graph.instances === "object" && !Array.isArray(graph.instances)
-        ? graph.instances
-        : {},
+    instances,
     edges: Array.isArray(graph.edges) ? graph.edges : [],
-    subflows:
-      graph.subflows && typeof graph.subflows === "object" && !Array.isArray(graph.subflows)
-        ? graph.subflows
-        : {},
+    subflows: normalizeSubflows(subflows, instances),
     ui: graph.ui && typeof graph.ui === "object" ? graph.ui : { nodePositions: {} },
   };
 }

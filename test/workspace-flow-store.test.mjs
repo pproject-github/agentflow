@@ -300,3 +300,37 @@ test("指纹认出真实差异，不被表示差异干扰", () => {
     assert.notEqual(designFingerprint(mutated), designFingerprint(base), `${mutate} 应当被指纹识别为差异`);
   }
 });
+
+// 线上真实形态：两个节点被删掉了，实例、坐标、边全都清干净了，只有子流程成员表里
+// 还躺着它们的 id。往返比对因此永远判「不一致」——只为两个字符串，整张图存不成代码。
+test("子流程成员表只点名存在的节点", () => {
+  const dir = tempDir();
+  const design = splitWorkspaceGraph(sampleGraph()).design;
+  design.subflows = {
+    review: {
+      id: "review",
+      label: "复核",
+      nodeIds: ["ok", "早就删掉的节点", "pic"],
+      roots: ["ok", "也删掉了"],
+      inputs: { src: { nodeId: "没了", slot: "value" } },
+      outputs: { out: { nodeId: "pic", slot: "src" } },
+    },
+  };
+  fs.writeFileSync(path.join(dir, "workspace.graph.json"), JSON.stringify(design), "utf-8");
+
+  const back = readWorkspaceDesign(dir).graph.subflows.review;
+  assert.deepEqual(back.nodeIds, ["ok", "pic"]);
+  assert.deepEqual(back.roots, ["ok"]);
+  assert.deepEqual(Object.keys(back.inputs), [], "绑定到已删节点的入参也要清掉");
+  assert.deepEqual(back.outputs, { out: { nodeId: "pic", slot: "src" } }, "还在的绑定一个字不动");
+  assert.equal(back.label, "复核", "成员表之外的字段不碰");
+});
+
+test("成员表顺序归一，和解析回来的那份对得上", () => {
+  const dir = tempDir();
+  const design = splitWorkspaceGraph(sampleGraph()).design;
+  // parser.mjs 收集完成员是排过序的；这边不排就又是一处只存在于表示层的假差异
+  design.subflows = { review: { id: "review", label: "复核", nodeIds: ["pic", "ok", "gate"], roots: [], inputs: {}, outputs: {} } };
+  fs.writeFileSync(path.join(dir, "workspace.graph.json"), JSON.stringify(design), "utf-8");
+  assert.deepEqual(readWorkspaceDesign(dir).graph.subflows.review.nodeIds, ["gate", "ok", "pic"]);
+});
