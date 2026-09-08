@@ -4,11 +4,19 @@ import { useRoute } from "./routeContext.jsx";
 const RECENT_RUNS_CHANNEL = "agentflow:recent-runs:v1";
 const RECENT_RUNS_LOCK = "agentflow:recent-runs:poller";
 const POLL_INTERVAL_MS = 3_000;
-const REQUEST_TIMEOUT_MS = 8_000;
+// 8 秒对这条链路太紧：同一时刻 node 是 2.6ms，而经由前置 nginx 的同一个请求测到过 6.7 秒。
+// 这种偶发停顿不是「运行状态同步不了」，它下一次就恢复了。判失败的门槛要高过那个停顿，
+// 否则每次抖动都被记成一次故障。
+const REQUEST_TIMEOUT_MS = 15_000;
 const LEADER_RETRY_MS = 2_000;
 const PRESENCE_INTERVAL_MS = 5_000;
 const PRESENCE_TTL_MS = 16_000;
-const FAILURE_BACKOFF_MS = [10_000, 30_000, 60_000];
+// 第一次失败只把节奏放慢一点。以前首档就是 10 秒——一次抖动把刷新率砍成三分之一，
+// 横幅上「最近成功」的时间跟着越拖越久，看起来比实际严重得多。
+const FAILURE_BACKOFF_MS = [5_000, 30_000, 60_000];
+// 连续几次失败才算「延迟」。单次抖动用户不该看见——报警要么是真的，要么就别出现，
+// 否则它变成背景噪音，真出事时没人再看它。
+const DELAYED_AFTER_FAILURES = 2;
 
 function retryDelay(failureCount) {
   return FAILURE_BACKOFF_MS[Math.min(Math.max(failureCount - 1, 0), FAILURE_BACKOFF_MS.length - 1)];
@@ -149,12 +157,14 @@ export default function RunningIndicator() {
         failureCount += 1;
         publishState({
           syncHealth: {
-            status: "delayed",
+            status: failureCount >= DELAYED_AFTER_FAILURES ? "delayed" : "ok",
             failureCount,
             lastSuccessAt,
-            message: timedOut
-              ? "运行状态同步超过 8 秒未响应"
-              : `运行状态同步失败：${String(error?.message || error)}`,
+            message: failureCount < DELAYED_AFTER_FAILURES
+              ? ""
+              : timedOut
+                ? `运行状态同步超过 ${Math.round(REQUEST_TIMEOUT_MS / 1000)} 秒未响应`
+                : `运行状态同步失败：${String(error?.message || error)}`,
           },
         });
         schedulePoll(retryDelay(failureCount));

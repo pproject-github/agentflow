@@ -543,6 +543,35 @@ export function getSessionTokenFromRequest(req) {
   return parseCookies(req.headers.cookie || "")[SESSION_COOKIE] || bearerTokenFromAuthHeader(req.headers.authorization);
 }
 
+/**
+ * 会话在使用中自动续期，闲置才过期。
+ *
+ * 固定 30 天到期对接入的应用（企微那边的 mengmai）太糙：绑定一次是要用户开浏览器走一遍
+ * 授权的，每月打断一次不合理；而单纯把期限拉到一年，等于一把丢了就能用一年的钥匙。
+ * 滑动过期两头都好——**只要 30 天内用过就永远不用重新绑定，而一个被偷走却没被用的
+ * token 照样 30 天后自己死**。
+ *
+ * 只对 `cli` 会话滑动。浏览器会话该到点就到点，那是另一回事。
+ *
+ * 写盘要省：`expiresAt - ttl` 就是上次续期的时刻，据此把写入限制成每会话每小时最多一次，
+ * 不然每个请求都要重写整个 sessions.json。
+ */
+const SESSION_RENEW_MIN_INTERVAL_MS = 60 * 60 * 1000;
+
+function slideSessionExpiry(sessions, key, session, now) {
+  if (String(session.kind || "") !== "cli") return false;
+  const ttl = CLI_SESSION_TTL_MS;
+  const lastRenewedAt = Number(session.expiresAt) - ttl;
+  if (now - lastRenewedAt < SESSION_RENEW_MIN_INTERVAL_MS) return false;
+  session.expiresAt = now + ttl;
+  session.lastUsedAt = now;
+  // 借这次写盘清掉僵尸：过期会话只在它自己的 token 再被用到时才删，否则一直堆着
+  for (const [otherKey, other] of Object.entries(sessions)) {
+    if (otherKey !== key && Number(other?.expiresAt) <= now) delete sessions[otherKey];
+  }
+  return true;
+}
+
 export function getAuthUserFromRequest(req) {
   const token = getSessionTokenFromRequest(req);
   if (!token) return null;
@@ -550,10 +579,14 @@ export function getAuthUserFromRequest(req) {
   const key = hashToken(token);
   const session = sessions[key];
   if (!session || typeof session.userId !== "string") return null;
-  if (Number(session.expiresAt) <= Date.now()) {
+  const now = Date.now();
+  if (Number(session.expiresAt) <= now) {
     delete sessions[key];
     writeJsonObject(sessionsPath(), sessions);
     return null;
+  }
+  if (slideSessionExpiry(sessions, key, session, now)) {
+    writeJsonObject(sessionsPath(), sessions);
   }
   const users = readAuthUsers();
   const user = users[session.userId];

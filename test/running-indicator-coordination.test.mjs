@@ -46,6 +46,31 @@ test("recent-run polling is coordinated across tabs and never overlaps", async (
   );
 });
 
+// 同一时刻 node 回 2.6ms，而经由前置 nginx 的同一个请求测到过 6.7 秒。这种停顿下一次
+// 就恢复了，不是「运行状态同步不了」。以前 8 秒判失败、第一次失败就弹横幅、首档退避
+// 直接 10 秒——一次抖动既报警又把刷新率砍成三分之一，横幅上「最近成功」越拖越久，
+// 看起来远比实际严重。报警要么是真的，要么就别出现。
+test("单次网络抖动不报警", async () => {
+  const source = await readFile(runningIndicatorPath, "utf8");
+
+  const timeout = Number(/const REQUEST_TIMEOUT_MS = ([\d_]+);/.exec(source)?.[1]?.replace(/_/g, ""));
+  assert.ok(timeout >= 12_000, `判失败的门槛要高过实测到的停顿，现在是 ${timeout}ms`);
+
+  const threshold = Number(/const DELAYED_AFTER_FAILURES = (\d+);/.exec(source)?.[1]);
+  assert.ok(threshold >= 2, "第一次失败不该弹横幅");
+
+  assert.match(
+    source,
+    /status: failureCount >= DELAYED_AFTER_FAILURES \? "delayed" : "ok"/,
+    "没到门槛前状态必须还是 ok",
+  );
+
+  const firstBackoff = Number(
+    /const FAILURE_BACKOFF_MS = \[([\d_]+)/.exec(source)?.[1]?.replace(/_/g, ""),
+  );
+  assert.ok(firstBackoff <= 5_000, `一次抖动不该把刷新率砍太狠，首档现在是 ${firstBackoff}ms`);
+});
+
 test("Workflow event streams disconnect in background tabs", async () => {
   const source = await readFile(workspacePagePath, "utf8");
 
