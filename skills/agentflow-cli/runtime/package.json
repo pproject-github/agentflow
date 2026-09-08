@@ -1,6 +1,6 @@
 {
   "name": "@fieldwangai/agentflow-skill-runtime",
-  "version": "0.1.194",
+  "version": "0.1.195",
   "type": "module",
   "agentflowSkillRuntime": 1
 }
