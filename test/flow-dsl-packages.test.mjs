@@ -181,3 +181,51 @@ test("已安装 marketplace 节点能直接 import，lint、读图和保存使�
     fs.rmSync(workspaceRoot, { recursive: true, force: true });
   }
 });
+
+// 线上真实形态：作者给包节点接了一条 skillsContext 数据边，而包的声明里没有这个槽。
+// 「叫 skillsContext 的槽一定在定义表里」只对内置节点成立——tool_nodejs / agent_subAgent
+// 声明了上下文槽，代码节点包没有。判断自定义槽时拿运行方式的定义表去回答，这条边
+// 两头落空：不当自定义槽记账，也没人重建它，解析回来直接消失。
+test("包没声明的上下文槽算自定义槽，接在上面的边活得下来", () => {
+  const source = `import { control, display, flow } from "agentflow/flow";
+import collectMetrics from "./nodes/collect-metrics";
+
+const skills = control.loadSkills("技能", { skillKeys: \`["a"]\` });
+const collect = collectMetrics("统计语料", { date: "2026-08-09", skillsContext: skills.skillsContext });
+const show = display.markdown("结果", { content: collect.total });
+
+export const run = flow("Run", skills, collect, show);
+`;
+  const dir = seedFlowDir({ source });
+  const graph = readWorkspaceGraphFiles(dir).graph;
+
+  const collect = graph.instances.collect;
+  assert.ok(
+    (collect.input || []).some((slot) => slot.name === "skillsContext"),
+    `包里没声明的槽也要重建出来，实际只有 ${(collect.input || []).map((s) => s.name).join(", ")}`,
+  );
+  assert.ok(
+    edgesWithSlotNames(graph).some((e) => e.source === "skills" && e.target === "collect" && e.targetHandle === "skillsContext"),
+    "这条数据边不能在解析时消失",
+  );
+
+  // 再存一次不能降级——降级就等于这张图从此不是代码形态了
+  const written = writeWorkspaceGraphFiles(dir, graph, {});
+  assert.equal(written.format, "dsl", written.degradedReason || "");
+  assert.equal(written.degradedReason, null);
+});
+
+// 控制槽往返一趟类型会从 node 退化成 text，只看 type 判断就会把 prev 当成自定义槽，
+// 写出一个 `prev: null`，再生成一次源码就和上一次不一样了。
+test("控制槽永远不算自定义槽，代码生成保持幂等", () => {
+  const dir = seedFlowDir();
+  const graph = readWorkspaceGraphFiles(dir).graph;
+  const first = writeWorkspaceGraphFiles(dir, graph, {});
+  assert.equal(first.format, "dsl", first.degradedReason || "");
+  const source = fs.readFileSync(path.join(dir, "workspace.flow.js"), "utf-8");
+  assert.ok(!/\bprev: null\b/.test(source), `控制槽被当成自定义引脚写出来了：\n${source}`);
+
+  const again = writeWorkspaceGraphFiles(dir, readWorkspaceGraphFiles(dir).graph, {});
+  assert.equal(again.format, "dsl", again.degradedReason || "");
+  assert.equal(fs.readFileSync(path.join(dir, "workspace.flow.js"), "utf-8"), source, "再存一次源码必须逐字相同");
+});

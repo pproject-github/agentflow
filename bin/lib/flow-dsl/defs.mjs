@@ -101,3 +101,23 @@ export const definitionIdFromApi = (name) => DEFINITION_BY_API[name] || String(n
 export function definitionOf(definitionId) {
   return DEFINITIONS[definitionId] || { input: [], output: [], runtime: "native" };
 }
+
+/**
+ * 一个实例的槽位表由谁说了算。
+ *
+ * 代码节点包自带声明，`tool_nodejs` / `agent_subAgent` 只是它的**运行方式**，不决定
+ * 它有哪些引脚。图 -> IR、IR -> 图、layout 抽取、指纹比对四处都要用同一个答案：
+ * 只要有一处拿运行方式的定义表去回答，它和另外三处就会对不上——那些「包里没声明、
+ * 运行方式里有」的槽会两头落空，连到它们的边在往返时直接消失。
+ *
+ * @param {string} definitionId
+ * @param {{input?: Array, output?: Array}|null} [packageRecord] 该节点解析到的包，没有就传空
+ * @returns {{input: Array, output: Array}}
+ */
+export function definitionSlotsOf(definitionId, packageRecord) {
+  if (packageRecord && (Array.isArray(packageRecord.input) || Array.isArray(packageRecord.output))) {
+    return { input: packageRecord.input || [], output: packageRecord.output || [] };
+  }
+  const def = definitionOf(definitionId);
+  return { input: def.input || [], output: def.output || [] };
+}

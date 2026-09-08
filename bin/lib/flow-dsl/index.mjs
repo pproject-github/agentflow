@@ -45,9 +45,9 @@ export { parseFlowSource } from "./parser.mjs";
  */
 export function graphToFlowFiles(graph, opts = {}) {
   const { design, state } = splitWorkspaceGraph(graph);
-  const ir = graphToIr(design);
+  const ir = graphToIr(design, opts.packages);
   const { source, files } = generateFlowSource(ir, opts);
-  const { layout, nodeMeta } = extractLayout(design, ir);
+  const { layout, nodeMeta } = extractLayout(design, ir, opts.packages);
   return { source, layout, nodeMeta, state, files };
 }
 

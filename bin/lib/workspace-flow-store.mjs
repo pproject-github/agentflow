@@ -26,7 +26,7 @@ import {
   flowFilesToGraph,
   graphToFlowFiles,
 } from "./flow-dsl/index.mjs";
-import { definitionOf } from "./flow-dsl/defs.mjs";
+import { definitionSlotsOf } from "./flow-dsl/defs.mjs";
 import { edgesWithSlotNames, edgesWithSlotNamesPreserving } from "../../shared/slot-handles.js";
 import { reconcileGraphSlots } from "./workspace-slot-reconcile.mjs";
 import { packageBindingsForGraph, packageResolverFor, scanAvailableNodePackages } from "./flow-dsl/packages.mjs";
@@ -209,9 +209,11 @@ function normalizeSlot(slot, defSlot) {
   };
 }
 
-function normalizeInstance(instance) {
+function normalizeInstance(instance, packageRecord) {
   const inst = instance && typeof instance === "object" ? instance : {};
-  const def = definitionOf(asText(inst.definitionId));
+  // 和 graphToIr / irToGraph / extractLayout 同一个定义源。这里独自用运行方式的定义表
+  // 去解析缺省元数据，就会把另外三处按包重建的结果判成「不一致」。
+  const def = definitionSlotsOf(asText(inst.definitionId), packageRecord);
   const defSlot = (kind, name) => def[kind].find((s) => s.name === name) || null;
   const out = {
     definitionId: asText(inst.definitionId),
@@ -252,12 +254,17 @@ function stableStringify(value) {
   return JSON.stringify(value === undefined ? null : value);
 }
 
-/** 设计态图的规范化指纹。两张图指纹相同 = 语义上是同一张图。 */
-export function designFingerprint(graph) {
+/**
+ * 设计态图的规范化指纹。两张图指纹相同 = 语义上是同一张图。
+ *
+ * @param {object} graph
+ * @param {Record<string, {input?: Array, output?: Array}>} [packages] nodeId -> 解析到的代码节点包
+ */
+export function designFingerprint(graph, packages = {}) {
   const design = normalizeDesignShape(graph);
   const instances = {};
   for (const id of Object.keys(design.instances).sort()) {
-    instances[id] = normalizeInstance(design.instances[id]);
+    instances[id] = normalizeInstance(design.instances[id], packages?.[id]);
   }
   // 按槽位名比对。同一条边写成 output-1 还是 next 只是表示差异，不是内容差异——
   // 逐字面比会把「归一」判成「丢信息」，然后退回写 workspace.graph.json。
@@ -436,7 +443,7 @@ export function writeWorkspaceDesign(flowDir, designGraph, opts = {}) {
         files: Object.fromEntries(generated.files.map((f) => [f.path, f.text])),
         resolvePackage: packageResolverFor(packages),
       });
-      if (designFingerprint(persisted) !== designFingerprint(written)) {
+      if (designFingerprint(persisted, bindings) !== designFingerprint(written, bindings)) {
         degradedReason = "生成的代码解析回来与原图不一致";
       }
     } catch (e) {

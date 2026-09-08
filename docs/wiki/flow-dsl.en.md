@@ -176,6 +176,20 @@ A code node package owns its own slot table, not the runtime it happens to use
 starts with its control slot — the `node.yaml` path skips `slotMapToList`, so the scanner
 adds it uniformly.
 
+Six places need that answer, and they must all get it from the same function
+(`definitionSlotsOf`): `graphToIr` deciding which slots are custom, `codegen` ordering
+pins, `parser.readPins` deciding whether a pin written in code is custom, `irToGraph`
+rebuilding the slot table, `extractLayout` recording deviations, and `designFingerprint`
+resolving absent slot metadata. Point any one of them at the runtime definition instead
+and it disagrees with the other five: a slot the package does not declare but the runtime
+does falls through every crack, and the edge attached to it vanishes on the next
+roundtrip. Measured across 85 deployed flows: fixing one site 84 -> 74, two sites
+84 -> 61, all six 84 -> 85.
+
+Control slots are the one exception, excluded **by name** rather than by type: a `prev`
+loses its `node` type across a roundtrip, so a type-only test treats it as a custom slot
+and writes out a `prev: null`, and the next generation no longer matches the last.
+
 Reconciliation **must happen after edge handles have been resolved to slot names**. An
 `input-3` stored in the graph was written against the slot table of that moment; reconciling
 first means reading old indices against a new table. Across 85 deployed flows, doing it in
