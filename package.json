@@ -1,6 +1,6 @@
 {
   "name": "@fieldwangai/agentflow",
-  "version": "0.1.189",
+  "version": "0.1.190",
   "description": "Orchestration system for long-running complex agent tasks using Cursor, OpenCode, Claude Code, or Codex as execution backends",
   "type": "module",
   "main": "bin/agentflow.mjs",
