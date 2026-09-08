@@ -254,8 +254,15 @@ mismatch the write falls back to `workspace.graph.json` and deletes any existing
 lossy version. The comparison uses a normalized fingerprint that flattens key order, the
 three ways of writing "absent" (`undefined`/`null`/`""`), `role: normal` vs unset, and
 `showOnNode` / `required` inherited from the definition table — representation differences
-only, never content. All 21 production flows pass the gate; the largest takes 5.4 ms to
+only, never content. All 85 deployed flows pass the gate; the largest takes 5.4 ms to
 save + read.
+
+**A degrade has to be audible.** It used to go to server stdout and nowhere else, without
+naming the flow -- the deployment accumulated 900+ of them that nobody could trace. The
+warning now carries the flow directory, and the `/api/workspace/graph` response carries
+`format` and `degradedReason`, so the canvas says "saved (fell back to JSON): <reason>".
+A user reading "saved" while the flow quietly loses its code form -- and with it diffs,
+lint, and AI editing -- is the most expensive silence on this path.
 
 ## `flow.fork` is only the syntax for fan-out
 

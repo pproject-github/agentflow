@@ -332,10 +332,14 @@ export function generateFlowSource(ir, opts = {}) {
 
   function declare(id, exported) {
     if (declared.has(id)) return;
-    // 运行入口由 flow()/flow.schedule() 那一趟单独写出来。数据边指向它时（`run.next`
-    // 被接进了某个数据槽，线上确实有这种图）这里会再声明一次同名 const，生成的文件
-    // 直接解析不回来——整个流程因此退回写 workspace.graph.json。
-    if (RUN_DEFINITIONS.has(N[id]?.definitionId)) { declared.add(id); return; }
+    // Run 入口由下面那个循环统一发 `export const <id> = flow.schedule(...)`。这里再发一次
+    // 就是同名重复声明，生成的代码直接解析不回来，整张图退回 workspace.graph.json。
+    // 边的归类只看目标槽名（不叫 prev 就算数据边），所以 run 的 next 连到 content 这类槽时，
+    // run 会以"上游数据依赖"的身份走到这里——第 436 行的兜底声明特意跳过了 Run，这条路径漏了。
+    if (RUN_DEFINITIONS.has(N[id]?.definitionId)) {
+      declared.add(id);
+      return;
+    }
     declared.add(id);
     // 上游数据依赖必须先声明，否则引用的变量还不存在
     for (const dep of dataIn.get(id) || []) if (!declared.has(dep.from)) declare(dep.from, true);

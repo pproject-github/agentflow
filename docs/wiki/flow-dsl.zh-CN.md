@@ -219,7 +219,12 @@ IR 走一趟，所以 `pullIfExists: true` 存回来还是 `true`，不会退化
 `workspace.graph.json`，并把已有的 `workspace.flow.js` 删掉（它优先级更高，留着就等于让
 残缺的那张图接管）。比对用规范化指纹：抹平键顺序、`undefined`/`null`/`""` 三种缺省写法、
 `role: normal` 等价于没写、以及缺省时继承定义表的 `showOnNode` / `required`——只抹平表示
-差异，不抹平内容。21 个线上流程全部通过闸门，最大的一张 save+read 5.4 ms。
+差异，不抹平内容。85 个线上流程全部通过闸门，最大的一张 save+read 5.4 ms。
+
+**降级必须被听见。** 过去这件事只写进服务端 stdout，而且不说是哪张图——线上攒了 900
+多条没人能追。现在告警带流程目录，`/api/workspace/graph` 的响应也带 `format` 和
+`degradedReason`，画布上直接说「已保存（退回 JSON 格式）：<原因>」。用户看到「保存成功」
+而流程悄悄丢掉代码形态（连带 diff、lint、AI 编辑），是这条链路上最贵的一种沉默。
 
 ## `flow.fork` 只是扇出的写法
 
