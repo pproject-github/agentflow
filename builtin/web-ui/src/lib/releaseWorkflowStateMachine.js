@@ -66,6 +66,11 @@ function processRank(processId) {
   return index < 0 ? PROCESS_ORDER.length : index;
 }
 
+function capabilityIdForCatalogNode(node = {}) {
+  const raw = String(node.compositeId || node.id || "").trim();
+  return raw.replace(/^composite:/, "");
+}
+
 // 用户需求点: 初始化后的入口流程由 workflow.entryStageIds 决定；入口流程执行到一半时，
 // 仍需继续当前入口流程，不能因为已有进度就退回 stages 数组的第一个流程。
 function orderedWorkflowProcesses(machine) {
@@ -136,6 +141,14 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     const workflowNodes = eligibleNodes
       .filter((node) => configuredActionIds.has(node.id) || configuredCompositeIds.has(node.id))
       .map((node) => ({ ...node, workflowId: workflow.id }));
+    // 用户需求点: 首包和补包能力要共用一个大版本自定义集合，但不能把 workflow 外的节点暴露给操作员。
+    const allBatchCapabilityIds = new Set(
+      (workflow.stages || []).flatMap((stage) => workflowStageNodeIds(stage)),
+    );
+    const catalogNodes = eligibleNodes.filter((node) => (
+      allBatchCapabilityIds.has(capabilityIdForCatalogNode(node))
+      || node.insertableInAnyStage === true
+    ));
     const byId = new Map(workflowNodes.map((node) => [node.id, node]));
     const processes = activeStages.map((stage, index) => {
       const stageCompositeIds = Array.isArray(stage.compositeIds) ? stage.compositeIds : (Array.isArray(stage.capabilityIds) ? stage.capabilityIds : workflowStageNodeIds(stage));
@@ -167,6 +180,9 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
     const processIds = new Set(processes.map((process) => process.id));
     return {
       context: scope,
+      // The complete business/platform catalog is used by custom-stage
+      // insertion; `processes` below remains batch-scoped for recommendations.
+      catalogNodes,
       workflowId: workflow.id,
       nodes: workflowNodes,
       workflow: {
@@ -209,11 +225,27 @@ export function createReleaseProcessStateMachine({ nodes = [], context = {}, con
 
 // 用户需求点: 自定义阶段只能从当前业务线、平台和批次对应的流程节点中选择，
 // 不能把未纳入当前状态机的 Skill/Action 平铺到候选集合里。
-export function selectWorkflowProcessNodes({ machine, nodes = [] } = {}) {
+export function selectWorkflowProcessNodes({ machine, nodes = [], includeAllBatches = false } = {}) {
   if (!machine) return [];
-  const byId = new Map((Array.isArray(nodes) ? nodes : []).filter((node) => node?.id).map((node) => [node.id, node]));
+  const sourceNodes = includeAllBatches && Array.isArray(machine.catalogNodes) ? machine.catalogNodes : nodes;
+  const byId = new Map((Array.isArray(sourceNodes) ? sourceNodes : []).filter((node) => node?.id).map((node) => [node.id, node]));
   const seen = new Set();
   const selected = [];
+  if (includeAllBatches) {
+    for (const node of sourceNodes) {
+      if (!node?.id || seen.has(node.id)) continue;
+      seen.add(node.id);
+      const processId = processIdForNode(node, undefined, machine.context);
+      selected.push({
+        ...node,
+        workflowId: node.workflowId || machine.workflowId || machine.workflow?.id || "",
+        workflowProcessId: processId,
+        workflowProcessTitle: node.processTitle || processTitleForId(processId),
+        workflowProcessOrder: node.processOrder,
+      });
+    }
+    return selected;
+  }
   for (const process of machine.processes || []) {
     for (const processNode of process.nodes || []) {
       const node = byId.get(processNode.id) || processNode;

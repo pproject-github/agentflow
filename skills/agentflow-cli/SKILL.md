@@ -460,6 +460,18 @@ The only admin write exception is audited version-membership repair. Read its st
 
 Use these commands when the user asks to operate AgentFlow 发版（版本活动、补包、自由 Agent 等）. Business line and platform come from `release-projects.json` `operators` membership for the authenticated user — do not invent them.
 
+### Assistant invocation contract
+
+For every natural-language release-assistant request, the outer release node is always the free
+Agent. 固定使用 `--action-id free-prompt-agent`，并把用户原始输入完整放入唯一的
+`--input prompt='<用户原始输入>'`；不得改写、拆分或用助手推断出的 Action 替换该 prompt。
+自由 Agent 根据 prompt 和锁定的 release Skill roots 自行选择、组合对应 Skill。
+
+不得直接选择原子 Action 作为发版助手的外层 `actionId`，即使 prompt 看起来只需执行一个
+已知 Action。原子 Skill/Action 仅作为自由 Agent 的内部 `details.steps`，不单独写入时间线。
+不要传 `--item-id`：每次调用都生成独立的 `custom-…` 时间线节点；执行完成后，对应大版本的
+“已完成流程”显示一个“自由 Agent”父节点，多次触发必须保留多个独立节点。
+
 ```bash
 node <skill-dir>/scripts/agentflow-cli.mjs release-access
 ```
@@ -480,14 +492,15 @@ node <skill-dir>/scripts/agentflow-cli.mjs release-catalog \
   --business-line likee --platform android --version 5.64.0 --batch supplemental
 ```
 
-Run a capability (including free-prompt at any stage). Shorthand action ids are expanded to `composite:<id>`:
+Run the release assistant through its fixed free-Agent entry. Use the current stage as `--process-id`
+when it is known; otherwise use `entry`:
 
 ```bash
 node <skill-dir>/scripts/agentflow-cli.mjs release-run \
   --action-id free-prompt-agent \
-  --business-line likee --platform android --version 5.64.0 --batch supplemental \
+  --business-line likee --platform android --version 5.64.1 --batch supplemental \
   --process-id entry \
-  --input prompt='v5.64.0 开始补包'
+  --input prompt='v5.64.1 补包开始并通知群里，顺便确认当前发版分支。'
 ```
 
 Stop a long run with `release-stop --run-id <id>`. Read run payload with `release-run-logs`.

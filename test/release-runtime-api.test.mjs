@@ -46,6 +46,81 @@ test("keeps a failed Agent capability retryable with a sanitized reason", async 
   assert.equal(result.retryable, true);
 });
 
+test("maps assistant atomic supplemental notification runs to the visible release capability", async () => {
+  const { releaseCapabilityPresetIdForAction, normalizeReleaseCapabilityId, releaseTimelineIdentity, releaseTimelineSourcePresetId } = await import(`../bin/lib/release-runtime.mjs?assistant-timeline=${Date.now()}`);
+  assert.equal(
+    releaseCapabilityPresetIdForAction("release-notification:send-rollout-notification", { event: "patch-flow-entered" }),
+    "composite:start-supplemental-release-notify",
+  );
+  assert.equal(normalizeReleaseCapabilityId("free-prompt-agent"), "composite:free-prompt-agent");
+  assert.equal(normalizeReleaseCapabilityId("composite:free-prompt-agent"), "composite:free-prompt-agent");
+  assert.equal(
+    releaseTimelineSourcePresetId("free-prompt-agent", { prompt: "查询当前发版分支" }),
+    "composite:free-prompt-agent",
+  );
+  assert.deepEqual(
+    releaseTimelineIdentity(
+      { id: "composite:free-prompt-agent" },
+      { itemId: "custom-free-prompt-agent-run-1", inputs: { prompt: "查询当前发版分支" } },
+    ),
+    {
+      nodeId: "custom-free-prompt-agent-run-1",
+      sourcePresetId: "composite:free-prompt-agent",
+    },
+  );
+  assert.equal(
+    releaseTimelineIdentity(
+      { id: "free-prompt-agent" },
+      { itemId: "custom-free-prompt-agent-retry", inputs: { prompt: "重试助手" } },
+      { sourcePresetId: "release-notification:send-notification" },
+    ).sourcePresetId,
+    "composite:free-prompt-agent",
+  );
+});
+
+test("keeps repeated free-agent completions as separate nodes visible in the same major-version timeline", async () => {
+  const { releaseTimelineIdentity } = await import(`../bin/lib/release-runtime.mjs?assistant-repeat=${Date.now()}`);
+  const { releaseTimelineItemMatchesContext } = await import("../builtin/web-ui/src/lib/releaseWorkflowModel.js");
+  const initialContext = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
+  const supplementalContext = { businessLine: "likee", platform: "android", version: "5.64.1", batch: "supplemental" };
+  const firstIdentity = releaseTimelineIdentity(
+    { id: "free-prompt-agent" },
+    { itemId: "custom-free-prompt-agent-first", inputs: { prompt: "确认首包分支" } },
+  );
+  const secondIdentity = releaseTimelineIdentity(
+    { id: "composite:free-prompt-agent" },
+    { itemId: "custom-free-prompt-agent-second", inputs: { prompt: "确认补包分支" } },
+  );
+  assert.notEqual(firstIdentity.nodeId, secondIdentity.nodeId);
+  assert.equal(firstIdentity.sourcePresetId, "composite:free-prompt-agent");
+  assert.equal(secondIdentity.sourcePresetId, "composite:free-prompt-agent");
+  const timeline = [
+    {
+      id: firstIdentity.nodeId,
+      ...firstIdentity,
+      status: "completed",
+      contextSnapshot: initialContext,
+      scopeKey: "likee/android/5.64.0/initial",
+      details: { steps: [{ action: "release-management:guide-current-release", status: "completed" }] },
+    },
+    {
+      id: secondIdentity.nodeId,
+      ...secondIdentity,
+      status: "completed",
+      contextSnapshot: supplementalContext,
+      scopeKey: "likee/android/5.64.1/supplemental",
+      details: { steps: [{ action: "release-notification:send-notification", status: "completed" }] },
+    },
+  ];
+  const visible = timeline.filter((item) => releaseTimelineItemMatchesContext(item, supplementalContext));
+  assert.deepEqual(visible.map((item) => item.nodeId), [
+    "custom-free-prompt-agent-first",
+    "custom-free-prompt-agent-second",
+  ]);
+  assert.equal(visible.every((item) => item.sourcePresetId === "composite:free-prompt-agent"), true);
+  assert.equal(visible.every((item) => !item.details.steps.some((step) => step.nodeId)), true);
+});
+
 test("normalizes interactive waiting into a retryable failure", async () => {
   const { normalizeReleaseAgentResult } = await import("../bin/lib/release-runtime.mjs?interactive-waiting-contract");
   const result = normalizeReleaseAgentResult({

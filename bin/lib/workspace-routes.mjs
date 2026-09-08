@@ -80,7 +80,7 @@ import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStar
 import { edgeWipeWithoutNodeDeletion, introducedWorkspaceGraphEdgeViolations } from "./workspace-graph-edge-rules.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
-import { discoverReleaseActions, discoverReleaseCompositeActions, filterReleaseActionsForWorkflow, normalizeReleaseAgentResult, releaseAgentResultFromWorkspaceRun, releaseContextKey } from "./release-runtime.mjs";
+import { discoverReleaseActions, discoverReleaseCompositeActions, filterReleaseActionsForWorkflow, normalizeReleaseAgentResult, normalizeReleaseCapabilityId, releaseAgentResultFromWorkspaceRun, releaseContextKey, releaseExecutionContextForAction, releaseTimelineIdentity } from "./release-runtime.mjs";
 import { buildCompositeReleaseRunGraph, buildReleaseRunGraph, bootstrapReleasePrepareContext, confirmationFingerprint, previewReleaseAction, releaseExecutionInputs, releaseFailureFromResult, releasePreviousResultForAgent, releaseTimingFromResult, resolveReleaseApprovalOperator, stopReleaseAction } from "./release-runtime-executor.mjs";
 import { filterDismissedReleasePending, isCustomReleasePendingItem, readReleaseState, reconcileReleaseState, releasePendingDismissalKey, writeReleaseState } from "./release-runtime-store.mjs";
 import { releaseSkillRoots, resolveReleaseWorkspace, assertReleaseSkillRootsConfigured, assertReleaseWriteAccess, buildReleaseAccessPayload } from "../../shared/release-deployment-config.js";
@@ -1260,21 +1260,12 @@ function releaseConfiguredWorkspaceEntries() {
 const activeReleaseRuns = new Map();
 
 function releasePendingNodeId(action, payload = {}, existing = {}) {
-  const itemId = String(payload.itemId || existing.id || "").trim();
-  const existingNodeId = String(existing.nodeId || "").trim();
-  if (itemId.startsWith("custom-")) return itemId;
-  if (existingNodeId.startsWith("custom-")) return existingNodeId;
-  if (existingNodeId) return existingNodeId;
-  return String(action?.id || itemId || "").trim();
+  return releaseTimelineIdentity(action, payload, existing).nodeId;
 }
 
 /** 自定义实例（含助手触发）必须带回 catalog 预置 id，否则页面 knownIds 过滤会丢掉时间线条目。 */
 function releaseSourcePresetId(action, payload = {}, existing = {}) {
-  const existingPreset = String(existing.sourcePresetId || "").trim();
-  if (existingPreset) return existingPreset;
-  const itemId = String(payload.itemId || existing.id || "").trim();
-  if (itemId.startsWith("custom-")) return String(action?.id || "").trim();
-  return String(action?.id || "").trim();
+  return releaseTimelineIdentity(action, payload, existing).sourcePresetId;
 }
 
 function readReleaseStateForRequest(stateRoot, context, workspaceId, workspacePath, skillRoots = []) {
@@ -1408,7 +1399,8 @@ async function workspaceRoutes(req, res, ctx) {
       if (req.method === "GET" && url.pathname === "/api/release/catalog") {
         const discoveredNodes = await discoverReleaseActions({ roots, ...context });
         const atomicNodes = filterReleaseActionsForWorkflow(discoveredNodes, context);
-        const compositeNodes = discoverReleaseCompositeActions(context, atomicNodes);
+        // 自定义目录展示当前业务线/平台的大版本完整能力集合；批次只影响默认推荐和执行校验。
+        const compositeNodes = discoverReleaseCompositeActions(context, atomicNodes, undefined, { includeAllBatches: true });
         // 复合能力是默认发版入口；原子 Action 仅在没有能力配置时作为兼容回退，避免自定义阶段暴露冗余原子节点。
         const nodes = compositeNodes.length ? compositeNodes : atomicNodes;
         json(res, 200, { ok: true, context, workspaceId, nodes, releaseAccess: releaseAccessForRequest(authUser, context) });
@@ -1488,15 +1480,12 @@ async function workspaceRoutes(req, res, ctx) {
         const requestRoots = requestResolution.roots;
         const expectedScopeKey = releaseContextKey(requestContext);
         const requestedScopeKey = String(payload.scopeKey || "").trim();
-        // 用户需求点: 前端传入的节点范围必须与初始化上下文一致，避免跨业务/平台/版本执行。
-        if (requestedScopeKey && requestedScopeKey !== expectedScopeKey) {
-          json(res, 409, { error: "节点不属于当前业务、平台、版本和批次上下文", code: "RELEASE_SCOPE_MISMATCH" });
-          return;
-        }
-        const actionId = String(payload.actionId || payload.nodeId || "").trim();
+        // 用户需求点: 助手可直接提交 free-prompt-agent 简写，但服务端必须按自由 Agent 父节点执行并写入时间线。
+        const actionId = normalizeReleaseCapabilityId(String(payload.actionId || payload.nodeId || "").trim());
         const discoveredNodes = await discoverReleaseActions({ roots: requestRoots, ...requestContext });
         const atomicNodes = filterReleaseActionsForWorkflow(discoveredNodes, requestContext);
-        const compositeNodes = discoverReleaseCompositeActions(requestContext, atomicNodes);
+        // 用户需求点: 自定义目录跨批次展示后，执行请求必须按节点声明的批次解析能力，而不是被页面当前批次拦截。
+        const compositeNodes = discoverReleaseCompositeActions(requestContext, atomicNodes, undefined, { includeAllBatches: true });
         const nodes = compositeNodes.length ? [...compositeNodes, ...atomicNodes] : atomicNodes;
         const action = nodes.find((node) => node.id === actionId);
         // 用户需求点: 状态机配置不仅用于推荐，也必须阻止未纳入当前业务/平台流程的节点被执行。
@@ -1508,7 +1497,14 @@ async function workspaceRoutes(req, res, ctx) {
           json(res, 404, { error: "Release action not found" });
           return;
         }
-        if (action.scopeKey && action.scopeKey !== expectedScopeKey) {
+        const executionContext = releaseExecutionContextForAction(action, requestContext);
+        const executionScopeKey = releaseContextKey(executionContext);
+        // 用户需求点: 跨批次节点只允许在同一业务线、平台和大版本内切换执行批次，禁止借此绕过版本范围校验。
+        if (requestedScopeKey && requestedScopeKey !== expectedScopeKey && requestedScopeKey !== executionScopeKey) {
+          json(res, 409, { error: "节点不属于当前业务、平台、版本和批次上下文", code: "RELEASE_SCOPE_MISMATCH" });
+          return;
+        }
+        if (action.scopeKey && action.scopeKey !== executionScopeKey) {
           json(res, 409, { error: "节点不属于当前业务、平台、版本和批次上下文", code: "RELEASE_SCOPE_MISMATCH" });
           return;
         }
@@ -1530,7 +1526,7 @@ async function workspaceRoutes(req, res, ctx) {
           ? String(payload.processTitle || action.processTitle || effectiveProcessId || "other")
           : (action.processTitle || action.processId || "other");
         const inputs = payload.inputs && typeof payload.inputs === "object" ? payload.inputs : {};
-        const executionInputs = releaseExecutionInputs(action, requestContext, inputs);
+        const executionInputs = releaseExecutionInputs(action, executionContext, inputs);
         const runId = String(payload.runId || releaseRunId());
         const authOperator = resolveReleaseApprovalOperator(authUser.username, userCtx.userId);
         // 审核单 / 全量：提审人始终用 AgentFlow 登录名注入（须为 OA 拼音）。
@@ -1549,7 +1545,7 @@ async function workspaceRoutes(req, res, ctx) {
           ? { ...executionInputs, __release_confirmation_fingerprint: String(payload.confirmationFingerprint) }
           : executionInputs;
         const priorStateForAgent = action.kind === "composite"
-          ? readReleaseStateForRequest(root, requestContext, requestWorkspaceId, requestWorkspacePath, requestRoots)
+          ? readReleaseStateForRequest(root, executionContext, requestWorkspaceId, requestWorkspacePath, requestRoots)
           : null;
         const priorItemForAgent = priorStateForAgent?.pending?.find((item) => item.id === payload.itemId)
           || priorStateForAgent?.pending?.find((item) => (
@@ -1562,11 +1558,11 @@ async function workspaceRoutes(req, res, ctx) {
           ? buildCompositeReleaseRunGraph(
             action,
             atomicNodes,
-            { ...requestContext, repositoryRoot: requestWorkspacePath, skillRoots: requestRoots, operator: authOperator },
+            { ...executionContext, repositoryRoot: requestWorkspacePath, skillRoots: requestRoots, operator: authOperator },
             runInputs,
             { skillRoots: requestRoots, previousResult: releasePreviousResultForAgent(priorItemForAgent), operator: authOperator },
           )
-          : buildReleaseRunGraph(action, requestContext, runInputs);
+          : buildReleaseRunGraph(action, executionContext, runInputs);
         // 用户需求点: 已取消 AgentFlow 侧续跑；忽略 resumeFromStep，始终整图重跑。
         void payload.resumeFromStep;
         const graphRunNodeId = action.kind === "composite" ? Object.keys(graph.instances || {})[0] : "release_action";
@@ -1581,11 +1577,11 @@ async function workspaceRoutes(req, res, ctx) {
             inputs: runInputs,
             ignoreCache: true,
           }, userCtx, { runId: `${runId}-preview`, releaseRuntime: true });
-          const preview = await previewReleaseAction(action, { ...requestContext, repositoryRoot: requestWorkspacePath, skillRoots: requestRoots }, executionInputs, { atomicNodes, skillRoots: requestRoots });
+          const preview = await previewReleaseAction(action, { ...executionContext, repositoryRoot: requestWorkspacePath, skillRoots: requestRoots }, executionInputs, { atomicNodes, skillRoots: requestRoots });
           json(res, 200, { ok: true, status: "preview", runId, preview: previewResult, confirmationFingerprint: preview.confirmationFingerprint });
           return;
         }
-        if (action.requiresConfirmation && String(payload.confirmationFingerprint || "") !== confirmationFingerprint(action, requestContext, executionInputs)) {
+        if (action.requiresConfirmation && String(payload.confirmationFingerprint || "") !== confirmationFingerprint(action, executionContext, executionInputs)) {
           json(res, 409, { error: "确认指纹已失效，请重新预览", code: "RELEASE_CONFIRMATION_MISMATCH" });
           return;
         }
@@ -1600,7 +1596,7 @@ async function workspaceRoutes(req, res, ctx) {
           const now = Date.now();
           if (!force && now - lastReleaseHeartbeatAt < 2_000) return;
           lastReleaseHeartbeatAt = now;
-          const state = readReleaseStateForRequest(root, requestContext, requestWorkspaceId, requestWorkspacePath, requestRoots);
+          const state = readReleaseStateForRequest(root, executionContext, requestWorkspaceId, requestWorkspacePath, requestRoots);
           const existing = state.pending.find((item) => item.id === releaseItemId) || {};
           const runningItem = {
             ...existing,
@@ -1616,8 +1612,8 @@ async function workspaceRoutes(req, res, ctx) {
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
             sourcePresetId: releaseSourcePresetId(action, payload, existing),
-            scopeKey: requestedScopeKey || expectedScopeKey,
-            contextSnapshot: { ...requestContext },
+            scopeKey: executionScopeKey,
+            contextSnapshot: { ...executionContext },
             status: "running",
             progress: 0,
             inputs,
@@ -1632,7 +1628,7 @@ async function workspaceRoutes(req, res, ctx) {
           };
           state.pending = [...state.pending.filter((item) => item.id !== releaseItemId), runningItem];
           state.runs[runId] = { ...runningItem, logs: runEvents.slice(-50) };
-          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+          writeReleaseState(root, executionContext, requestWorkspaceId, state);
         };
         persistReleaseHeartbeat({ type: "run-start" }, true);
         const runPromise = runWorkspaceGraph(root, requestWorkspacePath, {
@@ -1656,11 +1652,11 @@ async function workspaceRoutes(req, res, ctx) {
           () => runController.finish("finished"),
           () => runController.finish("failed"),
         );
-        activeReleaseRuns.set(runId, { controller: runController, promise: runPromise, context: requestContext, workspaceId: requestWorkspaceId, itemId: String(payload.itemId || ""), action, inputs });
+        activeReleaseRuns.set(runId, { controller: runController, promise: runPromise, context: executionContext, workspaceId: requestWorkspaceId, itemId: String(payload.itemId || ""), action, inputs });
         if (url.pathname.endsWith("/preview") && action.requiresConfirmation) {
           const result = await runPromise;
           activeReleaseRuns.delete(runId);
-          const preview = await previewReleaseAction(action, { ...requestContext, repositoryRoot: requestWorkspacePath, skillRoots: requestRoots }, executionInputs, { atomicNodes, skillRoots: requestRoots });
+          const preview = await previewReleaseAction(action, { ...executionContext, repositoryRoot: requestWorkspacePath, skillRoots: requestRoots }, executionInputs, { atomicNodes, skillRoots: requestRoots });
           json(res, 200, { ok: true, status: "preview", runId, preview: result, confirmationFingerprint: preview.confirmationFingerprint });
           return;
         }
@@ -1669,7 +1665,7 @@ async function workspaceRoutes(req, res, ctx) {
           result = await runPromise;
         } catch (error) {
           activeReleaseRuns.delete(runId);
-          const failedState = readReleaseStateForRequest(root, requestContext, requestWorkspaceId, requestWorkspacePath, requestRoots);
+          const failedState = readReleaseStateForRequest(root, executionContext, requestWorkspaceId, requestWorkspacePath, requestRoots);
           const failedTiming = releaseTimingFromResult({ events: runEvents }, executionStartedAt);
           const failedDetails = releaseCompositeDetails(action, { events: runEvents, graph }, { repositoryRoot: requestWorkspacePath });
           const existing = failedState.pending.find((item) => item.id === payload.itemId) || {};
@@ -1693,8 +1689,8 @@ async function workspaceRoutes(req, res, ctx) {
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
             sourcePresetId: releaseSourcePresetId(action, payload, existing),
-            scopeKey: requestedScopeKey || expectedScopeKey,
-            contextSnapshot: { ...requestContext },
+            scopeKey: executionScopeKey,
+            contextSnapshot: { ...executionContext },
             status: "failed",
             progress: 0,
             inputs,
@@ -1709,12 +1705,12 @@ async function workspaceRoutes(req, res, ctx) {
           };
           failedState.pending = [...failedState.pending.filter((item) => item.id !== failedItem.id), failedItem];
           failedState.runs[runId] = { ...failedItem, logs: runEvents.slice(-200) };
-          writeReleaseState(root, requestContext, requestWorkspaceId, failedState);
+          writeReleaseState(root, executionContext, requestWorkspaceId, failedState);
           json(res, 422, { ok: false, status: "failed", code: failureCode, error: failedItem.error, runId, result: failedItem.output, ...(failedDetails ? { details: failedDetails } : {}), state: failedState });
           return;
         }
         activeReleaseRuns.delete(runId);
-        const state = readReleaseStateForRequest(root, requestContext, requestWorkspaceId, requestWorkspacePath, requestRoots);
+        const state = readReleaseStateForRequest(root, executionContext, requestWorkspaceId, requestWorkspacePath, requestRoots);
         const timing = releaseTimingFromResult(result);
         const timelineNodeId = releasePendingNodeId(action, payload, state.pending.find((item) => item.id === payload.itemId) || {});
         const agentResult = action.kind === "composite"
@@ -1738,8 +1734,8 @@ async function workspaceRoutes(req, res, ctx) {
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
             sourcePresetId: releaseSourcePresetId(action, payload, existing),
-            scopeKey: requestedScopeKey || expectedScopeKey,
-            contextSnapshot: { ...requestContext },
+            scopeKey: executionScopeKey,
+            contextSnapshot: { ...executionContext },
             status: "failed",
             progress: 0,
             inputs,
@@ -1753,7 +1749,7 @@ async function workspaceRoutes(req, res, ctx) {
           };
           state.pending = [...state.pending.filter((item) => item.id !== failedItem.id), failedItem];
           state.runs[runId] = { ...failedItem, logs: Array.isArray(result?.events) ? result.events.slice(-200) : [] };
-          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+          writeReleaseState(root, executionContext, requestWorkspaceId, state);
           json(res, 422, { ok: false, status: "failed", code: "RELEASE_AGENT_EMPTY_RESULT", error: failedItem.error, runId, result, ...(details ? { details } : {}), state });
           return;
         }
@@ -1775,8 +1771,8 @@ async function workspaceRoutes(req, res, ctx) {
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
             sourcePresetId: releaseSourcePresetId(action, payload, existing),
-            scopeKey: requestedScopeKey || expectedScopeKey,
-            contextSnapshot: { ...requestContext },
+            scopeKey: executionScopeKey,
+            contextSnapshot: { ...executionContext },
             status: "waiting",
             progress: 0,
             inputs,
@@ -1797,7 +1793,7 @@ async function workspaceRoutes(req, res, ctx) {
             status: "waiting",
             logs: Array.isArray(result?.events) ? result.events.slice(-200) : [],
           };
-          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+          writeReleaseState(root, executionContext, requestWorkspaceId, state);
           json(res, 200, { ok: true, status: "waiting", runId, result, ...(details ? { details } : {}), state });
           return;
         }
@@ -1817,8 +1813,8 @@ async function workspaceRoutes(req, res, ctx) {
             kind: action.kind || existing.kind || "",
             compositeId: action.compositeId || existing.compositeId || "",
             sourcePresetId: releaseSourcePresetId(action, payload, existing),
-            scopeKey: requestedScopeKey || expectedScopeKey,
-            contextSnapshot: { ...requestContext },
+            scopeKey: executionScopeKey,
+            contextSnapshot: { ...executionContext },
             status: "failed",
             progress: 0,
             inputs,
@@ -1832,7 +1828,7 @@ async function workspaceRoutes(req, res, ctx) {
           };
           state.pending = [...state.pending.filter((item) => item.id !== failedItem.id), failedItem];
           state.runs[runId] = { ...failedItem, logs: Array.isArray(result?.events) ? result.events.slice(-200) : [] };
-          writeReleaseState(root, requestContext, requestWorkspaceId, state);
+          writeReleaseState(root, executionContext, requestWorkspaceId, state);
           json(res, 422, { ok: false, status: "failed", code: "RELEASE_PREFLIGHT_FAILED", error: failure, runId, result, ...(details ? { details } : {}), state });
           return;
         }
@@ -1849,8 +1845,8 @@ async function workspaceRoutes(req, res, ctx) {
           kind: action.kind || "",
           compositeId: action.compositeId || "",
           sourcePresetId: releaseSourcePresetId(action, payload, {}),
-          scopeKey: requestedScopeKey || expectedScopeKey,
-          contextSnapshot: { ...requestContext },
+            scopeKey: executionScopeKey,
+            contextSnapshot: { ...executionContext },
           status: "completed",
           progress: 100,
           inputs,
@@ -1874,7 +1870,7 @@ async function workspaceRoutes(req, res, ctx) {
         ];
         state.pending = state.pending.filter((item) => item.id !== completedItem.id);
         state.runs[runId] = { ...completedItem, logs: Array.isArray(result?.events) ? result.events.slice(-200) : [] };
-        writeReleaseState(root, requestContext, requestWorkspaceId, state);
+        writeReleaseState(root, executionContext, requestWorkspaceId, state);
         json(res, 200, { ok: true, status: "completed", runId, result, ...(details ? { details } : {}), state });
         return;
       }

@@ -9,7 +9,7 @@ import {
   resolveWaitingInfo,
   truncateSummary,
 } from "../lib/releaseStageOutcome.js";
-import { createCompletionMetadata, createInitializationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, filterDismissedPending, mergeRemoteCatalog, normalizeCompositeSteps, releaseExecutionItemMatchesContext, releaseTimelineItemMatchesContext, removePendingNode, resolveReleaseContext, seedInitializationState, seedNextRecommendations } from "../lib/releaseWorkflowModel.js";
+import { createCompletionMetadata, createInitializationNode, createPresetInstance, defaultInputsForNode, ensureInitializationFirst, externalInputSchemaForNode, filterDismissedPending, groupCustomReleaseNodes, mergeRemoteCatalog, normalizeCompositeSteps, releaseExecutionItemMatchesContext, releaseNodeExecutionContext, releaseTimelineItemMatchesContext, removePendingNode, resolveReleaseContext, seedInitializationState, seedNextRecommendations, selectVisibleReleaseTimeline } from "../lib/releaseWorkflowModel.js";
 import { capabilityKeysForItem, createReleaseProcessStateMachine, processTitleForId, selectWorkflowProcessNodes } from "../lib/releaseWorkflowStateMachine.js";
 import { releaseMajorVersion } from "../../../../shared/release-workflow-config.js";
 import ReleaseNodeInspector from "./ReleaseNodeInspector.jsx";
@@ -84,6 +84,7 @@ function normalizeTimelineItem(value, index) {
     skill: stringValue(value.skill),
     preview: value.preview,
     confirmationFingerprint: stringValue(value.confirmationFingerprint),
+    targetBatch: stringValue(value.targetBatch),
     scopeKey: stringValue(value.scopeKey),
     contextSnapshot: isRecord(value.contextSnapshot) ? { ...value.contextSnapshot } : undefined,
     processId: stringValue(value.processId),
@@ -132,6 +133,7 @@ function normalizePendingItem(value, index) {
     skill: stringValue(value.skill),
     preview: value.preview,
     confirmationFingerprint: stringValue(value.confirmationFingerprint),
+    targetBatch: stringValue(value.targetBatch),
     scopeKey: stringValue(value.scopeKey),
     contextSnapshot: isRecord(value.contextSnapshot) ? { ...value.contextSnapshot } : undefined,
     processId: stringValue(value.processId),
@@ -171,6 +173,8 @@ function normalizeCustomNode(value) {
     skillHints: asStringArray(value.skillHints),
     requiresConfirmation: value.requiresConfirmation === true,
     insertableInAnyStage: value.insertableInAnyStage === true,
+    allowedBatches: asStringArray(value.allowedBatches),
+    targetBatch: stringValue(value.targetBatch),
     scopeKey: stringValue(value.scopeKey),
     contextSnapshot: isRecord(value.contextSnapshot) ? { ...value.contextSnapshot } : undefined,
     processId: stringValue(value.processId),
@@ -589,11 +593,13 @@ function groupCompletedTimelineRows(items, rowSize = 3) {
 
 // 用户需求点: 新增或推荐的 Create Release Branch 节点要直接带上标准分支名，操作员仍可在输入框中覆盖它。
 function makePending(node, inputs = {}, context = {}) {
+  const executionContext = releaseNodeExecutionContext(node, context);
   return {
     id: itemId(node.id), nodeId: node.id, title: node.title, description: node.description,
     category: node.category, status: "pending", progress: 0, createdAt: Date.now(), error: "", operator: "未记录", inputs: defaultInputsForNode(node, safeInputs(inputs)),
-    scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
-    contextSnapshot: { ...context },
+    targetBatch: executionContext.batch,
+    scopeKey: node.scopeKey || `${executionContext.businessLine}/${executionContext.platform}/${executionContext.version}/${executionContext.batch || "initial"}`,
+    contextSnapshot: { ...executionContext },
     processId: node.processId || "",
     processOrder: Number.isFinite(Number(node.processOrder)) ? Number(node.processOrder) : undefined,
     processTitle: node.processTitle || processTitleForId(node.processId),
@@ -609,7 +615,15 @@ function makePending(node, inputs = {}, context = {}) {
 
 function itemMatchesContext(item, context) {
   if (!item?.scopeKey) return true;
-  return item.scopeKey === `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`;
+  const currentScope = `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`;
+  if (item.scopeKey === currentScope) return true;
+  // 用户需求点: 首包页面添加的补包能力仍可执行；只要属于同一业务线、平台和大版本即可跨批次运行。
+  if (!String(item.id || "").startsWith("custom-")) return false;
+  const scope = String(item.scopeKey).split("/");
+  return scope.length >= 4
+    && scope[0].toLowerCase() === String(context.businessLine || "").toLowerCase()
+    && scope[1].toLowerCase() === String(context.platform || "").toLowerCase()
+    && releaseMajorVersion(scope[2]) === releaseMajorVersion(context.version);
 }
 
 function validateNodeInputs(node, item) {
@@ -671,46 +685,14 @@ export default function ReleaseWorkflowPanel({
   activeKeyRef.current = key;
   const catalogNodes = useMemo(() => remoteCatalog.length > 0 ? remoteCatalog : getReleaseNodes(context), [context, remoteCatalog]);
   const workflowMachine = useMemo(() => createReleaseProcessStateMachine({ context, nodes: catalogNodes }), [catalogNodes, context]);
-  const customNodeOptions = useMemo(() => selectWorkflowProcessNodes({ machine: workflowMachine, nodes: catalogNodes }), [catalogNodes, workflowMachine]);
-  const customNodeGroups = useMemo(() => {
-    const groups = [];
-    const byProcess = new Map();
-    for (const node of customNodeOptions) {
-      const processId = node.workflowProcessId || node.processId || "other";
-      let group = byProcess.get(processId);
-      if (!group) {
-        group = { id: processId, title: node.workflowProcessTitle || node.processTitle || processTitleForId(processId), nodes: [] };
-        byProcess.set(processId, group);
-        groups.push(group);
-      }
-      group.nodes.push(node);
-    }
-    // 用户需求点: 自由 Agent 只出现一次（助手驱动），不要复制到每个发版阶段分组。
-    const freePrompt = catalogNodes.find((node) => node.insertableInAnyStage === true || node.compositeId === "free-prompt-agent");
-    if (freePrompt) {
-      const alreadyListed = groups.some((group) => group.nodes.some((node) => node.compositeId === freePrompt.compositeId || node.id === freePrompt.id));
-      if (!alreadyListed) {
-        groups.push({
-          id: "assistant",
-          title: "助手驱动",
-          nodes: [{
-            ...freePrompt,
-            processId: freePrompt.processId || "entry",
-            processTitle: freePrompt.processTitle || "发版入口",
-            workflowProcessId: "assistant",
-            workflowProcessTitle: "助手驱动",
-            category: "助手驱动",
-          }],
-        });
-      }
-    }
-    return groups;
-  }, [catalogNodes, customNodeOptions]);
+  const customNodeOptions = useMemo(() => selectWorkflowProcessNodes({ machine: workflowMachine, nodes: catalogNodes, includeAllBatches: true }), [catalogNodes, workflowMachine]);
+  // 用户需求点: 自由 Agent 只出现一次（助手驱动），不要复制到每个发版阶段分组。
+  const customNodeGroups = useMemo(() => groupCustomReleaseNodes(customNodeOptions, catalogNodes), [catalogNodes, customNodeOptions]);
   const initializationNode = useMemo(() => createInitializationNode(context, workspace), [context, workspace]);
   const allNodes = useMemo(() => [initializationNode, ...catalogNodes, ...state.customNodes], [catalogNodes, initializationNode, state.customNodes]);
   const knownNodeIds = useMemo(() => new Set(allNodes.map((node) => node.id)), [allNodes]);
   const visibleState = useMemo(() => {
-    const timeline = state.timeline.filter((item) => (knownNodeIds.has(item.nodeId) || knownNodeIds.has(item.sourcePresetId)) && releaseTimelineItemMatchesContext(item, context));
+    const timeline = selectVisibleReleaseTimeline(state.timeline, knownNodeIds, context);
     const currentTimeline = timeline.filter((item) => releaseExecutionItemMatchesContext(item, context));
     const completedIds = new Set(currentTimeline.map((item) => item.nodeId));
     const pending = state.pending
@@ -910,7 +892,13 @@ export default function ReleaseWorkflowPanel({
       setMessage(`${item.title || item.nodeId || "发版节点"} 定义已失效，请刷新节点列表后重试`);
       return;
     }
-    if (!itemMatchesContext(item, context) || (node.scopeKey && node.scopeKey !== `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`)) {
+    const executionContext = releaseNodeExecutionContext(node, context);
+    const currentScopeKey = `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`;
+    const executionScopeKey = `${executionContext.businessLine}/${executionContext.platform}/${executionContext.version}/${executionContext.batch || "initial"}`;
+    const sameMajorTarget = releaseMajorVersion(executionContext.version) === releaseMajorVersion(context.version)
+      && executionContext.businessLine === context.businessLine
+      && executionContext.platform === context.platform;
+    if (!itemMatchesContext(item, context) || (node.scopeKey && node.scopeKey !== currentScopeKey && (!sameMajorTarget || node.scopeKey !== executionScopeKey))) {
       setMessage("节点不属于当前业务、平台和版本上下文");
       return;
     }
@@ -940,15 +928,15 @@ export default function ReleaseWorkflowPanel({
       // 用户需求点: 浏览器只提交 workspaceId；产品工程绝对路径由服务端按业务线+平台 allowlist 解析。
       const requestPayload = {
         workspaceId: workspaceIdentity(workspace),
-        businessLine: context.businessLine,
-        platform: context.platform,
-        version: context.version,
-        batch: context.batch || "initial",
+        businessLine: executionContext.businessLine,
+        platform: executionContext.platform,
+        version: executionContext.version,
+        batch: executionContext.batch || "initial",
         actionId,
         itemId: item.id,
         inputs: normalizedInputs,
         confirmationFingerprint: item.confirmationFingerprint || "",
-        scopeKey: node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
+        scopeKey: node.scopeKey || executionScopeKey,
         processId: node.processId || item.processId || "",
         processTitle: node.processTitle || item.processTitle || "",
       };
@@ -1089,7 +1077,9 @@ export default function ReleaseWorkflowPanel({
           processOrder: currentItem.processOrder ?? node.processOrder,
           processTitle: currentItem.processTitle || node.processTitle || processTitleForId(node.processId),
           workflowId: currentItem.workflowId || node.workflowId || previous.workflowId || "",
-          scopeKey: currentItem.scopeKey || node.scopeKey || `${context.businessLine}/${context.platform}/${context.version}/${context.batch || "initial"}`,
+          targetBatch: executionContext.batch,
+          scopeKey: executionScopeKey,
+          contextSnapshot: { ...executionContext },
           status: "completed",
           progress: 100,
           message: result.message,

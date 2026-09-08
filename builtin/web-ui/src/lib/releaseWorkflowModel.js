@@ -215,6 +215,57 @@ export function createInitializationPreparationNode(context = {}, workspace) {
   };
 }
 
+// 用户需求点: 跨批次自定义节点执行时，使用节点声明的目标批次；版本、业务线和平台仍继承当前发版上下文。
+export function releaseNodeExecutionContext(node = {}, context = {}) {
+  const currentBatch = String(context.batch || "initial").trim().toLowerCase() || "initial";
+  const allowedBatches = Array.isArray(node?.allowedBatches)
+    ? node.allowedBatches.map((value) => String(value || "").trim().toLowerCase()).filter(Boolean)
+    : [];
+  const declaredBatch = String(node?.targetBatch || node?.contextSnapshot?.batch || "").trim().toLowerCase();
+  const batch = declaredBatch && (allowedBatches.length === 0 || allowedBatches.includes(declaredBatch))
+    ? declaredBatch
+    : allowedBatches.includes(currentBatch)
+      ? currentBatch
+      : allowedBatches.length === 1 ? allowedBatches[0] : currentBatch;
+  return { ...context, batch };
+}
+
+// 用户需求点: 自由 Agent 只在“助手驱动”分组出现一次，普通阶段分组不能重复展示该节点。
+export function groupCustomReleaseNodes(customNodeOptions = [], catalogNodes = []) {
+  const source = Array.isArray(customNodeOptions) ? customNodeOptions : [];
+  const isFreeAgent = (node) => node?.insertableInAnyStage === true
+    || node?.compositeId === "free-prompt-agent"
+    || node?.id === "composite:free-prompt-agent";
+  const groups = [];
+  const byProcess = new Map();
+  for (const node of source.filter((item) => item && !isFreeAgent(item))) {
+    const processId = node.workflowProcessId || node.processId || "other";
+    let group = byProcess.get(processId);
+    if (!group) {
+      group = { id: processId, title: node.workflowProcessTitle || node.processTitle || processTitleForId(processId), nodes: [] };
+      byProcess.set(processId, group);
+      groups.push(group);
+    }
+    group.nodes.push(node);
+  }
+  const freePrompt = source.find(isFreeAgent) || (Array.isArray(catalogNodes) ? catalogNodes.find(isFreeAgent) : null);
+  if (freePrompt) {
+    groups.push({
+      id: "assistant",
+      title: "助手驱动",
+      nodes: [{
+        ...freePrompt,
+        processId: freePrompt.processId || "entry",
+        processTitle: freePrompt.processTitle || "发版入口",
+        workflowProcessId: "assistant",
+        workflowProcessTitle: "助手驱动",
+        category: "助手驱动",
+      }],
+    });
+  }
+  return groups;
+}
+
 // 用户需求点: 进入发版页即代表业务线、平台、版本已声明；活动发版写入由独立的初始化前置步骤负责。
 export function seedInitializationState(state, node) {
   if (!state || !node) return state;
@@ -345,6 +396,15 @@ export function releaseTimelineItemMatchesContext(item, context = {}) {
   return (!snapshot.businessLine || String(snapshot.businessLine).toLowerCase() === businessLine)
     && (!snapshot.platform || String(snapshot.platform).toLowerCase() === platform)
     && (!snapshot.version || releaseMajorVersion(snapshot.version) === majorVersion);
+}
+
+// 用户需求点: 同一大版本每次助手完成都要保留独立自由 Agent 节点；以 sourcePresetId 识别预置能力，不能按节点类型去重。
+export function selectVisibleReleaseTimeline(items = [], knownNodeIds = new Set(), context = {}) {
+  const knownIds = knownNodeIds instanceof Set ? knownNodeIds : new Set(knownNodeIds || []);
+  return (Array.isArray(items) ? items : []).filter((item) => (
+    (knownIds.has(item?.nodeId) || knownIds.has(item?.sourcePresetId))
+    && releaseTimelineItemMatchesContext(item, context)
+  ));
 }
 
 export function releaseExecutionItemMatchesContext(item, context = {}) {

@@ -18,6 +18,8 @@ import {
   removePendingNode,
   filterDismissedPending,
   isPendingDismissed,
+  groupCustomReleaseNodes,
+  releaseNodeExecutionContext,
 } from "../builtin/web-ui/src/lib/releaseWorkflowModel.js";
 import { RELEASE_WORKFLOW_CONFIG } from "../shared/release-workflow-config.js";
 
@@ -489,6 +491,50 @@ test("static release catalog exposes free-prompt agent without putting it in def
   assert.ok(free.inputSchema.some((input) => input.key === "prompt"));
 });
 
+test("custom node picker isolates free Agent in the assistant group", () => {
+  const freeAgent = {
+    id: "composite:free-prompt-agent",
+    compositeId: "free-prompt-agent",
+    title: "自由 Agent",
+    processId: "entry",
+    processTitle: "发版入口",
+    workflowProcessId: "entry",
+    workflowProcessTitle: "发版入口",
+    insertableInAnyStage: true,
+  };
+  const groups = groupCustomReleaseNodes([
+    freeAgent,
+    {
+      id: "composite:create-release-branch",
+      title: "创建发版分支",
+      workflowProcessId: "entry",
+      workflowProcessTitle: "发版入口",
+    },
+  ], [freeAgent]);
+
+  assert.deepEqual(groups.map((group) => group.id), ["entry", "assistant"]);
+  assert.deepEqual(groups[0].nodes.map((node) => node.id), ["composite:create-release-branch"]);
+  assert.deepEqual(groups[1].nodes.map((node) => node.id), ["composite:free-prompt-agent"]);
+  assert.equal(groups[1].title, "助手驱动");
+  assert.equal(groups.flatMap((group) => group.nodes).filter((node) => node.id === freeAgent.id).length, 1);
+});
+
+test("supplemental-only custom nodes execute in their own batch within the same major version", () => {
+  const context = { businessLine: "likee", platform: "android", version: "5.64.0", batch: "initial" };
+  const executionContext = releaseNodeExecutionContext({
+    id: "composite:supplemental-publish-and-notify",
+    allowedBatches: ["supplemental"],
+    targetBatch: "supplemental",
+  }, context);
+
+  assert.deepEqual(executionContext, {
+    businessLine: "likee",
+    platform: "android",
+    version: "5.64.0",
+    batch: "supplemental",
+  });
+});
+
 test("static release catalog does not expose the initialization context as an addable node", async () => {
   const { getReleaseNodes } = await import("../builtin/web-ui/src/lib/releaseNodeCatalog.js");
   const nodes = getReleaseNodes({ businessLine: "likee", platform: "android", version: "1.3.0", batch: "initial" });
@@ -496,4 +542,36 @@ test("static release catalog does not expose the initialization context as an ad
   assert.equal(preparation.length, 0);
   assert.equal(nodes.some((node) => node.id === "release-initialization"), false);
   assert.equal(nodes.some((node) => node.id === "localization-upload-notify"), false);
+});
+
+test("visible timeline keeps every completed free Agent instance across one major version", async () => {
+  const model = await import(`../builtin/web-ui/src/lib/releaseWorkflowModel.js?free-agent-timeline=${Date.now()}`);
+  assert.equal(typeof model.selectVisibleReleaseTimeline, "function");
+  const knownIds = new Set(["composite:free-prompt-agent"]);
+  const timeline = [
+    {
+      id: "custom-free-prompt-agent-first",
+      nodeId: "custom-free-prompt-agent-first",
+      sourcePresetId: "composite:free-prompt-agent",
+      status: "completed",
+      scopeKey: "likee/android/5.64.0/initial",
+    },
+    {
+      id: "custom-free-prompt-agent-second",
+      nodeId: "custom-free-prompt-agent-second",
+      sourcePresetId: "composite:free-prompt-agent",
+      status: "completed",
+      scopeKey: "likee/android/5.64.1/supplemental",
+    },
+  ];
+  const visible = model.selectVisibleReleaseTimeline(timeline, knownIds, {
+    businessLine: "likee",
+    platform: "android",
+    version: "5.64.1",
+    batch: "supplemental",
+  });
+  assert.deepEqual(visible.map((item) => item.id), [
+    "custom-free-prompt-agent-first",
+    "custom-free-prompt-agent-second",
+  ]);
 });

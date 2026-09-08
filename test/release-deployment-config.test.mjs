@@ -86,6 +86,30 @@ test("dev release Skill roots exclude the removed Google Play AAB extension", as
   assert.deepEqual(roots, [path.join(workspaceRoot, ".workspace", "release-skills")]);
 });
 
+test("local dev mode ignores the production data-root release project file", async () => {
+  const { readReleaseDeploymentConfig } = await import("../shared/release-deployment-config.js?dev-production-isolation");
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "release-dev-isolation-"));
+  const configPath = path.join(tempRoot, "release-projects.json");
+  fs.writeFileSync(configPath, JSON.stringify({
+    projects: [{ id: "prod-likee-android", businessLine: "likee", platform: "android", workspaceRoot: "/data1/services/mengmai/workspace/repos/likee_android", skillRoots: ["/data1/services/mengmai/skills"] }],
+    operators: { likee: { android: ["duanfengyuan"], ios: [] } },
+  }));
+  try {
+    const config = readReleaseDeploymentConfig({ AGENTFLOW_DEV: "1", AGENTFLOW_RELEASE_TEST_MODE: "1" }, { defaultFilePath: configPath });
+    const project = config.projects.find((entry) => entry.businessLine === "likee" && entry.platform === "android");
+    assert.equal(project?.id, "likee-android-local");
+    assert.equal(project?.workspaceRoot, "/Users/duanfengyuan/migration-workspace/test/likee_android");
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("local dev identity can execute the local Likee Android release flow", async () => {
+  const { readReleaseDeploymentConfig, canWriteRelease } = await import("../shared/release-deployment-config.js?local-dev-operator");
+  const config = readReleaseDeploymentConfig({ AGENTFLOW_DEV: "1", AGENTFLOW_RELEASE_TEST_MODE: "1" }, { defaultFilePath: path.join(os.tmpdir(), `missing-release-projects-${Date.now()}.json`) });
+  assert.equal(canWriteRelease("local-dev", { businessLine: "likee", platform: "android" }, config), true);
+});
+
 test("reads release-projects.json from the default data-root file when env is unset", async () => {
   const { readReleaseDeploymentConfig, resolveReleaseProjectsFilePath, writeReleaseProjectsDocument } = await import("../shared/release-deployment-config.js?config-default-file");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-projects-default-"));

@@ -85,7 +85,7 @@ function projectsFromJson(raw) {
 
 const DEFAULT_DEV_OPERATORS = Object.freeze({
   likee: Object.freeze({
-    android: Object.freeze(["duanfengyuan", "suruijia", "wangfang"]),
+    android: Object.freeze(["duanfengyuan", "suruijia", "wangfang", "local-dev"]),
     ios: Object.freeze(["liangjiajian", "yangcaimu"]),
   }),
   bigolive: Object.freeze({ android: Object.freeze([]), ios: Object.freeze([]) }),
@@ -382,6 +382,8 @@ export function writeReleaseProjectsDocument(filePath, raw = {}) {
  */
 export function readReleaseDeploymentConfig(env = process.env, options = {}) {
   const envObject = env && typeof env === "object" ? env : {};
+  const isDevTest = text(envObject.AGENTFLOW_DEV) === "1" && text(envObject.AGENTFLOW_RELEASE_TEST_MODE) === "1";
+  const hasExplicitProjectConfig = Boolean(text(envObject.AGENTFLOW_RELEASE_PROJECTS_JSON) || text(envObject.AGENTFLOW_RELEASE_PROJECTS_FILE));
   let projectsSource = "none";
   let projectsFilePath = "";
   let raw = parseJson(envObject.AGENTFLOW_RELEASE_PROJECTS_JSON, "AGENTFLOW_RELEASE_PROJECTS_JSON");
@@ -410,10 +412,17 @@ export function readReleaseDeploymentConfig(env = process.env, options = {}) {
       }
     }
   }
+  // 本地开发与线上数据根隔离：npm run dev 不得误读数据根中残留的生产路径和 Skill 根。
+  // 只有显式传入本地配置时才允许覆盖这一默认行为。
+  const useLocalDevDefaults = isDevTest && !hasExplicitProjectConfig && fs.existsSync(LOCAL_DEV_RELEASE_ROOT);
+  if (useLocalDevDefaults) {
+    raw = {};
+    projectsSource = "dev-default";
+    projectsFilePath = "";
+  }
   let projects = projectsFromJson(raw).filter((entry) => entry.enabled !== false);
   // 用户需求点: 本地 npm run dev 应默认连接 likee Android 测试发版工程，重试节点时不能因服务端根目录不同而被 allowlist 拒绝。
   // 仅限开发+测试模式且本机目录确实存在；线上和普通测试仍必须显式配置项目 allowlist。
-  const isDevTest = text(envObject.AGENTFLOW_DEV) === "1" && text(envObject.AGENTFLOW_RELEASE_TEST_MODE) === "1";
   if (!raw.configError && !projects.length && isDevTest && fs.existsSync(LOCAL_DEV_RELEASE_ROOT)) {
     projects = [normalizeProject({
       id: "likee-android-local",

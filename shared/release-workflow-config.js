@@ -156,9 +156,12 @@ function nodeId(node) { return typeof node === "string" ? node : String(node?.id
 function capabilityList(config = RELEASE_WORKFLOW_CONFIG) { return Array.isArray(config?.capabilities) ? config.capabilities : Array.isArray(config?.compositeWorkflows) ? config.compositeWorkflows : []; }
 
 // 用户需求点: 能力和状态机必须按同一业务线、平台、批次上下文选择，不能跨平台暴露节点。
-export function selectReleaseCompositeWorkflow(context = {}, config = RELEASE_WORKFLOW_CONFIG) {
+export function selectReleaseCompositeWorkflow(context = {}, config = RELEASE_WORKFLOW_CONFIG, options = {}) {
   const scope = contextScope(context); const requestedId = String(context.capabilityId || context.compositeId || context.id || "").trim(); const stageId = String(context.stageId || "").trim();
-  const candidates = capabilityList(config).filter((item) => scopeMatches(item?.businessLines, scope.businessLine) && scopeMatches(item?.platforms, scope.platform) && scopeMatches(item?.batches, scope.batch) && (!stageId || item?.insertableInAnyStage === true || String(item?.stageId || "") === stageId));
+  const includeAllBatches = options?.includeAllBatches === true;
+  const candidates = capabilityList(config).filter((item) => scopeMatches(item?.businessLines, scope.businessLine) && scopeMatches(item?.platforms, scope.platform)
+    && (includeAllBatches || scopeMatches(item?.batches, scope.batch))
+    && (!stageId || item?.insertableInAnyStage === true || String(item?.stageId || "") === stageId));
   if (requestedId) return candidates.find((item) => String(item?.id || "").trim() === requestedId) || null;
   return candidates.length === 1 ? candidates[0] : null;
 }

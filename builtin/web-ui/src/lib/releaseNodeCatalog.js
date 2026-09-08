@@ -8,6 +8,11 @@ import { selectReleaseWorkflow, selectReleaseCompositeWorkflow, workflowStageNod
 
 const ALL_BUSINESS_LINES = ["likee", "bigolive", "hello"];
 const BOTH_PLATFORMS = ["android", "ios"];
+function targetBatchForDefinition(definition, context = {}) {
+  const current = normalize(context.batch || "initial");
+  const allowed = Array.isArray(definition?.batches) ? definition.batches.map(normalize).filter(Boolean) : [];
+  return allowed.includes(current) ? current : allowed.length === 1 ? allowed[0] : current;
+}
 function node(definition) {
   const result = {
     businessLines: ALL_BUSINESS_LINES,
@@ -228,17 +233,19 @@ function configuredFallbackNodes(context = {}) {
 }
 
 // 用户需求点: API 暂不可用时，静态目录也要保持复合流程默认推荐与线上 catalog 一致。
-function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
+function configuredFallbackCompositeNodes(context = {}, atomicNodes = [], options = {}) {
   const workflow = selectReleaseWorkflow(context);
   if (!workflow) return [];
   const byId = new Map(atomicNodes.map((node) => [node.id, node]));
   const result = [];
   const seen = new Set();
+  const includeAllBatches = options?.includeAllBatches === true;
   for (const stage of workflow.stages || []) {
-    if (Array.isArray(stage.batches) && !stage.batches.includes(normalize(context.batch || "initial"))) continue;
+    if (!includeAllBatches && Array.isArray(stage.batches) && !stage.batches.includes(normalize(context.batch || "initial"))) continue;
     for (const compositeId of (stage.compositeIds || stage.capabilityIds || workflowStageNodeIds(stage))) {
-      const composite = selectReleaseCompositeWorkflow({ ...context, compositeId, stageId: stage.id });
+      const composite = selectReleaseCompositeWorkflow({ ...context, compositeId, stageId: stage.id }, undefined, { includeAllBatches });
       if (!composite || seen.has(composite.id)) continue;
+      const targetBatch = targetBatchForDefinition(composite, context);
       if (!Array.isArray(composite.actions)) {
         result.push({
           id: composite.nodeId || `composite:${composite.id}`, kind: "composite", compositeId: composite.id,
@@ -248,7 +255,9 @@ function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
           skillHints: [...(composite.skillHints || [])], promptTemplate: composite.promptTemplate || "",
           inputSchema: (composite.inputs || []).map((input) => ({ ...input })), outputs: (composite.outputs || []).map((output) => ({ ...output })),
           requiresConfirmation: composite.requiresConfirmation === true, actions: undefined, nextNodeIds: [],
-          scopeKey: `${context.businessLine}/${context.platform}/${context.version || "1.0.0"}/${context.batch || "initial"}`,
+          targetBatch,
+          contextSnapshot: { ...context, batch: targetBatch },
+          scopeKey: `${context.businessLine}/${context.platform}/${context.version || "1.0.0"}/${targetBatch}`,
         });
         seen.add(composite.id);
         continue;
@@ -304,7 +313,9 @@ function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
         inputSchema,
         requiresConfirmation: actions.some((entry) => entry.requiresConfirmation === true),
         nextNodeIds: [],
-        scopeKey: `${context.businessLine}/${context.platform}/${context.version || "1.0.0"}/${context.batch || "initial"}`,
+        targetBatch,
+        contextSnapshot: { ...context, batch: targetBatch },
+        scopeKey: `${context.businessLine}/${context.platform}/${context.version || "1.0.0"}/${targetBatch}`,
       });
       seen.add(composite.id);
     }
@@ -315,6 +326,7 @@ function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
     const stage = (workflow.stages || []).find((item) => String(item?.id || "") === String(composite.stageId || ""))
       || (workflow.stages || [])[0]
       || { id: "entry", title: "发版入口", order: 0 };
+    const targetBatch = targetBatchForDefinition(composite, context);
     result.push({
       id: composite.nodeId || `composite:${composite.id}`,
       kind: "composite",
@@ -338,7 +350,9 @@ function configuredFallbackCompositeNodes(context = {}, atomicNodes = []) {
       requiresConfirmation: composite.requiresConfirmation === true,
       actions: undefined,
       nextNodeIds: [],
-      scopeKey: `${context.businessLine}/${context.platform}/${context.version || "1.0.0"}/${context.batch || "initial"}`,
+      targetBatch,
+      contextSnapshot: { ...context, batch: targetBatch },
+      scopeKey: `${context.businessLine}/${context.platform}/${context.version || "1.0.0"}/${targetBatch}`,
     });
     seen.add(composite.id);
   }
@@ -350,7 +364,7 @@ export function getReleaseNodes({ businessLine, platform, version = "1.0.0", bat
   const targetPlatform = normalize(platform);
   if (!selectReleaseWorkflow({ businessLine: line, platform: targetPlatform, batch })) return [];
   const atomicFallback = configuredFallbackNodes({ businessLine: line, platform: targetPlatform, version, batch });
-  const composites = configuredFallbackCompositeNodes({ businessLine: line, platform: targetPlatform, version, batch }, atomicFallback);
+  const composites = configuredFallbackCompositeNodes({ businessLine: line, platform: targetPlatform, version, batch }, atomicFallback, { includeAllBatches: true });
   // 共享状态机声明的是 Agent 能力；静态回退也只暴露复合 Agent 节点，避免把同一能力
   // 以 capability id 和旧原子 Action 两份同时展示在“自定义添加阶段”。
   const catalog = composites.length ? composites : atomicFallback;

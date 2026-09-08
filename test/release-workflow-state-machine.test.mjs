@@ -54,6 +54,36 @@ test("uses the same Likee Android workflow for initial and supplemental batches"
   ]);
 });
 
+test("custom-stage candidates include supplemental capabilities from the shared major-version catalog", () => {
+  const initialNodes = [
+    node("localization-upload-notify"),
+    node("start-supplemental-release-notify", initialContext, {
+      allowedBatches: ["supplemental"],
+      // Catalog entries are scoped to the page context; allowedBatches is
+      // retained as capability metadata and must not hide custom selection.
+      contextSnapshot: { businessLine: "likee", platform: "android", version: "5.63.2" },
+    }),
+  ];
+  const stateMachine = createReleaseProcessStateMachine({ context: initialContext, nodes: initialNodes });
+  const candidates = selectWorkflowProcessNodes({ machine: stateMachine, nodes: initialNodes, includeAllBatches: true });
+  assert.ok(candidates.some((item) => item.id === "start-supplemental-release-notify"));
+});
+
+test("custom-stage all-batch candidates exclude nodes outside the selected workflow", () => {
+  const context = initialContext;
+  const nodes = [
+    node("localization-upload-notify", context),
+    node("start-supplemental-release-notify", context, { allowedBatches: ["supplemental"] }),
+    node("unknown-action", context),
+  ];
+  const stateMachine = createReleaseProcessStateMachine({ context, nodes });
+  const candidates = selectWorkflowProcessNodes({ machine: stateMachine, nodes, includeAllBatches: true });
+  assert.deepEqual(candidates.map((item) => item.id), [
+    "localization-upload-notify",
+    "start-supplemental-release-notify",
+  ]);
+});
+
 test("supplemental entry recommends start-supplemental-release-notify after initialization", () => {
   const stateMachine = machine(supplementalContext);
   assert.deepEqual(recommendNextProcessNodes({

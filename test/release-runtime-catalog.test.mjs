@@ -45,6 +45,32 @@ test("discovers action-level release nodes and filters by platform and batch", a
   }
 });
 
+test("release capability catalog keeps initial and supplemental nodes in one major-version collection", async () => {
+  const { discoverReleaseCompositeActions, releaseExecutionContextForAction } = await import(`../bin/lib/release-runtime.mjs?catalog-all-batches=${Date.now()}`);
+  const context = {
+    businessLine: "likee",
+    platform: "android",
+    version: "5.64.0",
+    batch: "initial",
+  };
+  const nodes = discoverReleaseCompositeActions({
+    ...context,
+  }, [], undefined, { includeAllBatches: true });
+  const ids = nodes.map((node) => node.id);
+  assert.ok(ids.includes("composite:start-supplemental-release-notify"));
+  assert.ok(ids.includes("composite:supplemental-publish-and-notify"));
+  assert.ok(ids.includes("composite:initial-publish-and-notify"));
+  const supplemental = nodes.find((node) => node.id === "composite:supplemental-publish-and-notify");
+  assert.equal(supplemental.targetBatch, "supplemental");
+  assert.equal(supplemental.scopeKey, "likee/android/5.64.0/supplemental");
+  assert.deepEqual(releaseExecutionContextForAction(supplemental, context), {
+    businessLine: "likee",
+    platform: "android",
+    version: "5.64.0",
+    batch: "supplemental",
+  });
+});
+
 test("dynamic catalog applies Android supplemental gray_percent schema override", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "release-records-gray-schema-"));
   try {
