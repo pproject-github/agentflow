@@ -1,9 +1,11 @@
 /**
- * 与 AI_Workspace agentflow/flowFormat.ts 对齐：统一 flow.yaml（instances / edges / ui）
+ * 画布上的节点/实例互转，以及复制粘贴。
+ *
+ * 这个文件原本还有 flow.yaml 的读写（`deserializeFromFlowYaml` / `serializeToFlowYaml`），
+ * 随 Start/End Pipeline 运行时一起退休后没人再调，但它长得和真正的加载入口一模一样：
+ * 0.1.190 把边的身份换成槽位名时，改的就是这份死代码，活着的 `graphToFlow` 因此没人看，
+ * 上线后整张图的连线全不见。留着一份没人跑的同形代码，就是留着一个让人改错地方的靶子。
  */
-import { edgesWithCanvasHandles } from "../../../shared/slot-handles.js";
-import { MarkerType } from "@xyflow/react";
-import yaml from "js-yaml";
 
 export const VALID_ROLES = ["requirement", "planning", "code", "test", "normal"];
 
@@ -15,158 +17,8 @@ const ROLE_ZH_TO_KEY = {
   需求拆解: "requirement",
 };
 
-const TYPE_ZH_TO_KEY = {
-  节点: "node",
-  文本: "text",
-  文件: "file",
-  bool: "bool",
-  布尔: "bool",
-};
-
-const VALID_NODE_TYPES = ["agent", "control", "provide", "condition", "jump", "condition_jump", "start", "end"];
-
-function normalizeNodeType(t) {
-  return VALID_NODE_TYPES.includes(t) ? t : "agent";
-}
-
-function definitionIdToType(definitionId) {
-  const id = (definitionId || "").toLowerCase();
-  if (id.startsWith("control_")) return "control";
-  if (id.startsWith("agent_")) return "agent";
-  if (id.startsWith("provide_")) return "provide";
-  if (id.startsWith("tool_")) return "agent";
-  return "agent";
-}
-
 /**
- * @param {string} flowYamlContent
- * @returns {{ nodes: import('@xyflow/react').Node[], edges: import('@xyflow/react').Edge[], instances: Record<string, any>, description?: string, viewport?: { x: number, y: number, zoom: number } } | { error: string }}
- */
-export function deserializeFromFlowYaml(flowYamlContent) {
-  if (!flowYamlContent?.trim()) {
-    return { nodes: [], edges: [], instances: {} };
-  }
-  try {
-    const raw = yaml.load(flowYamlContent);
-    if (!raw || typeof raw !== "object") {
-      return { error: "flow.yaml 格式无效：根内容不是对象" };
-    }
-    const data = raw;
-    const instances = data.instances && typeof data.instances === "object" ? data.instances : {};
-    const edgesRaw = Array.isArray(data.edges)
-      ? data.edges
-      : Array.isArray(data.flow?.edges)
-        ? data.flow.edges
-        : [];
-    const ui = data.ui && typeof data.ui === "object" ? data.ui : {};
-    const nodePositions = ui.nodePositions && typeof ui.nodePositions === "object" ? ui.nodePositions : {};
-    const nodeSizes = ui.nodeSizes && typeof ui.nodeSizes === "object" ? ui.nodeSizes : {};
-    const rawViewport = ui.viewport && typeof ui.viewport === "object" ? ui.viewport : null;
-    const viewport =
-      rawViewport &&
-      Number.isFinite(Number(rawViewport.x)) &&
-      Number.isFinite(Number(rawViewport.y)) &&
-      Number.isFinite(Number(rawViewport.zoom))
-        ? {
-            x: Number(rawViewport.x),
-            y: Number(rawViewport.y),
-            zoom: Math.min(Math.max(Number(rawViewport.zoom), 0.1), 4),
-          }
-        : undefined;
-    const description =
-      typeof ui.description === "string" && ui.description.trim() ? ui.description.trim() : undefined;
-
-    const nodeIds = new Set(Object.keys(instances));
-    for (const e of edgesRaw) {
-      if (e?.source) nodeIds.add(String(e.source));
-      if (e?.target) nodeIds.add(String(e.target));
-    }
-
-    const nodes = Array.from(nodeIds).map((id) => {
-      const inst = instances[id];
-      const position =
-        nodePositions[id] && typeof nodePositions[id].x === "number" && typeof nodePositions[id].y === "number"
-          ? { x: nodePositions[id].x, y: nodePositions[id].y }
-          : { x: 0, y: 0 };
-      const size =
-        nodeSizes[id] && typeof nodeSizes[id].width === "number" && typeof nodeSizes[id].height === "number"
-          ? { width: nodeSizes[id].width, height: nodeSizes[id].height }
-          : null;
-      const definitionId = inst?.definitionId ?? id;
-      const type = definitionIdToType(definitionId);
-      const label = inst?.label != null ? String(inst.label) : id;
-      const rawRole = inst?.role != null ? String(inst.role).trim() : "";
-      const normalizedRole = ROLE_ZH_TO_KEY[rawRole] || rawRole;
-      const role = VALID_ROLES.includes(normalizedRole) ? normalizedRole : "normal";
-      const model = inst?.model != null ? String(inst.model).trim() : undefined;
-      const body = inst?.body != null ? String(inst.body) : "";
-      const script = inst?.script != null ? String(inst.script) : "";
-      const scriptRef = inst?.scriptRef != null ? String(inst.scriptRef) : "";
-      const implementationRef = inst?.implementationRef != null ? String(inst.implementationRef) : "";
-      const implementationMode = inst?.implementationMode != null ? String(inst.implementationMode) : "";
-      const images = Array.isArray(inst?.images) ? inst.images : [];
-      return {
-        id,
-        type: normalizeNodeType(type),
-        position,
-        ...(size ? { width: size.width, height: size.height } : {}),
-        data: {
-          label,
-          definitionId,
-          schemaType: type,
-          role,
-          model: model || undefined,
-          body,
-          images,
-          ...(size ? { displaySize: size } : {}),
-          ...(script.trim() !== "" ? { script } : {}),
-          ...(scriptRef.trim() !== "" ? { scriptRef } : {}),
-          ...(implementationRef.trim() !== "" ? { implementationRef } : {}),
-          ...(implementationMode.trim() !== "" ? { implementationMode } : {}),
-        },
-      };
-    });
-
-    // 磁盘和 API 上边的身份是槽位名；React Flow 的句柄是位置坐标。换算只发生在这条边界上。
-    const edges = edgesWithCanvasHandles(
-      edgesRaw.filter((e) => e?.source && e?.target),
-      (id) => instances[id],
-    ).map((e, i) => ({
-      id: `e-${e.source}-${e.target}-${i}`,
-      source: String(e.source),
-      target: String(e.target),
-      sourceHandle: e.sourceHandle,
-      targetHandle: e.targetHandle,
-      markerEnd: { type: MarkerType.ArrowClosed },
-    }));
-
-    return { nodes, edges, instances, description, ...(viewport ? { viewport } : {}) };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    let hint = "";
-    // 最常见根因：script / body / value 字段裸写含 `:` 或引号的命令字符串，YAML 把 `: ` 当成新 mapping
-    if (/bad indentation of a mapping entry|expected.*scalar|mapping values are not allowed/i.test(message)) {
-      const lineMatch = message.match(/\((\d+):/);
-      const lineHint = lineMatch ? `第 ${lineMatch[1]} 行附近` : "";
-      hint =
-        `\n\n💡 提示：通常由 ${lineHint}的 \`script\` / \`body\` / \`value\` 字段裸写命令字符串引起。` +
-        `\nYAML 中含 \`: \`、\`"\`、\`'\` 等特殊字符的多行字符串必须使用 \`|\` 块标量。` +
-        `\n\n✅ 正确写法：` +
-        `\n\`\`\`yaml` +
-        `\nscript: |` +
-        `\n  node -e "console.log('TODO: scripts/x.mjs')"` +
-        `\n\`\`\`` +
-        `\n❌ 错误写法（当前文件）：` +
-        `\n\`\`\`yaml` +
-        `\nscript: node -e "console.log('TODO: scripts/x.mjs')"` +
-        `\n\`\`\``;
-    }
-    return { error: `flow.yaml 解析失败：${message}${hint}` };
-  }
-}
-
-/**
- * 将画布节点与已有 instances 合并，生成写入 flow.yaml 的 instances（含节点上可编辑字段）。
+ * 将画布节点与已有 instances 合并，生成写回图的 instances（含节点上可编辑字段）。
  * @param {import('@xyflow/react').Node[]} nodes
  * @param {Record<string, any>} instancesMap
  * @returns {Record<string, any>}
@@ -384,42 +236,3 @@ export function pasteCanvasClipboard(clipboard, nodes, edges, instancesMap, opti
  * @param {Record<string, any>} instancesMap
  * @param {{ description?: string, viewport?: { x: number, y: number, zoom: number } | null }} [options]
  */
-export function serializeToFlowYaml(nodes, edges, instancesMap, options) {
-  const instances = buildInstancesForYaml(nodes, instancesMap);
-  const flowEdges = edges.map((e) => ({
-    source: e.source,
-    target: e.target,
-    sourceHandle: e.sourceHandle ?? null,
-    targetHandle: e.targetHandle ?? null,
-  }));
-  const nodePositions = {};
-  const nodeSizes = {};
-  for (const n of nodes) {
-    const p = n.position ?? { x: 0, y: 0 };
-    nodePositions[n.id] = { x: p.x, y: p.y };
-    const width = Number(n.data?.displaySize?.width || n.width || 0);
-    const height = Number(n.data?.displaySize?.height || n.height || 0);
-    if (width > 0 && height > 0) {
-      nodeSizes[n.id] = { width: Math.round(width), height: Math.round(height) };
-    }
-  }
-  const ui = { nodePositions };
-  if (Object.keys(nodeSizes).length > 0) ui.nodeSizes = nodeSizes;
-  if (
-    options?.viewport &&
-    Number.isFinite(Number(options.viewport.x)) &&
-    Number.isFinite(Number(options.viewport.y)) &&
-    Number.isFinite(Number(options.viewport.zoom))
-  ) {
-    ui.viewport = {
-      x: Number(options.viewport.x),
-      y: Number(options.viewport.y),
-      zoom: Math.min(Math.max(Number(options.viewport.zoom), 0.1), 4),
-    };
-  }
-  if (options?.description != null && String(options.description).trim() !== "") {
-    ui.description = String(options.description).trim();
-  }
-  const unified = { instances, edges: flowEdges, ui };
-  return yaml.dump(unified, { lineWidth: -1 });
-}

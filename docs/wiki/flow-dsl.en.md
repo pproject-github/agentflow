@@ -159,10 +159,14 @@ deviate; everything else is rebuilt as "definition order + custom slots seen in 
 **The canvas has more than one loading entry.** On disk and over the API an edge is
 identified by slot name; a React Flow handle is the pin's index in the slot table being
 rendered (`FlowNodePortRail` emits `output-<i>` by array index, hidden slots included).
-The conversion lives in `edgesWithCanvasHandles`, shared by `flowFormat.js` and the
-Workspace canvas -- writing it twice is how one entry gets missed, and under that entry
-every edge in the graph disappears: the handle names match no rendered handle, so React
-Flow keeps the edges and draws none of them. Resolve an index against the table the edge
+The conversion lives in `edgesWithCanvasHandles`, and `graphToFlow` is its only caller.
+There used to be a second, identical-looking one: `deserializeFromFlowYaml` in
+`flowFormat.js`, written for the retired `flow.yaml` editor and called by nothing. When
+0.1.190 made slot names the identity of an edge, that dead copy is what got converted, the
+live entry was never looked at, and every graph opened with no edges at all -- the handle
+names matched no rendered handle, so React Flow kept the edges and drew none of them. The
+dead code is gone: **a never-executed copy that looks like the real thing is a target for
+fixing the wrong place**. Resolve an index against the table the edge
 was **written** against, and convert to an index against the table being **rendered** --
 they are not the same table, since merging the definition adds slots and reorders them.
 
