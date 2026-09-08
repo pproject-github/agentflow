@@ -77,6 +77,7 @@ import { createWorkspaceRunController, resolveWorkspaceRunTimeoutMs } from "./wo
 import { readWorkspaceRunState, readWorkspaceRunStateEvents, readWorkspaceRunStateHistory } from "./workspace-run-state.mjs";
 import { listWorkspaceInterrupts, readWorkspaceInterrupt } from "./workspace-interrupt.mjs";
 import { activeWorkspaceRuns, appendWorkspaceRunFinished, appendWorkspaceRunStarted, cleanupWorkspaceRunResources, hydrateWorkspaceGraphForRuntime, isReadonlyBuiltinFlowSource, isTransientAgentNetworkError, isValidFlowSourceRead, isWorkspaceRunAbortError, listWorkspaceScheduleStatusesForFlow, mergeWorkspacePersistentNodeRefs, mergeWorkspaceRunGraph, normalizeWorkspaceEntry, normalizeWorkspaceScheduledRunConfig, publishWorkspaceRelease, readWorkspaceConversations, readWorkspaceFiles, readWorkspaceGraph, readWorkspaceReleaseStatus, readWorkspaceStableRelease, readWorkspaceRunManifest, removeWorkspaceDeferredRun, resolveWorkspaceFilePath, resolveWorkspaceScopeRoot, rollbackWorkspaceRelease, runWorkspaceGraph, sleepMs, syncWorkspaceSchedulesForGraph, upsertWorkspaceDeferredRun, workspaceActiveRunsForScope, workspaceCollaborationEventKey, workspaceCollaborationSequences, workspaceCollaborationSubscribers, workspaceCollaborationSummaryWithUsers, workspaceDeferredRunsForScope, workspaceDesignPath, workspaceDownloadContentDisposition, workspaceFindActiveRunConflict, workspaceGraphAsSource, workspaceOptimizeRunImplementations, workspaceRepoUrlWithCredential, workspaceRunControl, workspaceRunEntryKey, workspaceRunKey, workspaceRunPlan, workspaceRunPlanNodeIds, workspaceRunTouchedNodeIds, workspaceRuntimeNodeLabel, workspaceScheduleNextRunAt, workspaceScopedUserContext, workspaceSearchGuardrailsBlock, workspaceUnwrapOutputEnvelopeForDisplay, workspacesPath, writeWorkspaceConversations, writeWorkspaceGraph } from "./workspace-server.mjs";
+import { introducedWorkspaceGraphEdgeViolations } from "./workspace-graph-edge-rules.mjs";
 import { splitWorkspaceGraph, WORKSPACE_STATE_FILENAME } from "./workspace-state.mjs";
 import { getWorkspaceTree } from "./workspace-tree.mjs";
 import { discoverReleaseActions, discoverReleaseCompositeActions, filterReleaseActionsForWorkflow, normalizeReleaseAgentResult, releaseAgentResultFromWorkspaceRun, releaseContextKey } from "./release-runtime.mjs";
@@ -3566,6 +3567,19 @@ async function workspaceRoutes(req, res, ctx) {
           return;
         }
         const graph = mergeWorkspacePersistentNodeRefs(nextGraph, currentGraph);
+        // 画布上 isValidConnection 拦得住手画的线；程序化写入口绕开画布直接提交，
+        // 非法边就是这么进库的。只拦这次**新引入**的——存量坏边一刀切会让作者连改都
+        // 改不动，存不进去就没法修。
+        const introducedViolations = introducedWorkspaceGraphEdgeViolations(currentStoredGraph, graph);
+        if (introducedViolations.length) {
+          json(res, 422, {
+            error: `连线不合法：${introducedViolations.map((v) => v.message).join("；")}`,
+            kind: "edge_rules_violated",
+            violations: introducedViolations,
+            currentRevision,
+          });
+          return;
+        }
         const committed = commitWorkspaceGraph(root, scoped, graph, userCtx);
         const { path: graphPath, revision, runtimeRevision } = committed;
         let workspaceSchedules;
@@ -3603,6 +3617,10 @@ async function workspaceRoutes(req, res, ctx) {
           designRevision: revision,
           runtimeRevision,
           merged,
+          // 图存成代码还是退回 workspace.graph.json。降级过去只写进服务端 stdout，
+          // 用户点完保存看到「成功」，格式已经悄悄从代码掉回 JSON，没有任何提示。
+          format: committed.result?.format || "",
+          degradedReason: committed.result?.degradedReason || "",
           release: readWorkspaceReleaseStatus(scoped.root, root, committed.graph),
           workspaceSchedules,
         });

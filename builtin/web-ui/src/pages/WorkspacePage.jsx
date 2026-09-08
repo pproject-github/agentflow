@@ -9766,10 +9766,16 @@ function WorkspacePageInner() {
     setWorkspaceConflict(null);
     setWorkspaceConflictOpen(false);
     setWorkspaceSyncPhase(hasNewerLocalEdits ? "dirty" : "synced");
-    setWorkspaceSyncDetail(hasNewerLocalEdits ? "本地仍有修改等待同步" : "所有修改已同步");
+    // 存成代码失败会退回 workspace.graph.json。过去这件事只写进服务端日志，用户看到的
+    // 是「保存成功」，格式已经悄悄从代码掉回 JSON——图还在，但 diff、lint、AI 编辑全没了。
+    const degradedReason = String(json.degradedReason || "");
+    setWorkspaceSyncDetail(
+      degradedReason ? `已保存，但这张图暂时存不成代码：${degradedReason}`
+        : hasNewerLocalEdits ? "本地仍有修改等待同步" : "所有修改已同步",
+    );
     setStatus(
-      hasNewerLocalEdits
-        ? "已保存上一版，本地新修改正在排队"
+      degradedReason ? `已保存（退回 JSON 格式）：${degradedReason}`
+        : hasNewerLocalEdits ? "已保存上一版，本地新修改正在排队"
         : json.merged ? "Workspace graph merged and saved" : "Workspace graph saved",
     );
     return json;
