@@ -224,7 +224,9 @@ body {
 }
 .af-approvals-empty .material-symbols-outlined { color: var(--af-tertiary); font-size: 2rem; }
 .af-approvals-empty strong { color: var(--af-on-surface); }
-.af-approvals-list { display: grid; gap: .75rem; }
+/* grid item 的 min-width 默认是 auto：卡片压不到自身 min-content 以下，
+   而单行省略的摘要 min-content 就是整行文字宽。不写死这条轨道，整页就被撑出屏幕。 */
+.af-approvals-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: .75rem; }
 .af-approval-card {
   display: flex;
   justify-content: space-between;
@@ -234,7 +236,7 @@ body {
   border-radius: .75rem;
   background: rgba(28,27,27,.72);
 }
-.af-approval-card__main { min-width: 0; }
+.af-approval-card__main { flex: 1 1 auto; min-width: 0; }
 .af-approval-card__title-row { display: flex; align-items: center; gap: .55rem; }
 .af-approval-card h2 { margin: 0; font-size: 1rem; }
 .af-approval-status {
@@ -254,14 +256,14 @@ body {
   font-size: .72rem;
 }
 .af-approval-card__preview {
-  max-width: 60rem;
+  max-width: 100%;
   margin: .55rem 0 0;
   overflow: hidden;
   color: rgba(229,226,225,.74);
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-.af-approval-card__actions { display: flex; align-items: center; gap: .45rem; flex-shrink: 0; }
+.af-approval-card__actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .45rem; flex-shrink: 0; }
 .af-approval-open { color: var(--af-primary); }
 .af-approval-approve,
 .af-approval-reject {
