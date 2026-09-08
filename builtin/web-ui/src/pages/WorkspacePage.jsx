@@ -19,6 +19,7 @@ import {
   useStoreApi,
   useUpdateNodeInternals,
 } from "@xyflow/react";
+import { slotNameFromHandle } from "../../../../shared/slot-handles.js";
 import "@xyflow/react/dist/style.css";
 import { Fragment, Suspense, lazy, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -2842,13 +2843,14 @@ function flowToGraph(nodes, edges, instances, subflows = {}) {
   const subflowBoundaryNodes = regularNodes.filter((node) => node?.data?.isSubflowBoundary);
   const groupNodes = (nodes || []).filter(isWorkspaceGroupNode);
   const graphInstances = sanitizeWorkspaceRuntimeOutputsForSave(buildInstancesForYaml(persistentNodes, instances || {}));
+  // 画布用位置坐标，磁盘和 API 用槽位名。换算只发生在这条边界上。
   const graphEdges = edges.filter((edge) => (
     !edge?.data?.virtualSubflowCall && !edge?.data?.virtualSubflowBoundary
   )).map((edge) => ({
     source: edge.source,
     target: edge.target,
-    sourceHandle: edge.sourceHandle ?? null,
-    targetHandle: edge.targetHandle ?? null,
+    sourceHandle: slotNameFromHandle(edge.sourceHandle, graphInstances[edge.source]?.output) || null,
+    targetHandle: slotNameFromHandle(edge.targetHandle, graphInstances[edge.target]?.input) || null,
   })).filter((edge) => (
     !groupNodes.some((node) => node.id === edge.source || node.id === edge.target)
   ));
@@ -9764,10 +9766,16 @@ function WorkspacePageInner() {
     setWorkspaceConflict(null);
     setWorkspaceConflictOpen(false);
     setWorkspaceSyncPhase(hasNewerLocalEdits ? "dirty" : "synced");
-    setWorkspaceSyncDetail(hasNewerLocalEdits ? "本地仍有修改等待同步" : "所有修改已同步");
+    // 存成代码失败会退回 workspace.graph.json。过去这件事只写进服务端日志，用户看到的
+    // 是「保存成功」，格式已经悄悄从代码掉回 JSON——图还在，但 diff、lint、AI 编辑全没了。
+    const degradedReason = String(json.degradedReason || "");
+    setWorkspaceSyncDetail(
+      degradedReason ? `已保存，但这张图暂时存不成代码：${degradedReason}`
+        : hasNewerLocalEdits ? "本地仍有修改等待同步" : "所有修改已同步",
+    );
     setStatus(
-      hasNewerLocalEdits
-        ? "已保存上一版，本地新修改正在排队"
+      degradedReason ? `已保存（退回 JSON 格式）：${degradedReason}`
+        : hasNewerLocalEdits ? "已保存上一版，本地新修改正在排队"
         : json.merged ? "Workspace graph merged and saved" : "Workspace graph saved",
     );
     return json;

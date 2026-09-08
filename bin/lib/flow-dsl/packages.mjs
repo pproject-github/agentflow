@@ -14,7 +14,7 @@ import fs from "fs";
 import path from "path";
 import { parse as acornParse } from "acorn";
 
-import { isNodePackageDir, readNodePackageManifest, slotMapToList } from "../node-package-manifest.mjs";
+import { isNodePackageDir, readNodePackageManifest, slotMapToList, withControlSlot } from "../node-package-manifest.mjs";
 import { listMarketplaceNodes, parseMarketplaceDefinitionId } from "../marketplace.mjs";
 
 /**
@@ -161,8 +161,8 @@ export function scanFlowLocalPackages(flowDir) {
       specifier: `./nodes/${entry.name}`,
       marketplaceRef: manifest.definitionId || `marketplace:${manifest.id}@${manifest.version}`,
       baseDefinitionId: baseDefinitionIdOf(manifest),
-      input: manifest.input || slotMapToList({}, "input"),
-      output: manifest.output || slotMapToList({}, "output"),
+      input: withControlSlot(manifest.input || slotMapToList({}, "input"), "input"),
+      output: withControlSlot(manifest.output || slotMapToList({}, "output"), "output"),
     };
     bySpecifier[record.specifier] = record;
     bySpecifier[`${record.specifier}/index.mjs`] = record;
@@ -192,8 +192,8 @@ export function scanAvailableNodePackages(flowDir, workspaceRoot = "") {
       specifier: marketplaceRef,
       marketplaceRef,
       baseDefinitionId: baseDefinitionIdOf(manifest),
-      input: manifest.input || slotMapToList({}, "input"),
-      output: manifest.output || slotMapToList({}, "output"),
+      input: withControlSlot(manifest.input || slotMapToList({}, "input"), "input"),
+      output: withControlSlot(manifest.output || slotMapToList({}, "output"), "output"),
       source: manifest.source || "marketplace",
     };
     bySpecifier[record.specifier] = record;

@@ -16,7 +16,7 @@
  * 超过 EXTERNALIZE_MIN 的长文本外置成独立文件，代码里写 `file("prompts/x.md")`：
  * 一段 8 KB 的提示词塞进模板字符串会把流程结构淹没。
  */
-import { CTRL_SLOTS, RUN_DEFINITIONS, apiName, definitionOf, isDisplayDefinition, isProvideDefinition } from "./defs.mjs";
+import { CTRL_SLOTS, RUN_DEFINITIONS, apiName, definitionSlotsOf, isDisplayDefinition, isProvideDefinition } from "./defs.mjs";
 
 /** 长文本外置阈值（字节）。低于这个长度的直接内联，免得目录里全是碎文件。 */
 export const EXTERNALIZE_MIN = 3000;
@@ -202,7 +202,7 @@ export function generateFlowSource(ir, opts = {}) {
     const node = N[id];
     const fromPkg = pkgSlots(id, "input").find((s) => s?.name === name);
     if (fromPkg?.type) return String(fromPkg.type);
-    const fromDef = definitionOf(node.definitionId).input.find((s) => s.name === name);
+    const fromDef = definitionSlotsOf(node.definitionId, opts.packages?.[id]).input.find((s) => s.name === name);
     if (fromDef?.type) return String(fromDef.type);
     return String(node.inputTypes?.[name] || "text");
   };
@@ -222,7 +222,10 @@ export function generateFlowSource(ir, opts = {}) {
 
   function pinsObject(id, folds = new Map()) {
     const node = N[id];
-    const def = definitionOf(node.definitionId);
+    // 和 graphToIr / irToGraph / extractLayout / designFingerprint 同一个定义源。
+    // 拿运行方式的定义表来排引脚，包自己声明的槽既不在这张表里、也不在 extraIn 里
+    // （graphToIr 认得它是定义槽），接了线的引脚就一个字都不会写出来。
+    const def = definitionSlotsOf(node.definitionId, opts.packages?.[id]);
     const lines = [];
     const wired = new Map((dataIn.get(id) || []).filter((x) => !folds.has(x.slot)).map((x) => [x.slot, x]));
     const order = [...def.input.map((s) => s.name).filter((n) => !CTRL_SLOTS.has(n)), ...node.extraIn];

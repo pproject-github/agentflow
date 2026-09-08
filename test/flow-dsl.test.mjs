@@ -15,15 +15,13 @@ import {
 import { lintFlowDir } from "../bin/lib/flow-dsl/lint.mjs";
 import { exportFlowDsl, importFlowDsl } from "../bin/lib/flow-dsl/cli.mjs";
 import { splitWorkspaceGraph } from "../bin/lib/workspace-state.mjs";
+import { edgesWithSlotNames, indexHandleFromSlotName } from "../shared/slot-handles.js";
 
-/** 边身份：按槽名比，不按句柄下标——下标由 pinOrder 决定，不是语义。 */
+/** 边身份：按槽名比。句柄本身就是槽名了，历史下标形态由共享解析层还原。 */
 function edgeIdentity(graph) {
-  const idx = (h) => Number(/-(\d+)$/.exec(String(h || ""))?.[1] ?? 0);
-  return new Set((graph.edges || []).map((e) => {
-    const from = graph.instances[e.source]?.output?.[idx(e.sourceHandle)]?.name;
-    const to = graph.instances[e.target]?.input?.[idx(e.targetHandle)]?.name;
-    return `${e.source}|${from}|${e.target}|${to}`;
-  }));
+  return new Set(edgesWithSlotNames(graph).map((e) => (
+    `${e.source}|${e.sourceHandle}|${e.target}|${e.targetHandle}`
+  )));
 }
 
 function assertGraphRoundTrip(graph, label) {
@@ -320,7 +318,7 @@ test("超长文本外置成文件，代码里写 file()", () => {
   assert.equal(back.instances.agent_1.body, long, "外置后正文没还原");
 });
 
-test("非规范槽序由 layout.pinOrder 保留，句柄下标能还原", () => {
+test("非规范槽序由 layout.pinOrder 保留，边按槽位名指向正确的槽", () => {
   const graph = {
     version: 1,
     instances: {
@@ -342,7 +340,9 @@ test("非规范槽序由 layout.pinOrder 保留，句柄下标能还原", () => 
   const { out, back } = assertGraphRoundTrip(graph, "非规范槽序");
   assert.deepEqual(out.layout.nodes.md_1.pinOrder.in, ["content", "prev"]);
   assert.deepEqual(back.instances.md_1.input.map((s) => s.name), ["content", "prev"]);
-  assert.equal(back.edges[0].targetHandle, "input-1", "句柄下标没按 pinOrder 还原");
+  assert.equal(back.edges[0].targetHandle, "prev", "边的身份是槽位名");
+  // pinOrder 的意义在于画布还能换算回它自己的下标形态——prev 在第 2 位。
+  assert.equal(indexHandleFromSlotName("prev", back.instances.md_1.input, "input"), "input-1");
 });
 
 test("图片与机器管理属性进 nodes.json，不进代码", () => {

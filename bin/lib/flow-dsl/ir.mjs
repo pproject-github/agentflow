@@ -10,10 +10,12 @@
  * `{ content: agent1.result }` 就能无歧义地还原成一条边；下标由 layout 里的
  * `pinOrder` 负责恢复。
  */
+import { slotNameFromHandle } from "../../../shared/slot-handles.js";
 import {
   CTRL_SLOTS,
   STD_SLOTS,
   definitionOf,
+  definitionSlotsOf,
   isControlSlot,
   isDisplayDefinition,
   isProvideDefinition,
@@ -64,9 +66,14 @@ function handleIndex(handle) {
  * 传进来的应当是 `splitWorkspaceGraph().design`——运行产出已经不在里面，所以这里
  * 不必再判断哪些值是跑出来的。
  */
-export function graphToIr(graph) {
+export function graphToIr(graph, packages = {}) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  const slotAt = (id, kind, handle) => (instances[id]?.[kind] || [])[handleIndex(handle)];
+  // 名字和历史下标都认；下标按**这张图当时的槽位表**还原，原意只在原表里存在。
+  const slotAt = (id, kind, handle) => {
+    const list = instances[id]?.[kind] || [];
+    const name = slotNameFromHandle(handle, list);
+    return name ? list.find((slot) => String(slot?.name || "") === name) : undefined;
+  };
 
   const edges = [];
   const wiredInputs = new Set();
@@ -83,7 +90,7 @@ export function graphToIr(graph) {
   const slotOrder = {};
   for (const [id, instance] of Object.entries(instances)) {
     const definitionId = String(instance.definitionId || "");
-    const def = definitionOf(definitionId);
+    const def = definitionSlotsOf(definitionId, packages?.[id]);
     const defInputs = new Set(def.input.map((s) => s.name));
     const defOutputs = new Set(def.output.map((s) => s.name));
 
@@ -123,8 +130,14 @@ export function graphToIr(graph) {
     for (const slot of instance.input || []) {
       const name = String(slot?.name || "");
       if (!name) continue;
-      // 既不在定义表里、也不是标准槽的，是这个实例自己加的槽，代码里要显式声明
-      if (!STD_SLOTS.has(name) && !defInputs.has(name) && String(slot.type) !== "node") {
+      // 定义表里没有的，是这个实例自己加的槽，代码里要显式声明。名字撞上
+      // workspaceContext / skillsContext 这类上下文槽也一样——「叫这名字的槽一定在
+      // 定义表里」只对内置节点成立，代码节点包的声明里就没有它们。
+      //
+      // 控制槽是例外，按名字排除：`prev` 往返一趟类型会从 node 退化成 text
+      // （irToGraph 里自定义类型推断压过了控制槽的类型），只看 type 就会把它当成
+      // 自定义槽写出一个 `prev: null`，再生成一次就和上一次不一样了。
+      if (!CTRL_SLOTS.has(name) && !defInputs.has(name) && String(slot.type) !== "node") {
         node.extraIn.push(name);
         // 自定义槽的类型在定义表里查不到，只能随槽本身走一趟 IR，否则往返一次
         // bool 槽就退化成 text，代码里的 `true` 变成 `"true"`
@@ -150,7 +163,7 @@ export function graphToIr(graph) {
     for (const slot of instance.output || []) {
       const name = String(slot?.name || "");
       if (!name) continue;
-      if (!STD_SLOTS.has(name) && !defOutputs.has(name) && String(slot.type) !== "node") node.extraOut.push(name);
+      if (!CTRL_SLOTS.has(name) && !defOutputs.has(name) && String(slot.type) !== "node") node.extraOut.push(name);
       // 设计态里只有 provide_* 的输出值是作者填的，其余都是运行产出（已被 Phase 0 剥离）
       if (!isProvideDefinition(definitionId) || isControlSlot(slot)) continue;
       const value = String(slot.value ?? slot.default ?? "");
@@ -254,6 +267,7 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
           value: "",
         };
         if (d?.description) slot.description = d.description;
+        if (!d && overrides.description) slot.description = overrides.description;
         if (d?.required) slot.required = true;
         if (d?.showOnNode) slot.showOnNode = true;
         for (const key of ["showOnNode", "required"]) {
@@ -310,8 +324,9 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
     return {
       source,
       target,
-      sourceHandle: `output-${slotIndex[source]?.out.get(fromSlot) ?? 0}`,
-      targetHandle: `input-${slotIndex[target]?.in.get(toSlot) ?? 0}`,
+      // 边的身份是槽位名。下标是画布的渲染细节，只在前端边界上换算。
+      sourceHandle: fromSlot,
+      targetHandle: toSlot,
     };
   });
 

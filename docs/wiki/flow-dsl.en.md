@@ -156,6 +156,48 @@ This is forced: handle indices depend on the instance's own slot order, and slot
 So indices are restored from `pinOrder` in `layout.json`, recorded only for instances that
 deviate; everything else is rebuilt as "definition order + custom slots seen in the code".
 
+## Key design: the definition owns the slot table
+
+A slot table stored in the graph is only a snapshot of what the definition looked like the
+last time the flow was saved. Change the definition and the snapshot does not follow, so the
+same `agent_subAgent` ends up with different pins in different flows: deployed flows have
+nodes with no `prev` at all (that version of the definition did not have one yet), leaving a
+control edge nowhere to land, and a batch of nodes still carrying long-since-edited
+descriptions.
+
+So the slot table is reconciled against the definition on read and before every write: the
+**definition** decides which slots exist and their type, description and required flag, and
+it decides the order (definition slots first, custom slots after them in graph order). The
+graph keeps only what is genuinely its own — slot values, whether a pin shows on the card
+(`showOnNode`), and custom slots the definition does not have.
+
+A code node package owns its own slot table, not the runtime it happens to use
+(`tool_nodejs` says how it runs, not which pins it has). A package's slot table always
+starts with its control slot — the `node.yaml` path skips `slotMapToList`, so the scanner
+adds it uniformly.
+
+Six places need that answer, and they must all get it from the same function
+(`definitionSlotsOf`): `graphToIr` deciding which slots are custom, `codegen` ordering
+pins, `parser.readPins` deciding whether a pin written in code is custom, `irToGraph`
+rebuilding the slot table, `extractLayout` recording deviations, and `designFingerprint`
+resolving absent slot metadata. Point any one of them at the runtime definition instead
+and it disagrees with the other five: a slot the package does not declare but the runtime
+does falls through every crack, and the edge attached to it vanishes on the next
+roundtrip. Measured across 85 deployed flows: fixing one site 84 -> 74, two sites
+84 -> 61, all six 84 -> 85.
+
+Control slots are the one exception, excluded **by name** rather than by type: a `prev`
+loses its `node` type across a roundtrip, so a type-only test treats it as a custom slot
+and writes out a `prev: null`, and the next generation no longer matches the last.
+
+Reconciliation **must happen after edge handles have been resolved to slot names**. An
+`input-3` stored in the graph was written against the slot table of that moment; reconciling
+first means reading old indices against a new table. Across 85 deployed flows, doing it in
+the wrong order rewires edges in 5 of them.
+
+When the definition cannot be read (the node package is not installed yet) nothing is
+touched: better to leave the table alone than to strip every pin off it based on an empty one.
+
 ## Body interpolation: one `${}`, two meanings
 
 The runtime's body placeholders only understand slot names — the regex in
@@ -212,8 +254,15 @@ mismatch the write falls back to `workspace.graph.json` and deletes any existing
 lossy version. The comparison uses a normalized fingerprint that flattens key order, the
 three ways of writing "absent" (`undefined`/`null`/`""`), `role: normal` vs unset, and
 `showOnNode` / `required` inherited from the definition table — representation differences
-only, never content. All 21 production flows pass the gate; the largest takes 5.4 ms to
+only, never content. All 85 deployed flows pass the gate; the largest takes 5.4 ms to
 save + read.
+
+**A degrade has to be audible.** It used to go to server stdout and nowhere else, without
+naming the flow -- the deployment accumulated 900+ of them that nobody could trace. The
+warning now carries the flow directory, and the `/api/workspace/graph` response carries
+`format` and `degradedReason`, so the canvas says "saved (fell back to JSON): <reason>".
+A user reading "saved" while the flow quietly loses its code form -- and with it diffs,
+lint, and AI editing -- is the most expensive silence on this path.
 
 ## `flow.fork` is only the syntax for fan-out
 

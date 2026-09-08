@@ -105,7 +105,11 @@ test("compiles composite release workflow into ordered AgentFlow tool nodes with
   assert.equal(graph.instances.composite_upload.definitionId, "tool_nodejs");
   assert.equal(graph.instances.composite_notify.input.find((slot) => slot.name === "event").value, "localization-uploaded");
   assert.equal(graph.edges.filter((edge) => edge.source === "composite_upload" && edge.target === "composite_notify").length, 2);
-  assert.ok(graph.edges.some((edge) => edge.sourceHandle === "output-2" && edge.targetHandle === "input-2"));
+  // 边按槽位名标识，不按位置坐标。
+  const mapped = graph.edges.filter((edge) => edge.source === "composite_upload" && edge.target === "composite_notify");
+  // 边按槽位名标识，不按位置坐标：一条控制边，一条把上游产出接到下游同名入参。
+  assert.ok(mapped.some((edge) => edge.sourceHandle === "next" && edge.targetHandle === "prev"), JSON.stringify(mapped));
+  assert.ok(mapped.some((edge) => edge.sourceHandle !== "next" && edge.targetHandle !== "prev"), JSON.stringify(mapped));
   assert.equal(graph.instances.composite_notify.compositeStep.waitFor.step, "upload");
   assert.equal(graph.instances.composite_notify.compositeStep.waitFor.statuses[0], "completed");
 });

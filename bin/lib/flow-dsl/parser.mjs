@@ -13,7 +13,7 @@
  */
 import { parse as acornParse } from "acorn";
 
-import { STD_SLOTS, definitionOf, definitionIdFromApi } from "./defs.mjs";
+import { CTRL_SLOTS, STD_SLOTS, definitionOf, definitionIdFromApi, definitionSlotsOf } from "./defs.mjs";
 
 const calleePath = (n) => (
   n.type === "Identifier"
@@ -227,7 +227,11 @@ export function parseFlowSource(source, opts = {}) {
   }
 
   function readPins(id, definitionId, obj) {
-    const def = definitionOf(definitionId);
+    // 包自己就是这个节点的定义表。拿基础类型的（tool_nodejs / agent_subAgent 带着
+    // workspaceContext、skillsContext 这些上下文槽，代码节点包没有）来判断，
+    // 包里没声明、名字又撞上标准槽的引脚就既不算自定义槽、也没人重建它，
+    // 接在上面的边解析回来直接消失。
+    const def = definitionSlotsOf(definitionId, nodes[id]?.packageDef);
     const defInputs = new Set(def.input.map((s) => s.name));
     const defOutputs = new Set(def.output.map((s) => s.name));
     const inputType = new Map(def.input.map((s) => [s.name, String(s.type || "text")]));
@@ -247,7 +251,7 @@ export function parseFlowSource(source, opts = {}) {
       const key = definitionId === "context_bundle"
         ? ({ knowledge: "knowledgeContext", skills: "skillsContext", workspace: "workspaceContext", mcp: "mcpContext" }[rawKey] || rawKey)
         : rawKey;
-      const isCustom = !STD_SLOTS.has(key) && !defInputs.has(key);
+      const isCustom = !CTRL_SLOTS.has(key) && !defInputs.has(key);
 
       // Context resources are values, not control nodes. A bundle accepts the resource variable
       // directly (`{ knowledge }`), and consumers accept the bundle directly (`{ context: ctx }`).

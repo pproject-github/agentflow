@@ -104,6 +104,20 @@ export function nodePackageExportsRun(entryPath) {
 }
 
 /**
+ * 保证槽位表首位是控制槽。
+ *
+ * 代码节点包永远是链条上的一步，一定有 prev / next——`slotMapToList` 对 index.mjs
+ * 声明是无条件加的。但 `node.yaml` 那条老路不走这个函数，槽位表原样落到 manifest 上：
+ * 线上因此有 4 个节点连 prev 都没有，控制边无处可接，只能错接到数据槽上。
+ */
+export function withControlSlot(slots, kind) {
+  const name = kind === "input" ? "prev" : "next";
+  const list = Array.isArray(slots) ? slots : [];
+  if (list.some((slot) => String(slot?.name || "") === name)) return list;
+  return [{ type: "node", name, default: "" }, ...list];
+}
+
+/**
  * 声明里的 `inputs` / `outputs` 是对象映射（顺序即槽位顺序）；平台要的是槽位数组，
  * 且首位固定是控制槽 prev / next。
  */

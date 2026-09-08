@@ -9,6 +9,7 @@
  */
 
 import { parseBool } from "../pipeline/parse-bool.mjs";
+import { slotNameFromHandle } from "../../shared/slot-handles.js";
 import { readAuthUsers } from "./auth.mjs";
 import { isWorkspacePreviewFlowId } from "./workspace-preview.mjs";
 import { listFlowsJson, listNodesJson } from "./catalog-flows.mjs";
@@ -1022,7 +1023,13 @@ export function readWorkspaceStableRelease(workspaceRoot, marketplaceRoot = "", 
 
 export function publishWorkspaceRelease(workspaceRoot, marketplaceRoot = "", options = {}) {
   const graph = readWorkspaceGraph(workspaceRoot, marketplaceRoot).graph;
-  const workspaceRevision = workspaceDesignRevision(graph);
+  // 客户端手里的 `expectedRevision` 是存图接口给的，那个值算在**注水后**的图上
+  // （definitionId 改写成运行方式、script 推导出绝对路径…）。这里拿没注水的图算一遍就
+  // 永远对不上——存完立刻发布必然 409。基线要和发的那一版是同一种图。
+  const revisionGraph = options.scoped
+    ? hydrateWorkspaceGraphForRuntime(marketplaceRoot || workspaceRoot, options.scoped, graph, options.userCtx || {})
+    : graph;
+  const workspaceRevision = workspaceDesignRevision(revisionGraph);
   const expectedRevision = String(options.expectedRevision || "").trim();
   if (expectedRevision && expectedRevision !== workspaceRevision) {
     return {
@@ -1758,7 +1765,11 @@ function hydrateWorkspaceSlotMetaFromDefinitions(workspaceRoot, scoped = {}, gra
   let changed = false;
   for (const [nodeId, instance] of Object.entries(instances)) {
     if (!instance || typeof instance !== "object") continue;
-    const def = defById.get(String(instance.definitionId || ""));
+    // 代码节点包的槽位表归包所有。此时 definitionId 已经被 `withMarketplaceRuntime`
+    // 改写成运行方式（tool_nodejs），照它取定义会把 tool_nodejs 的 result 槽元数据
+    // （required: true）盖到包自己的槽上——存图返回的 revision 和磁盘上那张对不上。
+    const ref = String(instance.marketplaceRef || "").trim();
+    const def = (ref && defById.get(ref)) || defById.get(String(instance.definitionId || ""));
     if (!def) continue;
     const input = workspaceMergeSlotsWithDefinitionMeta(instance.input, def.inputs);
     const output = workspaceMergeSlotsWithDefinitionMeta(instance.output, def.outputs);
@@ -2227,7 +2238,7 @@ function workspaceSourceSlotForEdge(graph, edge) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const source = instances[String(edge?.source || "")];
   const output = Array.isArray(source?.output) ? source.output : [];
-  return output[workspaceHandleIndex(edge?.sourceHandle, "output")] || null;
+  return workspaceSlotForHandle(output, edge?.sourceHandle);
 }
 
 function isWorkspaceSemanticOutputSlot(slot) {
@@ -2310,7 +2321,6 @@ export function workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot
     if (namedValue != null && String(namedValue).trim()) return resolveValue(namedValue);
   }
   const out = outputs.get(sourceId);
-  const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
   const isPrimaryOutput = !slot
     || workspaceIsPrimaryOutputSlot(slot, graph?.instances?.[sourceId]?.output);
   if (isPrimaryOutput && out != null && String(out).trim()) return resolveValue(out);
@@ -3213,8 +3223,8 @@ function workspaceDownstreamOutputDisplayBindings(graph, nodeId) {
     const target = instances[String(edge?.target || "")];
     const kind = workspaceDisplayKind(target?.definitionId);
     if (!kind) continue;
-    const index = workspaceHandleIndex(edge?.sourceHandle, "output");
-    const slot = output[index] || null;
+    const index = workspaceSlotIndexForHandle(output, edge?.sourceHandle);
+    const slot = index < 0 ? null : output[index];
     if (isWorkspaceSemanticOutputSlot(slot)) continue;
     const name = String(slot?.name || "").trim()
       || (workspaceIsPrimaryOutputSlot(slot, output) ? "result" : `output-${index}`);
@@ -3312,8 +3322,8 @@ function workspaceDownstreamOutputKindForField(graph, nodeId, field) {
   const outputSlots = Array.isArray(source.output) ? source.output : [];
   for (const edge of edges) {
     if (String(edge?.source || "") !== String(nodeId)) continue;
-    const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
-    const sourceSlot = outputSlots[sourceIndex] || null;
+    const sourceIndex = workspaceSlotIndexForHandle(outputSlots, edge?.sourceHandle);
+    const sourceSlot = sourceIndex < 0 ? null : outputSlots[sourceIndex];
     if (workspaceOutputFieldForSlot(sourceSlot, sourceIndex) !== field) continue;
     const targetSlot = workspaceTargetSlotForEdge(graph, edge);
     if (!targetSlot || isWorkspaceSemanticInputSlot(targetSlot)) continue;
@@ -3486,8 +3496,8 @@ function workspaceDownstreamInputRequirements(graph, nodeId) {
     const targetType = String(targetSlot.type || "text").trim();
     const description = workspaceDownstreamInputDescription(target, targetSlot);
     if (!targetName && !description) continue;
-    const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
-    const sourceSlot = outputSlots[sourceIndex] || null;
+    const sourceIndex = workspaceSlotIndexForHandle(outputSlots, edge?.sourceHandle);
+    const sourceSlot = sourceIndex < 0 ? null : outputSlots[sourceIndex];
     const sourceField = workspaceOutputFieldForSlot(sourceSlot, sourceIndex);
     const targetLabel = String(target.label || target.definitionId || edge.target || "").trim();
     const key = `${sourceField}->${edge.target}:${targetName}:${description}`;
@@ -3616,10 +3626,11 @@ function workspaceIsControlEdge(graph, edge) {
     workspaceIsControlInputSlot(workspaceTargetSlotForEdge(graph, edge));
 }
 
-function workspaceControlIfBranchToSourceHandle(branch) {
+/** 分支对应的输出槽名。control_if 的两个控制出口是 next1 / next2。 */
+function workspaceControlIfBranchToSlotName(branch) {
   const text = String(branch || "").trim().toLowerCase();
-  if (text === "true" || text === "next1") return "output-0";
-  if (text === "false" || text === "next2") return "output-1";
+  if (text === "true" || text === "next1") return "next1";
+  if (text === "false" || text === "next2") return "next2";
   return null;
 }
 
@@ -3811,19 +3822,46 @@ function workspaceContentInputEdge(graph, nodeId) {
   const incoming = edges
     .filter((edge) => String(edge?.target || "") === String(nodeId))
     .filter((edge) => !isWorkspaceSemanticInputSlot(workspaceTargetSlotForEdge(graph, edge)));
-  return incoming.find((edge) => String(edge?.targetHandle || "") === "input-1") || incoming[0] || null;
+  return incoming.find((edge) => workspaceEdgeTargetSlotName(graph, edge) === "content") || incoming[0] || null;
 }
 
-function workspaceHandleIndex(handle, prefix) {
-  const match = String(handle || "").match(new RegExp(`^${prefix}-(\\d+)$`));
-  return match ? Number(match[1]) : 0;
+/**
+ * 句柄指向的槽位。名字和历史下标都认。
+ *
+ * 不能再用 workspaceHandleIndex——它对名字形态的句柄一律返回 0，等于把边悄悄改接到 0 号槽。
+ */
+function workspaceSlotForHandle(slots, handle) {
+  const list = Array.isArray(slots) ? slots : [];
+  const name = slotNameFromHandle(handle, list);
+  if (!name) return null;
+  return list.find((slot) => String(slot?.name || "") === name) || null;
+}
+
+/** 边的源槽位名。 */
+function workspaceEdgeSourceSlotName(graph, edge) {
+  const source = graph?.instances?.[String(edge?.source || "")];
+  return slotNameFromHandle(edge?.sourceHandle, source?.output);
+}
+
+/** 边的目标槽位名。 */
+function workspaceEdgeTargetSlotName(graph, edge) {
+  const target = graph?.instances?.[String(edge?.target || "")];
+  return slotNameFromHandle(edge?.targetHandle, target?.input);
+}
+
+/** 句柄指向的槽位下标；找不到返回 -1。 */
+function workspaceSlotIndexForHandle(slots, handle) {
+  const list = Array.isArray(slots) ? slots : [];
+  const name = slotNameFromHandle(handle, list);
+  if (!name) return -1;
+  return list.findIndex((slot) => String(slot?.name || "") === name);
 }
 
 function workspaceTargetSlotForEdge(graph, edge) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
   const target = instances[String(edge?.target || "")];
   const input = Array.isArray(target?.input) ? target.input : [];
-  return input[workspaceHandleIndex(edge?.targetHandle, "input")] || null;
+  return workspaceSlotForHandle(input, edge?.targetHandle);
 }
 
 function isWorkspaceSemanticInputSlot(slot) {
@@ -3879,7 +3917,7 @@ function workspaceTaskUpstreamText(graph, nodeId, outputs, relevantInputNames = 
       return relevantInputNames.has(String(slot?.name || "").trim());
     });
   }
-  const contentEdge = contentEdges.find((edge) => String(edge?.targetHandle || "") === "input-1") || contentEdges[0];
+  const contentEdge = contentEdges.find((edge) => workspaceEdgeTargetSlotName(graph, edge) === "content") || contentEdges[0];
   if (!contentEdge) return "";
   return workspaceOutputSlotValueForEdge(graph, outputs, contentEdge, scopedRoot);
 }
@@ -3893,8 +3931,7 @@ function workspaceInputValues(graph, nodeId, outputs, scopedRoot = "", options =
   const inputSlots = Array.isArray(target.input) ? target.input : [];
   for (const edge of edges) {
     if (String(edge?.target || "") !== String(nodeId)) continue;
-    const index = workspaceHandleIndex(edge?.targetHandle, "input");
-    const slot = inputSlots[index] || null;
+    const slot = workspaceSlotForHandle(inputSlots, edge?.targetHandle);
     const name = String(slot?.name || "").trim();
     if (!name || (isWorkspaceSemanticInputSlot(slot) && !(includeContext && name === "context"))) continue;
     const value = workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot);
@@ -5811,8 +5848,8 @@ async function workspaceRunSubflowFrame({
     childGraph.edges.push({
       source: syntheticRunId,
       target: rootId,
-      sourceHandle: "output-0",
-      targetHandle: `input-${prevIndex}`,
+      sourceHandle: "next",
+      targetHandle: "prev",
     });
   }
   for (const [name, binding] of Object.entries(subflow.inputs || {})) {
@@ -6082,10 +6119,10 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       if (skippedNodes.has(sourceId)) return `上游 ${sourceId} 已被分支跳过`;
       const sourceDefId = String(graph.instances?.[sourceId]?.definitionId || "");
       if (sourceDefId !== "control_if" || !controlBranches.has(sourceId)) continue;
-      const expectedHandle = workspaceControlIfBranchToSourceHandle(controlBranches.get(sourceId));
-      const actualHandle = String(edge?.sourceHandle || "output-0");
-      if (expectedHandle && actualHandle !== expectedHandle) {
-        return `control_if ${sourceId} 分支为 ${controlBranches.get(sourceId)}，跳过 ${actualHandle}`;
+      const expectedSlot = workspaceControlIfBranchToSlotName(controlBranches.get(sourceId));
+      const actualSlot = workspaceEdgeSourceSlotName(graph, edge);
+      if (expectedSlot && actualSlot !== expectedSlot) {
+        return `control_if ${sourceId} 分支为 ${controlBranches.get(sourceId)}，跳过 ${actualSlot}`;
       }
     }
     return "";
