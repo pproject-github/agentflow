@@ -2285,12 +2285,20 @@ export function workspaceResolveLinkedOutputForTarget(value, targetSlot, scopedR
   }
 }
 
-function workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot = "") {
+export function workspaceOutputSlotValueForEdge(graph, outputs, edge, scopedRoot = "") {
   const sourceId = String(edge?.source || "");
   const slot = workspaceSourceSlotForEdge(graph, edge);
   if (isWorkspaceSemanticOutputSlot(slot)) return "";
   const targetSlot = workspaceTargetSlotForEdge(graph, edge);
   const resolveValue = (value) => workspaceResolveLinkedOutputForTarget(value, targetSlot, scopedRoot);
+  // 信封点名写给这个槽的值最具体，先于「你是主输出槽就拿 result 正文」。
+  // 少了这一步，control_agent_toBool 的 prediction 恰好是第一个非控制输出槽、被判成主输出，
+  // 于是那篇 markdown 报告顶掉了 prediction: true，下游 control_if 对着报告 parseBool，恒走 false。
+  const slotName = String(slot?.name || "").trim();
+  if (slotName) {
+    const namedValue = outputs.get(workspaceNodeSlotOutputKey(sourceId, slotName));
+    if (namedValue != null && String(namedValue).trim()) return resolveValue(namedValue);
+  }
   const out = outputs.get(sourceId);
   const sourceIndex = workspaceHandleIndex(edge?.sourceHandle, "output");
   const isPrimaryOutput = !slot
@@ -2652,11 +2660,17 @@ function workspaceExtractNamedOutputValue(content, slotName) {
   return "";
 }
 
+/** 本次运行里由信封 outParams 点名写入的槽值，键是 nodeId + 槽名。 */
+export function workspaceNodeSlotOutputKey(nodeId, slotName) {
+  return `${String(nodeId || "")} slot ${String(slotName || "")}`;
+}
+
 function workspaceApplyAgentOutputSlots(instance, content) {
   const structured = content && typeof content === "object" && !Array.isArray(content)
     ? content
     : workspaceStructuredAgentOutput(content);
   const text = String(structured.result || "").trim();
+  const namedValues = {};
   let changed = false;
   const next = {
     ...(instance || {}),
@@ -2665,22 +2679,26 @@ function workspaceApplyAgentOutputSlots(instance, content) {
       const type = String(slot?.type || "");
       if (type === "node" || name === "next" || !name) return slot;
       let value = "";
+      let named = false;
       // 信封里点名给了值就用点名的——比「你是主输出槽」更具体
       if (Object.prototype.hasOwnProperty.call(structured.outParams, name)) {
         value = structured.outParams[name];
+        named = true;
       } else if (Object.prototype.hasOwnProperty.call(structured.outParams, `${name}File`)) {
         value = structured.outParams[`${name}File`];
+        named = true;
       } else if (workspaceIsPrimaryOutputSlot(slot, instance?.output)) {
         value = text;
       } else {
         value = workspaceExtractNamedOutputValue(text, name);
       }
       if (!value) return slot;
+      if (named) namedValues[name] = String(value);
       changed = true;
       return { ...slot, default: value, value };
     }),
   };
-  return { instance: changed ? next : instance, changed };
+  return { instance: changed ? next : instance, changed, namedValues };
 }
 
 function workspaceResolvePath(baseCwd, raw) {
@@ -6057,6 +6075,13 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
   const recordNodeOutput = (nodeId, content) => {
     outputs.set(nodeId, content);
   };
+  // 信封点名给某个输出槽的值，按 nodeId+槽名 单独记一份，取边值时优先于通用 result 正文。
+  const recordNodeSlotOutputs = (nodeId, namedValues) => {
+    for (const [name, value] of Object.entries(namedValues || {})) {
+      if (!name) continue;
+      outputs.set(workspaceNodeSlotOutputKey(nodeId, name), value);
+    }
+  };
   // 计划里的展示节点由它们自己那一轮负责写内容；被 control_if 跳过的那一支因此什么都不写
   const plannedDisplayIds = new Set(order.filter((id) => workspaceDisplayKind(graph.instances?.[id]?.definitionId)));
   const propagateNodeOutputDisplays = (nodeId, content, { emitGraph = false } = {}) => {
@@ -7218,6 +7243,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       recordNodeOutput(nodeId, resultContent);
       const slotUpdate = workspaceApplyAgentOutputSlots(instance, normalizedAgentOutput);
       if (slotUpdate.changed) graph.instances[nodeId] = slotUpdate.instance;
+      recordNodeSlotOutputs(nodeId, slotUpdate.namedValues);
       const implementationUpdate = await workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, {
         inputValues: runtimeInputValues,
         resultContent,
@@ -7462,6 +7488,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     recordNodeOutput(nodeId, resultContent);
     const slotUpdate = workspaceApplyAgentOutputSlots(instance, normalizedAgentOutput);
     if (slotUpdate.changed) graph.instances[nodeId] = slotUpdate.instance;
+    recordNodeSlotOutputs(nodeId, slotUpdate.namedValues);
     const implementationUpdate = await workspaceTryPersistNodeImplementation(scopedRoot, graph, nodeId, {
       inputValues: runtimeInputValues,
       resultContent,
