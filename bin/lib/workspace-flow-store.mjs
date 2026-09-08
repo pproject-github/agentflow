@@ -27,6 +27,7 @@ import {
   graphToFlowFiles,
 } from "./flow-dsl/index.mjs";
 import { definitionOf } from "./flow-dsl/defs.mjs";
+import { edgesWithSlotNames, edgesWithSlotNamesPreserving, slotNameFromHandle } from "../../shared/slot-handles.js";
 import { packageBindingsForGraph, packageResolverFor, scanAvailableNodePackages } from "./flow-dsl/packages.mjs";
 import { NODE_META_KEYS } from "./flow-dsl/ir.mjs";
 import {
@@ -226,8 +227,9 @@ export function designFingerprint(graph) {
   for (const id of Object.keys(design.instances).sort()) {
     instances[id] = normalizeInstance(design.instances[id]);
   }
-  const edges = design.edges
-    .filter((e) => e && design.instances[e.source] && design.instances[e.target])
+  // 按槽位名比对。同一条边写成 output-1 还是 next 只是表示差异，不是内容差异——
+  // 逐字面比会把「归一」判成「丢信息」，然后退回写 workspace.graph.json。
+  const edges = edgesWithSlotNames(design)
     .map((e) => `${e.source}|${asText(e.sourceHandle)}|${e.target}|${asText(e.targetHandle)}`)
     .sort();
   return stableStringify({
@@ -352,7 +354,10 @@ function stripDerivedPackageScripts(design, bindings) {
 export function writeWorkspaceDesign(flowDir, designGraph, opts = {}) {
   const dir = path.resolve(flowDir);
   fs.mkdirSync(dir, { recursive: true });
-  const design = normalizeDesignShape(designGraph);
+  // 客户端提交的边可能还是历史下标形态。归一必须在这里、在任何槽位表被改动之前发生——
+  // 下标的原意只在提交时那张槽位表里存在，之后再译就是拿新表解释旧下标。
+  const design = { ...normalizeDesignShape(designGraph) };
+  design.edges = edgesWithSlotNamesPreserving(design);
 
   const sourcePath = path.join(dir, FLOW_SOURCE_FILENAME);
   const layoutPath = path.join(dir, FLOW_LAYOUT_FILENAME);

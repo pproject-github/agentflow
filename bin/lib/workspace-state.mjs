@@ -30,6 +30,8 @@
  * 默认值；有入边的槽，值只是上一次跑进来的东西。
  */
 
+import { slotNameFromHandle } from "../../shared/slot-handles.js";
+
 export const WORKSPACE_STATE_FILENAME = "workspace.state.json";
 
 const STATE_VERSION = 1;
@@ -110,7 +112,8 @@ function edgeDrivenInputSlots(graph) {
     const target = instances[targetId];
     if (!targetId || !isPlainObject(target)) continue;
     const input = Array.isArray(target.input) ? target.input : [];
-    const slot = input[handleIndex(edge?.targetHandle, "input")] || null;
+    const slotName = slotNameFromHandle(edge?.targetHandle, input);
+    const slot = slotName ? input.find((item) => String(item?.name ?? "") === slotName) || null : null;
     if (!slot || isSemanticInputSlot(slot)) continue;
     const name = String(slot.name ?? "");
     if (!name) continue;

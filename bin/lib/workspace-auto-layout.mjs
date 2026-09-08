@@ -1,3 +1,5 @@
+import { slotNameFromHandle } from "../../shared/slot-handles.js";
+
 /**
  * Workspace graph 的确定性自动排版。
  *
@@ -37,8 +39,12 @@ function handleIndex(handle) {
 function edgeIsControl(graph, edge) {
   const source = graph?.instances?.[edge.source];
   const target = graph?.instances?.[edge.target];
-  const output = Array.isArray(source?.output) ? source.output[handleIndex(edge.sourceHandle)] : null;
-  const input = Array.isArray(target?.input) ? target.input[handleIndex(edge.targetHandle)] : null;
+  const outputSlots = Array.isArray(source?.output) ? source.output : [];
+  const inputSlots = Array.isArray(target?.input) ? target.input : [];
+  const outName = slotNameFromHandle(edge.sourceHandle, outputSlots);
+  const inName = slotNameFromHandle(edge.targetHandle, inputSlots);
+  const output = outputSlots.find((slot) => String(slot?.name ?? "") === outName) || null;
+  const input = inputSlots.find((slot) => String(slot?.name ?? "") === inName) || null;
   return output?.type === "node" || input?.type === "node";
 }
 

@@ -859,7 +859,7 @@ function buildLegacyCompositeReleaseRunGraph(composite, atomicNodes = [], contex
   for (let index = 1; index < entries.length; index += 1) {
     const previous = `composite_${entries[index - 1].stepId}`;
     const current = `composite_${entries[index].stepId}`;
-    edges.push({ source: previous, sourceHandle: "output-0", target: current, targetHandle: "input-0" });
+    edges.push({ source: previous, sourceHandle: "next", target: current, targetHandle: "prev" });
   }
   for (const entry of entries) {
     const targetId = `composite_${entry.stepId}`;
@@ -873,7 +873,7 @@ function buildLegacyCompositeReleaseRunGraph(composite, atomicNodes = [], contex
       const sourceSlotIndex = outputIndex(sourceId, sourceOutput);
       const targetSlotIndex = inputIndex(targetId, name);
       if (sourceSlotIndex < 0 || targetSlotIndex < 0) continue;
-      edges.push({ source: sourceId, sourceHandle: `output-${sourceSlotIndex}`, target: targetId, targetHandle: `input-${targetSlotIndex}` });
+      edges.push({ source: sourceId, sourceHandle: sourceOutput, target: targetId, targetHandle: name });
     }
   }
   return {

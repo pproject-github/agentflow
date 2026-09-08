@@ -1844,6 +1844,47 @@ var require_cli_table3 = __commonJS({
 import fs8 from "fs";
 import path9 from "path";
 
+// shared/slot-handles.js
+var INDEX_HANDLE = /^(?:input|output)-(\d+)$/;
+function slotNameFromHandle(handle, slots) {
+  const list2 = Array.isArray(slots) ? slots : [];
+  const raw = String(handle ?? "").trim();
+  if (!raw) return String(list2[0]?.name ?? "");
+  const match = INDEX_HANDLE.exec(raw);
+  if (!match) return raw;
+  return String(list2[Number(match[1])]?.name ?? "");
+}
+function edgeWithSlotNames(edge, instances) {
+  const source = String(edge?.source ?? "");
+  const target = String(edge?.target ?? "");
+  const from = instances?.[source];
+  const to = instances?.[target];
+  return {
+    ...edge,
+    source,
+    target,
+    sourceHandle: slotNameFromHandle(edge?.sourceHandle, from?.output),
+    targetHandle: slotNameFromHandle(edge?.targetHandle, to?.input)
+  };
+}
+function edgesWithSlotNames(graph) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const list2 = Array.isArray(graph?.edges) ? graph.edges : [];
+  return list2.filter((edge) => instances[String(edge?.source ?? "")] && instances[String(edge?.target ?? "")]).map((edge) => edgeWithSlotNames(edge, instances)).filter((edge) => edge.sourceHandle && edge.targetHandle);
+}
+function edgesWithSlotNamesPreserving(graph) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const list2 = Array.isArray(graph?.edges) ? graph.edges : [];
+  return list2.map((edge) => {
+    const named = edgeWithSlotNames(edge, instances);
+    return {
+      ...edge,
+      sourceHandle: named.sourceHandle || edge?.sourceHandle || null,
+      targetHandle: named.targetHandle || edge?.targetHandle || null
+    };
+  });
+}
+
 // bin/lib/workspace-state.mjs
 var WORKSPACE_STATE_FILENAME = "workspace.state.json";
 var STATE_VERSION = 1;
@@ -1869,10 +1910,6 @@ var CONTEXT_SLOT_NAMES = /* @__PURE__ */ new Set([
   "workspaceContext",
   "gitContext"
 ]);
-function handleIndex(handle, prefix) {
-  const match = String(handle || "").match(new RegExp(`^${prefix}-(\\d+)$`));
-  return match ? Number(match[1]) : 0;
-}
 function displayNodeIdsDrivenByEdges(graph) {
   const out = /* @__PURE__ */ new Set();
   for (const [nodeId, slots] of edgeDrivenInputSlots(graph)) {
@@ -1889,7 +1926,8 @@ function edgeDrivenInputSlots(graph) {
     const target = instances[targetId];
     if (!targetId || !isPlainObject(target)) continue;
     const input = Array.isArray(target.input) ? target.input : [];
-    const slot = input[handleIndex(edge?.targetHandle, "input")] || null;
+    const slotName = slotNameFromHandle(edge?.targetHandle, input);
+    const slot = slotName ? input.find((item) => String(item?.name ?? "") === slotName) || null : null;
     if (!slot || isSemanticInputSlot(slot)) continue;
     const name = String(slot.name ?? "");
     if (!name) continue;
@@ -12993,13 +13031,13 @@ var NODE_META_KEYS = [
   "conditionSubflowId",
   "bodySubflowId"
 ];
-function handleIndex2(handle) {
-  const m = /-(\d+)$/.exec(String(handle || ""));
-  return m ? Number(m[1]) : 0;
-}
 function graphToIr(graph) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  const slotAt = (id, kind, handle) => (instances[id]?.[kind] || [])[handleIndex2(handle)];
+  const slotAt = (id, kind, handle) => {
+    const list2 = instances[id]?.[kind] || [];
+    const name = slotNameFromHandle(handle, list2);
+    return name ? list2.find((slot) => String(slot?.name || "") === name) : void 0;
+  };
   const edges = [];
   const wiredInputs = /* @__PURE__ */ new Set();
   for (const edge of Array.isArray(graph?.edges) ? graph.edges : []) {
@@ -13173,8 +13211,9 @@ function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) {
     return {
       source,
       target,
-      sourceHandle: `output-${slotIndex[source]?.out.get(fromSlot) ?? 0}`,
-      targetHandle: `input-${slotIndex[target]?.in.get(toSlot) ?? 0}`
+      // 边的身份是槽位名。下标是画布的渲染细节，只在前端边界上换算。
+      sourceHandle: fromSlot,
+      targetHandle: toSlot
     };
   });
   const ui = { nodePositions: {}, nodeSizes: {} };
@@ -14179,7 +14218,7 @@ function designFingerprint(graph) {
   for (const id of Object.keys(design.instances).sort()) {
     instances[id] = normalizeInstance(design.instances[id]);
   }
-  const edges = design.edges.filter((e) => e && design.instances[e.source] && design.instances[e.target]).map((e) => `${e.source}|${asText(e.sourceHandle)}|${e.target}|${asText(e.targetHandle)}`).sort();
+  const edges = edgesWithSlotNames(design).map((e) => `${e.source}|${asText(e.sourceHandle)}|${e.target}|${asText(e.targetHandle)}`).sort();
   return stableStringify({
     instances,
     edges: [...new Set(edges)],
@@ -14257,7 +14296,8 @@ function stripDerivedPackageScripts(design, bindings) {
 function writeWorkspaceDesign(flowDir, designGraph, opts = {}) {
   const dir = path9.resolve(flowDir);
   fs8.mkdirSync(dir, { recursive: true });
-  const design = normalizeDesignShape(designGraph);
+  const design = { ...normalizeDesignShape(designGraph) };
+  design.edges = edgesWithSlotNamesPreserving(design);
   const sourcePath = path9.join(dir, FLOW_SOURCE_FILENAME);
   const layoutPath = path9.join(dir, FLOW_LAYOUT_FILENAME);
   const nodesPath = path9.join(dir, FLOW_NODES_FILENAME);
@@ -14755,15 +14795,15 @@ function nodeSize(graph, id) {
   if (definitionId.startsWith("display_")) return { width: 496, height: 160 };
   return { width: 260, height: 150 };
 }
-function handleIndex3(handle) {
-  const matched = /-(\d+)$/.exec(String(handle || ""));
-  return matched ? Number(matched[1]) : 0;
-}
 function edgeIsControl(graph, edge) {
   const source = graph?.instances?.[edge.source];
   const target = graph?.instances?.[edge.target];
-  const output = Array.isArray(source?.output) ? source.output[handleIndex3(edge.sourceHandle)] : null;
-  const input = Array.isArray(target?.input) ? target.input[handleIndex3(edge.targetHandle)] : null;
+  const outputSlots = Array.isArray(source?.output) ? source.output : [];
+  const inputSlots = Array.isArray(target?.input) ? target.input : [];
+  const outName = slotNameFromHandle(edge.sourceHandle, outputSlots);
+  const inName = slotNameFromHandle(edge.targetHandle, inputSlots);
+  const output = outputSlots.find((slot) => String(slot?.name ?? "") === outName) || null;
+  const input = inputSlots.find((slot) => String(slot?.name ?? "") === inName) || null;
   return output?.type === "node" || input?.type === "node";
 }
 function orderedNodeIds(graph) {

@@ -10,6 +10,7 @@
  * `{ content: agent1.result }` 就能无歧义地还原成一条边；下标由 layout 里的
  * `pinOrder` 负责恢复。
  */
+import { slotNameFromHandle } from "../../../shared/slot-handles.js";
 import {
   CTRL_SLOTS,
   STD_SLOTS,
@@ -66,7 +67,12 @@ function handleIndex(handle) {
  */
 export function graphToIr(graph) {
   const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
-  const slotAt = (id, kind, handle) => (instances[id]?.[kind] || [])[handleIndex(handle)];
+  // 名字和历史下标都认；下标按**这张图当时的槽位表**还原，原意只在原表里存在。
+  const slotAt = (id, kind, handle) => {
+    const list = instances[id]?.[kind] || [];
+    const name = slotNameFromHandle(handle, list);
+    return name ? list.find((slot) => String(slot?.name || "") === name) : undefined;
+  };
 
   const edges = [];
   const wiredInputs = new Set();
@@ -310,8 +316,9 @@ export function irToGraph(ir, layout = { nodes: {} }, nodeMeta = { nodes: {} }) 
     return {
       source,
       target,
-      sourceHandle: `output-${slotIndex[source]?.out.get(fromSlot) ?? 0}`,
-      targetHandle: `input-${slotIndex[target]?.in.get(toSlot) ?? 0}`,
+      // 边的身份是槽位名。下标是画布的渲染细节，只在前端边界上换算。
+      sourceHandle: fromSlot,
+      targetHandle: toSlot,
     };
   });
 

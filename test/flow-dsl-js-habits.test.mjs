@@ -4,6 +4,7 @@
  * 这两条都不是「加个语法糖」——模板插值以前会**静默丢掉整段正文**，而 `true` 只能写成
  * `"true"`。AI 按 JS 习惯写出来的代码，存一次就变形或者少东西。
  */
+import { edgesWithSlotNames } from "../shared/slot-handles.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -20,13 +21,9 @@ function seed(source) {
 }
 
 const slotNames = (inst) => inst.input.map((s) => s.name);
-const edgeKeys = (graph) => graph.edges.map((e) => {
-  const src = graph.instances[e.source];
-  const dst = graph.instances[e.target];
-  const from = src.output[Number(String(e.sourceHandle).split("-")[1])]?.name;
-  const to = dst.input[Number(String(e.targetHandle).split("-")[1])]?.name;
-  return `${e.source}.${from} -> ${e.target}.${to}`;
-}).sort();
+const edgeKeys = (graph) => edgesWithSlotNames(graph)
+  .map((e) => `${e.source}.${e.sourceHandle} -> ${e.target}.${e.targetHandle}`)
+  .sort();
 
 /** 存一次再读回来，顺便断言没退回 JSON。 */
 function saveAndReread(dir, graph) {

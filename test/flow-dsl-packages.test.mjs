@@ -1,3 +1,4 @@
+import { edgesWithSlotNames } from "../shared/slot-handles.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -87,14 +88,8 @@ test("import 写法读出来的图，和画布从面板拖出来的形状一致"
   assert.deepEqual(collect.input.map((s) => s.name), ["prev", "date"]);
   assert.ok(collect.output.some((s) => s.name === "total"), "包声明的 total 输出槽没建出来");
 
-  const key = (e) => {
-    const src = graph.instances[e.source];
-    const dst = graph.instances[e.target];
-    const from = src.output[Number(String(e.sourceHandle).split("-")[1])]?.name;
-    const to = dst.input[Number(String(e.targetHandle).split("-")[1])]?.name;
-    return `${e.source}.${from} -> ${e.target}.${to}`;
-  };
-  assert.deepEqual(graph.edges.map(key).sort(), [
+  const key = (e) => `${e.source}.${e.sourceHandle} -> ${e.target}.${e.targetHandle}`;
+  assert.deepEqual(edgesWithSlotNames(graph).map(key).sort(), [
     "collect.next -> show.prev",       // flow("Run", collect, show) 串起来的控制边
     "collect.total -> show.content",   // 包声明的输出槽，不是「第一个数据槽」
     "run.next -> collect.prev",
