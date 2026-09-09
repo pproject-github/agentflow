@@ -12,7 +12,10 @@ import {
 
 const SESSION_COOKIE = "af_session";
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const CLI_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// CLI Session 走的是"用着就续、闲着才过期"（见 slideSessionExpiry）。半年是闲置上限，
+// 不是硬期限：一个天天在跑的机器人永远不会到期，而一个半年没动过的 token 会自己失效。
+// 改这个常量不会打断已发出的 token——续期时按新 TTL 重算，下次调用就自动延长。
+const CLI_SESSION_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 const CAS_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const LEGACY_LINK_FAILURE_LIMIT = 5;
 const LEGACY_LINK_FAILURE_WINDOW_MS = 15 * 60 * 1000;

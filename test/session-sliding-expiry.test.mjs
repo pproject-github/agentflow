@@ -119,3 +119,36 @@ test("续期时顺手清掉过期的僵尸会话", async (t) => {
   assert.ok(remaining.some((r) => r.clientName === "mengmai"), "还在用的那个必须留着");
   assert.ok(dead.token, "被清掉的会话确实存在过");
 });
+
+test("CLI Session 的闲置上限是半年，且旧 token 会在下次使用时自动延长", async () => {
+  const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-cli-ttl-")));
+  const previousHome = process.env.AGENTFLOW_HOME;
+  try {
+    process.env.AGENTFLOW_HOME = path.join(tempRoot, "data");
+    const auth = await import(`../bin/lib/auth.mjs?cli-ttl=${Date.now()}`);
+
+    const clientName = `ttl-${Date.now()}`;
+    const started = auth.createCliAuthorization({ publicBaseUrl: "http://127.0.0.1", clientName });
+    auth.loginAdminUser("root-admin", "admin-password");
+    const owner = auth.loginCasUser({ username: "ttl-owner" });
+    auth.decideCliAuthorization({
+      requestId: started.requestId,
+      approvalNonce: started.approvalNonce,
+      userId: owner.user.userId,
+      approved: true,
+    });
+    const exchanged = auth.exchangeCliAuthorization(started.deviceCode);
+    assert.equal(exchanged.ok, true, exchanged.error);
+
+    const halfYearMs = 180 * 24 * 60 * 60 * 1000;
+    const lifetime = Number(exchanged.expiresAt) - Date.now();
+    assert.ok(
+      Math.abs(lifetime - halfYearMs) < 60_000,
+      `CLI Session 有效期应约为半年，实际 ${Math.round(lifetime / 86400000)} 天`,
+    );
+  } finally {
+    if (previousHome === undefined) delete process.env.AGENTFLOW_HOME;
+    else process.env.AGENTFLOW_HOME = previousHome;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
