@@ -195,7 +195,7 @@ bad_example:
 
 1. **线性链**：Run → A → B → … → display
 2. **条件分支**：… → provide_bool → **control_if** → next1 连分支A、next2 连分支B（true 走 output-0，false 走 output-1）
-3. **控制扇出**：同一个 output 扇出到多个下游节点；当前 Workspace 运行时按拓扑序串行执行
+3. **控制扇出**：同一个 output 扇出到多个下游节点。默认按拓扑序串行执行，开了并发才真正并行（见下）
 4. **单步收敛**：Run → control_while（重复同一 step）→ 下游；wait 时停在 While
 5. **检查 → 修复 → 复检**：不同角色向前排成多个节点。**不要连回上游**
 6. **批量任务**：拆解节点产出清单 → control_while 每轮推进一项 → done 后汇总
@@ -210,6 +210,40 @@ bad_example:
 - 从 `provide_bool` 的 bool 输出连到 `control_if` 时：targetHandle 用 **input-1**。
 - 多输出节点连到不同下游时，用不同 **sourceHandle**（output-0, output-1, …）区分槽位。
 - **control_if** 必须写清：从 output-0 连到「条件为真」的后继、从 output-1 连到「条件为假」的后继。
+
+---
+
+## 8.5 并行执行（默认关闭）
+
+运行计划是 DAG，无依赖的同层节点可以并发。约束不是拓扑而是**本机资源**：一个
+`agent_subAgent` 会 spawn 一个完整的 agent CLI 进程加一路模型会话，而一个带 `script` 的
+`tool_nodejs` 只是短命子进程——两者代价差两个数量级。所以并发按车道分开限。
+
+| 车道 | 成员 | 说明 |
+|------|------|------|
+| `exclusive` | `control_cd_workspace`、`control_user_workspace`、`tool_set_run_env`、`tool_git_checkout`、`tool_git_worktree_load` / `_unload` | 会写整轮运行共享的 `cwd` / `runEnv` / 工作树。**独占**：等在跑的全部排空，自己跑完再放行 |
+| `tool` | `display_*`、`provide_*`、`context_*`、`control_if`、`control_parse_json`、带 `script` 的 `tool_nodejs` 等 | 纯内存或短命子进程，放宽几乎无成本 |
+| `agent` | `agent_subAgent`、`control_while`、`control_subflow_call`、无 `script` 的 `tool_nodejs`，以及**任何未收录的节点** | 每个占一个 CLI 进程 + 一路模型并发 |
+
+配置（优先级从高到低）：
+
+```
+POST /api/workspace/run   { "concurrency": { "agent": 2, "tool": 4 } }
+AGENTFLOW_WORKSPACE_AGENT_CONCURRENCY=2
+AGENTFLOW_WORKSPACE_TOOL_CONCURRENCY=4
+```
+
+取值 1–64 的整数，非法值回落默认。**两档都默认 1**——此时调度器直接走原来的串行循环，
+行为与历史逐字节一致。峰值 agent CLI 进程数恒等于 `agent` 档，本机负载和模型侧限额都靠它控制。
+
+不变量：
+
+- 节点的**全部计划内前驱落地**才可投放，所以 `control_if` 的分支跳过传播与串行完全一致
+- pause（interrupt / while-wait / subflow-waiting / jenkins-deferred）**停止投放新节点**，
+  已经在跑的自然收尾——不半路杀子进程，否则会留下写了一半的产物和已发生的外部副作用
+- 失败取**第一个**错误冒泡，同样等在跑的收尾
+
+唯一的行为差异：并行开启时某节点 pause，**同批已在跑的兄弟节点会跑完**（串行下它们不会启动）。
 
 ---
 

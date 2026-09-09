@@ -6043,6 +6043,101 @@ async function workspaceRunSubflowFrame({
   return { resultValues, callFrameId };
 }
 
+// 并行执行的车道划分。
+//
+// 运行计划本来就是 DAG，放开并行的约束不是拓扑而是资源：`agent_subAgent` 每个都会 spawn
+// 一个完整的 agent CLI（claude / codex / cursor-agent），而带 script 的 tool_nodejs 只是
+// 一个短命子进程——两者代价差两个数量级。共用一个并发数字必然要么太保守要么打爆本机，
+// 所以按车道分开限。
+//
+// exclusive 这一档不是拍脑袋分的：这些节点会写 runWorkspaceGraph 里的 `cwd` 与 `runEnv`，
+// 也就是整轮运行共享的执行上下文。它们要是和别人并行，兄弟分支会读到改了一半的状态。
+const WORKSPACE_EXCLUSIVE_LANE_DEFINITION_IDS = new Set([
+  "tool_set_run_env",
+  "control_cd_workspace",
+  "control_user_workspace",
+  "tool_git_checkout",
+  "tool_git_worktree_load",
+  "tool_git_worktree_unload",
+]);
+
+// 纯内存或短命子进程，放宽几乎没有成本。
+const WORKSPACE_TOOL_LANE_DEFINITION_IDS = new Set([
+  "workspace_run",
+  "workspace_scheduled_run",
+  "workspace_subflow_input",
+  "context_knowledge",
+  "context_skills",
+  "context_workspace",
+  "context_bundle",
+  "control_load_skills",
+  "control_load_mcp",
+  "control_if",
+  "control_parse_json",
+  "control_interrupt",
+  "provide_str",
+  "provide_password",
+  "provide_json",
+  "provide_bool",
+  "provide_file",
+  "tool_display_share_link",
+  "tool_wecom_send_group_markdown",
+  "tool_wecom_send_app_markdown",
+  "tool_gitlab_create_mr",
+]);
+
+// 没被认领的节点一律落 agent 档——未知即最保守。
+export function workspaceNodeExecutionLane(instance) {
+  const defId = String(instance?.definitionId || "");
+  if (WORKSPACE_EXCLUSIVE_LANE_DEFINITION_IDS.has(defId)) return "exclusive";
+  if (WORKSPACE_TOOL_LANE_DEFINITION_IDS.has(defId)) return "tool";
+  if (workspaceDisplayKind(defId)) return "tool";
+  // tool_nodejs 写了 script/scriptRef 才是确定性子进程；没写就落到通用 agent 路径。
+  if (defId === "tool_nodejs") {
+    return String(instance?.script || instance?.scriptRef || "").trim() ? "tool" : "agent";
+  }
+  return "agent";
+}
+
+const WORKSPACE_MAX_LANE_CONCURRENCY = 64;
+
+function workspaceLaneLimit(raw, fallback) {
+  const value = Number(String(raw ?? "").trim());
+  if (!Number.isInteger(value) || value < 1) return fallback;
+  return Math.min(value, WORKSPACE_MAX_LANE_CONCURRENCY);
+}
+
+// 两档都默认 1。默认值下调度器直接走串行分支，存量流程行为一字不变——并行必须显式开。
+export function workspaceRunConcurrency(payload = {}, opts = {}) {
+  const pick = (value) => (value && typeof value === "object" && !Array.isArray(value) ? value : null);
+  const requested = pick(payload?.concurrency) || pick(opts?.concurrency) || {};
+  return {
+    agent: workspaceLaneLimit(requested.agent ?? process.env.AGENTFLOW_WORKSPACE_AGENT_CONCURRENCY, 1),
+    tool: workspaceLaneLimit(requested.tool ?? process.env.AGENTFLOW_WORKSPACE_TOOL_CONCURRENCY, 1),
+  };
+}
+
+// 计划内的依赖表。控制边和数据边一视同仁：一个节点必须等它所有计划内前驱落地，
+// skipReasonForNode 才读得到正确的 control_if 分支结论。重复边去重，自环忽略。
+export function workspaceRunDependencyGraph(graph, order) {
+  const planned = new Set(order);
+  const pending = new Map(order.map((id) => [id, 0]));
+  const dependents = new Map(order.map((id) => [id, []]));
+  const seen = new Set();
+  for (const edge of Array.isArray(graph?.edges) ? graph.edges : []) {
+    const source = String(edge?.source || "");
+    const target = String(edge?.target || "");
+    if (!source || !target || source === target) continue;
+    if (!planned.has(source) || !planned.has(target)) continue;
+    const key = `${source} ${target}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    pending.set(target, (pending.get(target) || 0) + 1);
+    dependents.get(source).push(target);
+  }
+  return { pending, dependents };
+}
+
 export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {}, opts = {}) {
   const graph = hydrateWorkspaceGraphForRuntime(root, {
     root: scopedRoot,
@@ -6281,23 +6376,133 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     if (updated) emit({ type: "run-state-updated", nodeId, revision: updated.revision, changedKeys: Object.keys(updated.state || {}) });
   };
 
+  // 投放计划内的节点。执行体已经提成 `executeNode`，这里只决定谁什么时候跑。
+  const concurrency = workspaceRunConcurrency(payload, opts);
+  const runPlannedNodes = async (execute) => {
+    // 默认档位就是原来的串行循环，一行不绕：顺序、语义与提取前逐字节一致。
+    if (concurrency.agent <= 1 && concurrency.tool <= 1) {
+      for (const nodeId of order) {
+        throwIfAborted();
+        if (await execute(nodeId) === "pause") return;
+      }
+      return;
+    }
+    emit({
+      type: "status",
+      line: `Parallel execution: agent x${concurrency.agent}, tool x${concurrency.tool}`,
+      concurrency,
+    });
+
+    const { pending, dependents } = workspaceRunDependencyGraph(graph, order);
+    const orderIndex = new Map(order.map((id, index) => [id, index]));
+    // ready 始终保持 order 的相对顺序，让同层节点的启动次序仍然可预期。
+    const ready = order.filter((id) => (pending.get(id) || 0) === 0);
+    const enqueue = (nodeId) => {
+      const at = ready.findIndex((id) => orderIndex.get(id) > orderIndex.get(nodeId));
+      if (at < 0) ready.push(nodeId);
+      else ready.splice(at, 0, nodeId);
+    };
+
+    const inFlight = new Map();
+    const settled = [];
+    const laneActive = { tool: 0, agent: 0 };
+    let exclusiveActive = false;
+    let stopScheduling = false;
+    let failure = null;
+    let wake = null;
+    const wakeUp = () => {
+      const resolve = wake;
+      wake = null;
+      if (resolve) resolve();
+    };
+    const start = (nodeId, lane) => {
+      if (lane === "exclusive") exclusiveActive = true;
+      else laneActive[lane] += 1;
+      const task = (async () => {
+        try {
+          return { nodeId, lane, outcome: await execute(nodeId) };
+        } catch (error) {
+          return { nodeId, lane, error };
+        }
+      })().then((result) => {
+        inFlight.delete(nodeId);
+        settled.push(result);
+        wakeUp();
+      });
+      inFlight.set(nodeId, task);
+    };
+    const schedule = () => {
+      if (stopScheduling || exclusiveActive) return;
+      for (let i = 0; i < ready.length;) {
+        const nodeId = ready[i];
+        const lane = workspaceNodeExecutionLane(graph.instances?.[nodeId]);
+        if (lane === "exclusive") {
+          // 独占节点要等在跑的全部落地，否则它改的 cwd / runEnv 会被并行节点看到一半。
+          // 让它卡住队首而不是绕过去，是为了保住 order 的相对顺序。
+          if (inFlight.size > 0) return;
+          ready.splice(i, 1);
+          start(nodeId, lane);
+          return;
+        }
+        if (laneActive[lane] >= concurrency[lane]) {
+          i += 1;
+          continue;
+        }
+        ready.splice(i, 1);
+        start(nodeId, lane);
+      }
+    };
+
+    schedule();
+    while (inFlight.size > 0 || settled.length > 0) {
+      if (settled.length === 0) {
+        await new Promise((resolve) => { wake = resolve; });
+        continue;
+      }
+      const result = settled.shift();
+      if (result.lane === "exclusive") exclusiveActive = false;
+      else laneActive[result.lane] -= 1;
+      if (result.error) {
+        // 第一个错误决定整轮结果。已经在跑的节点让它自己收尾——半路杀子进程会留下
+        // 写了一半的产物文件和已经发生的外部副作用（git push / Jenkins 触发 / MR 创建）。
+        if (!failure) failure = result.error;
+        stopScheduling = true;
+      } else if (result.outcome === "pause") {
+        stopScheduling = true;
+      } else {
+        for (const next of dependents.get(result.nodeId) || []) {
+          const left = (pending.get(next) || 0) - 1;
+          pending.set(next, left);
+          if (left === 0) enqueue(next);
+        }
+      }
+      if (signal?.aborted) stopScheduling = true;
+      schedule();
+    }
+    if (failure) throw failure;
+    throwIfAborted();
+  };
+
   try {
-  for (const nodeId of order) {
+  // 一个节点跑一次。返回 "next" 表示继续推进计划，返回 "pause" 表示这一轮到此为止
+  // （interrupt / while-wait / subflow-waiting / jenkins-deferred 四种挂起）。
+  // 失败仍然靠 throw 冒泡，由外层 catch 兜住。
+  const executeNode = async (nodeId) => {
     throwIfAborted();
     const instance = graph.instances[nodeId];
-    if (!instance) continue;
+    if (!instance) return "next";
     const defId = String(instance.definitionId || "");
     const skipReason = skipReasonForNode(nodeId);
     if (skipReason) {
       skippedNodes.add(nodeId);
       emit({ type: "status", nodeId, line: `Skipped: ${skipReason}` });
       emit({ type: "node-done", nodeId, definitionId: defId, skipped: true });
-      continue;
+      return "next";
     }
     emit({ type: "node-start", nodeId, definitionId: defId });
 
     if (defId === "workspace_run" || defId === "workspace_scheduled_run") {
-      continue;
+      return "next";
     }
 
     if (defId === "control_interrupt") {
@@ -6372,7 +6577,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         );
         emit({ type: "node-waiting", nodeId, definitionId: defId, interruptId: pending.interruptId, reason: pending.reason, value: pending.value });
         runtimePauseNodeIds.push(nodeId);
-        break;
+        return "pause";
       }
       const configuredApprovers = Array.isArray(currentInterrupt?.approvers)
         ? currentInterrupt.approvers.map((item) => String(item || "").trim()).filter(Boolean)
@@ -6419,14 +6624,14 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       resumedInterruptId = currentInterrupt?.interruptId || requestedResume.interruptId || "";
       emit({ type: "interrupt-resolved", nodeId, definitionId: defId, interruptId: currentInterrupt?.interruptId || requestedResume.interruptId || "" });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "workspace_subflow_input") {
       const value = workspaceSlotValue((instance.output || []).find((slot) => String(slot?.name || "") === "value"));
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "context_knowledge") {
@@ -6445,7 +6650,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "knowledgeContext", value);
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId, sourceCount: sources.length, workspaceIds });
-      continue;
+      return "next";
     }
 
     if (defId === "context_skills") {
@@ -6455,7 +6660,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "skillsContext", value);
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId, skillCount: keys.length });
-      continue;
+      return "next";
     }
 
     if (defId === "context_workspace") {
@@ -6484,7 +6689,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = nextInstance;
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId, workspaceId, access });
-      continue;
+      return "next";
     }
 
     if (defId === "context_bundle") {
@@ -6502,7 +6707,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "context", value);
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_subflow_call") {
@@ -6547,7 +6752,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
           pauseNodeIds: frameResult.pauseNodeIds || [],
           ...(frameResult.deferred ? { deferred: frameResult.deferred } : {}),
         });
-        break;
+        return "pause";
       }
       const { resultValues, callFrameId } = frameResult;
       let nextInstance = instance;
@@ -6560,7 +6765,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, primaryValue);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId, subflowId, callFrameId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_load_skills") {
@@ -6579,7 +6784,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, skillsBlock);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_load_mcp") {
@@ -6598,21 +6803,21 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, mcpBlock);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (workspaceDisplayKind(defId)) {
       if (!workspaceContentInputEdge(graph, nodeId)) {
         emit({ type: "status", nodeId, line: "Display unchanged: no content input edge" });
         emit({ type: "node-done", nodeId, definitionId: defId, unchanged: true });
-        continue;
+        return "next";
       }
       const content = workspaceUpstreamText(graph, nodeId, outputs, scopedRoot);
       graph.instances[nodeId] = workspaceWriteDisplayContent(instance, content);
       const updatedDisplays = publishNodeOutput(nodeId, content);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_if") {
@@ -6629,7 +6834,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       publishNodeOutput(nodeId, branch, { emitGraph: true });
       emit({ type: "status", nodeId, line: `control_if branch: ${branch}` });
       emit({ type: "node-done", nodeId, definitionId: defId, branch });
-      continue;
+      return "next";
     }
 
     if (defId === "control_parse_json") {
@@ -6646,7 +6851,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "result", content);
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_while") {
@@ -6879,16 +7084,16 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       });
       if (loop.decision === "wait") {
         runtimePauseNodeIds.push(nodeId);
-        break;
+        return "pause";
       }
-      continue;
+      return "next";
     }
 
     if (defId === "provide_str" || defId === "provide_password") {
       const content = workspaceInstanceText(instance);
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "provide_json") {
@@ -6903,7 +7108,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "value", content);
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "provide_bool") {
@@ -6911,7 +7116,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const content = ["true", "1", "yes", "on"].includes(String(raw || "").trim().toLowerCase()) ? "true" : "false";
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "provide_file") {
@@ -6923,7 +7128,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const content = fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf-8") : fileValue;
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_set_run_env") {
@@ -6943,7 +7148,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       emit({ type: "status", nodeId, line: `Set run env: ${keys.join(", ")}`, envKeys: keys });
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_cd_workspace") {
@@ -6999,7 +7204,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       publishNodeOutput(nodeId, JSON.stringify(knowledgeContext), { emitGraph: true });
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_user_workspace") {
@@ -7018,7 +7223,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       publishNodeOutput(nodeId, JSON.stringify(workspaceContext), { emitGraph: true });
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_jenkins_build") {
@@ -7082,14 +7287,14 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
           wakeAt: String(result.wakeAt || state.wakeAt || new Date(Date.now() + config.pollIntervalMs).toISOString()),
         };
         emit({ type: "node-waiting", nodeId, definitionId: defId, ...deferred });
-        break;
+        return "pause";
       }
       if (result.kind === "failed") throw new Error(result.message || "Jenkins build node failed");
       const finalStatus = result.outputs?.status || state.status || "ERROR";
       const updatedDisplays = publishNodeOutput(nodeId, finalStatus);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId, jenkinsStatus: finalStatus });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_git_checkout") {
@@ -7159,7 +7364,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, targetDir);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_git_worktree_load") {
@@ -7220,7 +7425,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, result.worktreePath);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_git_worktree_unload") {
@@ -7254,7 +7459,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, result.message);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_gitlab_create_mr") {
@@ -7289,7 +7494,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, result.mrUrl);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_wecom_send_group_markdown" || defId === "tool_wecom_send_app_markdown") {
@@ -7316,7 +7521,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, result.message);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_display_share_link") {
@@ -7377,7 +7582,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, url);
       emit({ type: "graph", nodeId, graph, displayNodeIds: [...nodeIds, ...updatedDisplays] });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_nodejs") {
@@ -7441,7 +7646,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         definitionId: defId,
         outputFiles: normalizedAgentOutput.outputFiles || [],
       });
-      continue;
+      return "next";
     }
 
     const isContextRunNode = isWorkspaceOneClickTaskDefinitionId(defId);
@@ -7692,7 +7897,10 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       definitionId: defId,
       outputFiles: normalizedAgentOutput.outputFiles || [],
     });
-  }
+    return "next";
+  };
+
+  await runPlannedNodes(executeNode);
   } catch (error) {
     runFailure = error;
     throw error;

@@ -231,12 +231,29 @@ build.next → testA.prev
 build.next → testB.prev
 ```
 
-运行时把两条分支的节点都收进计划，然后**按拓扑序串行执行**。两个各睡 3 秒的分支跑完要
-6 秒，不是 3 秒。分支之间也没有隔离：任何一个节点失败，整个 run 就结束，另一支不会跑。
+**并行与否由运行时的并发档位决定，不由 fork 决定。** 默认 `agent=1 / tool=1` 时按拓扑序
+串行执行，两个各睡 3 秒的分支跑完是 6 秒；开了并发档位（`{"concurrency":{"agent":2,"tool":4}}`
+或 `AGENTFLOW_WORKSPACE_{AGENT,TOOL}_CONCURRENCY`）无依赖的分支才真正重叠。车道划分和
+不变量见 `reference/flow-control-capabilities.md` §8.5。
 
-用它的理由是画布结构（两件事都挂在 build 后面、互不依赖），不是省时间。
+分支之间没有隔离：任何一个节点失败，整个 run 就结束。并行下的差别是失败会停止投放新
+节点，但同批已在跑的兄弟节点会自然收尾。
 
-**分支不能汇合**——fan-in 禁止，`control.anyOne` 运行时没实现。两条分支各自收尾。
+**分支可以汇合，但只能靠不同的输入槽。** fan-in 禁令是按「输入槽」判的（去重键
+`${target}|${slotName}`），不是按节点：
+
+```js
+// ✅ 三路结果各占一个槽——合法
+const gather = agent.subAgent("汇总", {
+  perf: a.result, security: b.result, maintainability: c.result,
+}, `把三份结论合并成一份报告`);
+
+// ❌ 三条边都落到同一个槽——违规，运行时只认第一条，另外两个值静默丢失
+```
+
+控制边（`prev`）仍然只能有一条，随便挂在扇出源或某一支上都行；**排序靠数据边**——
+运行计划建入度时控制边和数据边一视同仁，所以汇总节点必然排在三个上游之后。
+`control.anyOne` 运行时没实现，不要用它做汇合。
 
 ### 受控循环
 
