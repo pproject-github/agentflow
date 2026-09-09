@@ -35,3 +35,14 @@ AgentFlow 将一次 Workspace 执行使用的文件分为三类，三者不能�
 - `outputs/` 永远不由这套 finally 清理。
 
 服务进程被硬终止时 finally 无法执行，run manifest 是后续诊断和回收的事实记录；自动过期扫描属于后续资源回收能力。
+
+## 作用域解析：目录是唯一事实
+
+同一个流程目录只能有一条解析口径。管理员只读视图（`adminOwnerId`）曾经用
+`listFlowsJson` 找目录，而流程列表按设计滤掉了 draft 与 preview 目录；owner 自己
+打开走的却是 `getPipelineFiles`。于是同一个 `draft_xxx`，owner 打得开，管理员带上
+`adminOwnerId` 反而 404 `Pipeline workspace not found`——看着像没权限，其实是没找到。
+
+现在管理员分支在列表落空时回落到 `getPipelineFiles`，与 owner 落到同一个目录。
+可见性由目录决定，只读属性仍由作用域决定：`adminReadonly: true`，
+`collaborationAccess` 的 `writable` / `runnable` 都是 `false`。

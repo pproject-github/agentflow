@@ -2047,6 +2047,16 @@ export function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {})
           && Boolean(flow.archived) === archived
         ));
       targetPath = targetFlow?.path || "";
+      if (!targetPath) {
+        // 流程列表会滤掉 draft / preview 目录，管理员只读视图不能因此看不见——
+        // owner 自己打开的是同一个目录，只是走 getPipelineFiles 解析。目录在哪，
+        // 作用域就是什么；列表口径不该决定谁能看见什么。
+        const direct = getPipelineFiles(workspaceRoot, flowId, "user", archived, {
+          ...opts,
+          userId: owner.userId,
+        });
+        targetPath = direct?.path || "";
+      }
     } else {
       physicalFlowSource = collaboration?.projectSource || collaboration?.flowSource || "workspace";
       const result = getPipelineFiles(workspaceRoot, flowId, physicalFlowSource, archived, {
