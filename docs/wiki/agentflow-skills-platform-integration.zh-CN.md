@@ -19,7 +19,7 @@
 | 1 | `agentflow-author-flow` | `0.1.2` | 必需 | 用户入口；编排 Draft、试运行、修改、发布和定时生命周期 |
 | 2 | `agentflow-flow-dsl` | `0.1.11` | 必需 | 创建和修改 `workspace.flow.js` 流程图 |
 | 3 | `agentflow-node-dsl` | `0.1.4` | 建议 | 内置节点不满足需求时创建可执行代码节点 |
-| 4 | `agentflow-cli` | `0.1.9` | 必需 | 浏览器授权、DSL 校验、Draft、运行、发布和定时操作 |
+| 4 | `agentflow-cli` | `0.1.11` | 必需 | 浏览器授权、DSL 校验、Draft、运行、发布和定时操作 |
 | 5 | `agentflow-workspace-chart` | `0.1.1` | 可选 | 生成复杂 `display.chart` ChartSpec |
 
 不要再向用户分发 `agentflow-node-authoring`。它是旧入口，职责已由 `agentflow-node-dsl` 承接，同时启用会造成 Skill 触发歧义。
