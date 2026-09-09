@@ -16482,7 +16482,7 @@ function WorkspacePageInner() {
                 const roleLabel = entry.role === "condition" ? "Condition" : entry.role === "body" ? "Body" : "Subflow";
                 const current = index === subflowStack.length - 1;
                 return (
-                  <React.Fragment key={`${entry.id}:${index}`}>
+                  <Fragment key={`${entry.id}:${index}`}>
                     <span className="af-subflow-editor-bar__separator">/</span>
                     <button
                       type="button"
@@ -16494,7 +16494,7 @@ function WorkspacePageInner() {
                       <span className="af-subflow-editor-bar__kind">{roleLabel}</span>
                       <strong>{label}</strong>
                     </button>
-                  </React.Fragment>
+                  </Fragment>
                 );
               })}
               <em>拖入节点会自动加入当前子流程；连接 START / RETURN 即定义契约</em>
