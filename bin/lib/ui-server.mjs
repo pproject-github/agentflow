@@ -2455,6 +2455,8 @@ export function startUiServer({
         publicBaseUrl: serverPublicBaseUrl(req, host, uiPort),
         clientName: payload?.clientName,
       });
+      // 设备码这三步以前一行日志都不打，出问题只能去翻 sessions.json 的时间戳倒推。
+      log.info(`[auth] CLI 授权请求已创建：request=${authorization.requestId} client=${authorization.clientName} code=${authorization.userCode} 有效期至 ${new Date(authorization.expiresAt).toISOString()}`);
       json(res, 201, {
         requestId: authorization.requestId,
         deviceCode: authorization.deviceCode,
@@ -2477,6 +2479,10 @@ export function startUiServer({
       }
       const result = exchangeCliAuthorization(payload?.deviceCode);
       if (!result.ok) {
+        // pending 是每 3 秒一次的正常轮询，记了就是刷屏；只记真正的失败。
+        if (result.code !== "authorization_pending" && result.code !== "slow_down") {
+          log.warn(`[auth] CLI 授权兑换失败（${result.code || result.status}）：${result.error || "-"}`);
+        }
         json(res, result.status || 400, {
           error: result.error,
           code: result.code || "invalid_request",
@@ -2484,6 +2490,7 @@ export function startUiServer({
         });
         return;
       }
+      log.info(`[auth] CLI 授权已兑换：user=${result.user?.userId || "-"} client=${payload?.clientName || "-"} session 有效期至 ${new Date(result.expiresAt).toISOString()}`);
       json(res, 200, result);
       return;
     }
@@ -2553,6 +2560,11 @@ export function startUiServer({
         userId: user.userId,
         approved,
       });
+      if (result.ok) {
+        log.info(`[auth] CLI 授权被 ${user.userId} ${approved ? "批准" : "拒绝"}：request=${requestId} client=${current.authorization?.clientName || "-"}`);
+      } else {
+        log.warn(`[auth] CLI 授权确认失败：request=${requestId} user=${user.userId} ${result.error || "-"}`);
+      }
       html(res, result.ok ? 200 : result.status || 400, renderCliAuthorizationResult({
         approved,
         clientName: current.authorization?.clientName,
