@@ -6281,23 +6281,35 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
     if (updated) emit({ type: "run-state-updated", nodeId, revision: updated.revision, changedKeys: Object.keys(updated.state || {}) });
   };
 
+  // 投放计划内的节点。执行体已经提成 `executeNode`，这里只决定谁什么时候跑。
+  // 目前严格串行——顺序、语义与提取前的 for 循环逐字节一致；并发车道在下一步接进来。
+  const runPlannedNodes = async (execute) => {
+    for (const nodeId of order) {
+      throwIfAborted();
+      if (await execute(nodeId) === "pause") return;
+    }
+  };
+
   try {
-  for (const nodeId of order) {
+  // 一个节点跑一次。返回 "next" 表示继续推进计划，返回 "pause" 表示这一轮到此为止
+  // （interrupt / while-wait / subflow-waiting / jenkins-deferred 四种挂起）。
+  // 失败仍然靠 throw 冒泡，由外层 catch 兜住。
+  const executeNode = async (nodeId) => {
     throwIfAborted();
     const instance = graph.instances[nodeId];
-    if (!instance) continue;
+    if (!instance) return "next";
     const defId = String(instance.definitionId || "");
     const skipReason = skipReasonForNode(nodeId);
     if (skipReason) {
       skippedNodes.add(nodeId);
       emit({ type: "status", nodeId, line: `Skipped: ${skipReason}` });
       emit({ type: "node-done", nodeId, definitionId: defId, skipped: true });
-      continue;
+      return "next";
     }
     emit({ type: "node-start", nodeId, definitionId: defId });
 
     if (defId === "workspace_run" || defId === "workspace_scheduled_run") {
-      continue;
+      return "next";
     }
 
     if (defId === "control_interrupt") {
@@ -6372,7 +6384,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         );
         emit({ type: "node-waiting", nodeId, definitionId: defId, interruptId: pending.interruptId, reason: pending.reason, value: pending.value });
         runtimePauseNodeIds.push(nodeId);
-        break;
+        return "pause";
       }
       const configuredApprovers = Array.isArray(currentInterrupt?.approvers)
         ? currentInterrupt.approvers.map((item) => String(item || "").trim()).filter(Boolean)
@@ -6419,14 +6431,14 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       resumedInterruptId = currentInterrupt?.interruptId || requestedResume.interruptId || "";
       emit({ type: "interrupt-resolved", nodeId, definitionId: defId, interruptId: currentInterrupt?.interruptId || requestedResume.interruptId || "" });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "workspace_subflow_input") {
       const value = workspaceSlotValue((instance.output || []).find((slot) => String(slot?.name || "") === "value"));
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "context_knowledge") {
@@ -6445,7 +6457,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "knowledgeContext", value);
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId, sourceCount: sources.length, workspaceIds });
-      continue;
+      return "next";
     }
 
     if (defId === "context_skills") {
@@ -6455,7 +6467,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "skillsContext", value);
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId, skillCount: keys.length });
-      continue;
+      return "next";
     }
 
     if (defId === "context_workspace") {
@@ -6484,7 +6496,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = nextInstance;
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId, workspaceId, access });
-      continue;
+      return "next";
     }
 
     if (defId === "context_bundle") {
@@ -6502,7 +6514,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "context", value);
       publishNodeOutput(nodeId, value, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_subflow_call") {
@@ -6547,7 +6559,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
           pauseNodeIds: frameResult.pauseNodeIds || [],
           ...(frameResult.deferred ? { deferred: frameResult.deferred } : {}),
         });
-        break;
+        return "pause";
       }
       const { resultValues, callFrameId } = frameResult;
       let nextInstance = instance;
@@ -6560,7 +6572,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, primaryValue);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId, subflowId, callFrameId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_load_skills") {
@@ -6579,7 +6591,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, skillsBlock);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_load_mcp") {
@@ -6598,21 +6610,21 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, mcpBlock);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (workspaceDisplayKind(defId)) {
       if (!workspaceContentInputEdge(graph, nodeId)) {
         emit({ type: "status", nodeId, line: "Display unchanged: no content input edge" });
         emit({ type: "node-done", nodeId, definitionId: defId, unchanged: true });
-        continue;
+        return "next";
       }
       const content = workspaceUpstreamText(graph, nodeId, outputs, scopedRoot);
       graph.instances[nodeId] = workspaceWriteDisplayContent(instance, content);
       const updatedDisplays = publishNodeOutput(nodeId, content);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_if") {
@@ -6629,7 +6641,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       publishNodeOutput(nodeId, branch, { emitGraph: true });
       emit({ type: "status", nodeId, line: `control_if branch: ${branch}` });
       emit({ type: "node-done", nodeId, definitionId: defId, branch });
-      continue;
+      return "next";
     }
 
     if (defId === "control_parse_json") {
@@ -6646,7 +6658,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "result", content);
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_while") {
@@ -6879,16 +6891,16 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       });
       if (loop.decision === "wait") {
         runtimePauseNodeIds.push(nodeId);
-        break;
+        return "pause";
       }
-      continue;
+      return "next";
     }
 
     if (defId === "provide_str" || defId === "provide_password") {
       const content = workspaceInstanceText(instance);
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "provide_json") {
@@ -6903,7 +6915,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       graph.instances[nodeId] = workspaceSetOutputSlot(instance, "value", content);
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "provide_bool") {
@@ -6911,7 +6923,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const content = ["true", "1", "yes", "on"].includes(String(raw || "").trim().toLowerCase()) ? "true" : "false";
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "provide_file") {
@@ -6923,7 +6935,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const content = fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf-8") : fileValue;
       publishNodeOutput(nodeId, content, { emitGraph: true });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_set_run_env") {
@@ -6943,7 +6955,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       emit({ type: "status", nodeId, line: `Set run env: ${keys.join(", ")}`, envKeys: keys });
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_cd_workspace") {
@@ -6999,7 +7011,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       publishNodeOutput(nodeId, JSON.stringify(knowledgeContext), { emitGraph: true });
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "control_user_workspace") {
@@ -7018,7 +7030,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       publishNodeOutput(nodeId, JSON.stringify(workspaceContext), { emitGraph: true });
       emit({ type: "graph", nodeId, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_jenkins_build") {
@@ -7082,14 +7094,14 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
           wakeAt: String(result.wakeAt || state.wakeAt || new Date(Date.now() + config.pollIntervalMs).toISOString()),
         };
         emit({ type: "node-waiting", nodeId, definitionId: defId, ...deferred });
-        break;
+        return "pause";
       }
       if (result.kind === "failed") throw new Error(result.message || "Jenkins build node failed");
       const finalStatus = result.outputs?.status || state.status || "ERROR";
       const updatedDisplays = publishNodeOutput(nodeId, finalStatus);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId, jenkinsStatus: finalStatus });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_git_checkout") {
@@ -7159,7 +7171,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, targetDir);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_git_worktree_load") {
@@ -7220,7 +7232,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, result.worktreePath);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_git_worktree_unload") {
@@ -7254,7 +7266,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, result.message);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_gitlab_create_mr") {
@@ -7289,7 +7301,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, result.mrUrl);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_wecom_send_group_markdown" || defId === "tool_wecom_send_app_markdown") {
@@ -7316,7 +7328,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, result.message);
       emit({ type: "graph", nodeId, displayNodeIds: updatedDisplays, graph });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_display_share_link") {
@@ -7377,7 +7389,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       const updatedDisplays = publishNodeOutput(nodeId, url);
       emit({ type: "graph", nodeId, graph, displayNodeIds: [...nodeIds, ...updatedDisplays] });
       emit({ type: "node-done", nodeId, definitionId: defId });
-      continue;
+      return "next";
     }
 
     if (defId === "tool_nodejs") {
@@ -7441,7 +7453,7 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         definitionId: defId,
         outputFiles: normalizedAgentOutput.outputFiles || [],
       });
-      continue;
+      return "next";
     }
 
     const isContextRunNode = isWorkspaceOneClickTaskDefinitionId(defId);
@@ -7692,7 +7704,10 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       definitionId: defId,
       outputFiles: normalizedAgentOutput.outputFiles || [],
     });
-  }
+    return "next";
+  };
+
+  await runPlannedNodes(executeNode);
   } catch (error) {
     runFailure = error;
     throw error;
