@@ -322,15 +322,17 @@ build.next → testB.prev
 Codegen goes the other way — when a node's `next` has two or more downstream targets and it is
 not a `control_if`, it prints `flow.fork(...)`. Purely so the round trip matches.
 
-**It is not a parallelism primitive.** The runtime pulls both branches' nodes into the plan and
-executes them in topological order, **sequentially** (`for (const nodeId of order)`); two
-branches sleeping 3 seconds each take 6 seconds. There is no isolation between branches either:
-any node failing ends the whole run, and the other branch never starts.
+**It is still not a parallelism primitive** — it is only fan-out syntax; **whether branches run
+concurrently is decided by the runtime's concurrency lanes.** At the default `agent=1 / tool=1`
+the runtime executes in topological order, sequentially, and two branches sleeping 3 seconds each
+still take 6 seconds. Enabling concurrency (`{"concurrency":{"agent":2,"tool":4}}` or the matching
+environment variables) is what makes independent branches actually overlap; see
+`reference/flow-control-capabilities.md` §8.5.
 
-A comment in the skill used to say "parallel" — that was the single source of the false promise.
-Real concurrency means changing the scheduler: indegree-driven dispatch with a concurrency cap,
-plus handling in-place graph mutation during the run, per-node conflict detection, the abort
-path, and event ordering. A separate piece of work, unrelated to `flow.fork`.
+There is still no isolation between branches: any node failing ends the whole run. The difference
+under concurrency is that a failure **stops dispatching new nodes** while siblings already running
+finish on their own — killing their child processes mid-flight would leave half-written artifacts
+and external side effects that already happened.
 
 ## Inline subflows in the same Workspace
 

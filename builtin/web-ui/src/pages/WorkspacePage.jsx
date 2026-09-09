@@ -10911,7 +10911,8 @@ function WorkspacePageInner() {
         messages: [{ role: "assistant", kind: "run-summary", text: "准备运行...", at: Date.now() }],
       },
     ]);
-    let activeNodeId = runNodeId;
+    // 并行执行下同时可能有多个节点在跑，所以记的是集合而不是「当前节点」。
+    const activeNodeIds = new Set(runNodeId ? [runNodeId] : []);
     const latestResultByNodeId = new Map();
     const isRunStopped = () => workspaceRunStoppedRef.current.has(runSessionId);
     const removeSessionExecutingNodes = (ids) => {
@@ -11143,21 +11144,20 @@ function WorkspacePageInner() {
       }
     };
 
+    // 一个节点退出执行集只认它自己的 node-done / node-waiting。不能再靠「下一个
+    // node-start」反推上一个已完成——并行下那会把还在跑的兄弟节点标成成功。
     const markNodeStart = (nodeId) => {
       const id = String(nodeId || "").trim();
       if (!id) return;
-      const previousId = activeNodeId;
-      activeNodeId = id;
+      activeNodeIds.add(id);
       setWorkspaceExecutingNodes((current) => {
         const next = new Set(current);
-        if (previousId && previousId !== id && previousId !== runNodeId) next.delete(previousId);
         if (runNodeId) next.add(runNodeId);
         next.add(id);
         return next;
       });
       setWorkspaceNodeRunStatus((current) => ({
         ...current,
-        ...(previousId && previousId !== id && previousId !== runNodeId && current[previousId]?.status === "running" ? { [previousId]: { status: "success" } } : {}),
         ...(runNodeId ? { [runNodeId]: { status: "running" } } : {}),
         [id]: { status: "running" },
       }));
@@ -11165,6 +11165,7 @@ function WorkspacePageInner() {
       const markNodeDone = (nodeId, event = null) => {
         const id = String(nodeId || "").trim();
         if (!id) return;
+        activeNodeIds.delete(id);
         setWorkspaceExecutingNodes((current) => {
           const next = new Set(current);
           next.delete(id);
@@ -11483,7 +11484,7 @@ function WorkspacePageInner() {
             continue;
           }
           if (event.type === "node-start") {
-            setStatus(`Running ${event.nodeId}...`);
+            setStatus(activeNodeIds.size > 1 ? `Running ${activeNodeIds.size} nodes...` : `Running ${event.nodeId}...`);
             markNodeStart(event.nodeId);
             updateRunStep(event.nodeId, event.definitionId, "running");
           }
@@ -11498,6 +11499,7 @@ function WorkspacePageInner() {
             updateRunActivity(event.line || event.message || "", event);
           }
           if (event.type === "node-waiting") {
+            activeNodeIds.delete(String(event.nodeId || "").trim());
             updateNodeRunDetail(event);
             updateRunStep(event.nodeId, event.definitionId, "waiting");
           }
@@ -11565,7 +11567,7 @@ function WorkspacePageInner() {
           updateRunActivity("运行停止", event);
         }
         if (event.type === "node-start") {
-          setStatus(`Running ${event.nodeId}...`);
+          setStatus(activeNodeIds.size > 1 ? `Running ${activeNodeIds.size} nodes...` : `Running ${event.nodeId}...`);
           markNodeStart(event.nodeId);
           updateRunStep(event.nodeId, event.definitionId, "running");
         }
@@ -11580,6 +11582,7 @@ function WorkspacePageInner() {
           updateRunActivity(event.line || event.message || "", event);
         }
         if (event.type === "node-waiting") {
+          activeNodeIds.delete(String(event.nodeId || "").trim());
           updateNodeRunDetail(event);
           updateRunStep(event.nodeId, event.definitionId, "waiting");
         }
@@ -11688,7 +11691,7 @@ function WorkspacePageInner() {
         return;
       }
       removeSessionExecutingNodes(plannedNodeIds);
-      markSessionNodesFinal([runNodeId, activeNodeId].filter(Boolean), "failed");
+      markSessionNodesFinal([runNodeId, ...activeNodeIds].filter(Boolean), "failed");
       setStatus(String(e.message || e));
       setComposerRunSessions((list) => list.map((session) => (
         session.id === runSessionId
