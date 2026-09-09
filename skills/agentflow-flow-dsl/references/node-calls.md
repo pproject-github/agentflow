@@ -34,7 +34,7 @@
 | `provide.json` | — | value:json |
 | `provide.password` | — | value:text |
 | `provide.str` | — | value:text |
-| `tool.displayShareLink` | title:text, layout:text, nodeIds:text, baseUrl:text | url:text, shareId:text, expiresAt:text, reviewToken:text |
+| `tool.displayShareLink` | title:text, layout:text, nodeIds:text, baseUrl:text | url:text, shareId:text, expiresAt:text, reviewToken:text, reviewUrl:text |
 | `tool.gitCheckout` | repoUrl:text, branch:text, targetDir:text, pullIfExists:bool, includeSubmodules:bool, remote:text, workspaceContext:text | repoPath:file, branch:text, commit:text, changed:bool, workspaceContext:text, gitContext:text |
 | `tool.gitlabCreateMr` | repoPath:file, gitContext:text, workspaceContext:text, sourceBranch:text, targetBranch:text, title:text, description:text, draft:bool, labels:text, push:bool, remote:text, tokenEnv:text, gitlabApiBase:text, removeSourceBranch:bool, squash:bool | mrUrl:text, created:bool, mrIid:text, projectId:text, sourceBranch:text, targetBranch:text, title:text, message:text |
 | `tool.gitWorktreeLoad` | repoPath:file, branch:text, worktreePath:file, pruneMissing:bool, force:bool, gitContext:text, workspaceContext:text | worktreePath:file, branch:text, commit:text, workspaceContext:text, gitContext:text |

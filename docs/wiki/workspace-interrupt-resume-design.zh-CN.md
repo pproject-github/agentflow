@@ -174,3 +174,31 @@ POST /api/v1/flows/{flowId}/runs/{runId}/resume
 ```
 
 当前实现已提供持久化 interrupt 记录、查询接口和统一 resume 路由；企业微信适配器仍应在网关层完成签名校验、用户映射和卡片回调转换。
+
+## 审核链接：谁发的，什么时候才生效
+
+外部审核入口是 `/review/plan?token=<reviewToken>`。token 由
+`tool_display_share_link` 节点在建分享记录时生成，**但让它生效的中断记录是下游
+`control_interrupt` 节点执行时才写的**。两件事分属两个节点，中间隔着的任何一次
+失败、停止或进程重启，都会留下一条永远打不开的链接。
+
+因此：
+
+- `tool_display_share_link` 的 `url` 跟着图走——只有当某个 `control_interrupt`
+  节点用 `resumeToken` 接了本节点的 `reviewToken` 输出时，它才是审核入口；否则
+  它就是展示分享页 `/display/<shareId>`。审核入口另有 `reviewUrl` 输出。
+  没有中断节点消费的审核链接不是「过期」，是**从发出去就打不开**。
+- 分享记录写入 `runId`，token 一发出去就能反查是哪一次运行。
+- `/review/plan` 按 token 状态分开回答，不再用一句「已失效或已处理」打发所有情况：
+
+  | 状态 | 页面 | `/api/v1/public/reviews/:token` |
+  | --- | --- | --- |
+  | 中断在等 | 审核页 | 200 |
+  | 已被处理 | 谁批的、何时、同意还是驳回 | 410 |
+  | Run 还没跑到审批节点 | 每 10 秒自动刷新 | 425 |
+  | Run 在到达审批节点前已结束 | 说明链接不会再生效，带失败原因 | 410 |
+  | 有分享记录但从无审批登记 | 302 跳 `/display/<shareId>` | — |
+  | token 不属于本机 | 链接无效 | 404 |
+
+  「Run 还在跑」的判定看运行日志索引的最后动静：超过 10 分钟没有进展，就按
+  「已中断」处理，免得页面永远劝人再刷新一次。

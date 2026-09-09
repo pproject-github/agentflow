@@ -122,7 +122,7 @@
 - Description: Create a public share link for upstream Display nodes
 - Runtime: local-only
 - Inputs: 0. `prev`:node; 1. `title`:text; 2. `layout`:text = single; 3. `nodeIds`:text; 4. `baseUrl`:text
-- Outputs: 0. `next`:node; 1. `url`:text; 2. `shareId`:text; 3. `expiresAt`:text; 4. `reviewToken`:text
+- Outputs: 0. `next`:node; 1. `url`:text; 2. `shareId`:text; 3. `expiresAt`:text; 4. `reviewToken`:text; 5. `reviewUrl`:text
 
 ### tool_git_checkout
 

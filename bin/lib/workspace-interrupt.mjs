@@ -23,10 +23,33 @@ export function listWorkspaceInterrupts() {
   }
 }
 
-export function findWorkspaceInterruptByToken(token) {
+const OPEN_INTERRUPT_STATUSES = ["waiting", "resuming"];
+
+/**
+ * 按 token 找中断记录，**不过滤状态**。审核页要靠它把「从来没建过」和
+ * 「已经处理过」分开——两者以前都只会渲染同一句「链接已失效或已处理」。
+ * 同一个 token 若命中多条（流程把 resumeToken 写死时会这样），优先返回仍
+ * 然打开的那条，其次返回最近更新的一条。
+ * @param {string} token
+ * @returns {object|null}
+ */
+export function findWorkspaceInterruptRecordByToken(token) {
   const wanted = String(token || "").trim();
   if (!wanted) return null;
-  return listWorkspaceInterrupts().find((item) => String(item.resumeToken || "") === wanted && ["waiting", "resuming"].includes(String(item.status || ""))) || null;
+  const matches = listWorkspaceInterrupts().filter((item) => String(item.resumeToken || "") === wanted);
+  if (!matches.length) return null;
+  const open = matches.filter((item) => OPEN_INTERRUPT_STATUSES.includes(String(item.status || "")));
+  const pool = open.length ? open : matches;
+  return pool.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))[0];
+}
+
+export function isOpenWorkspaceInterrupt(record) {
+  return OPEN_INTERRUPT_STATUSES.includes(String(record?.status || ""));
+}
+
+export function findWorkspaceInterruptByToken(token) {
+  const record = findWorkspaceInterruptRecordByToken(token);
+  return record && isOpenWorkspaceInterrupt(record) ? record : null;
 }
 
 function interruptPath(runId) {
