@@ -164,6 +164,31 @@ export function readWorkspaceRunLogIndex() {
   return rows.slice(-MAX_INDEX_RECORDS);
 }
 
+/**
+ * 一个 Run 在索引里的合并快照。索引是 append-only 的，同一个 runId 会有
+ * start/finish 两行，后写的覆盖先写的。`lastEventAt` 取事件文件的 mtime：
+ * 索引只在开始/结束时写，进程被杀掉的 Run 会永远停在 `running`，只有事件
+ * 文件的最后写入时间能说明它到底还有没有在动。
+ * @param {string} runId
+ * @returns {object|null}
+ */
+export function readWorkspaceRunLogSummary(runId) {
+  const id = String(runId || "");
+  if (!id) return null;
+  let summary = null;
+  for (const row of readWorkspaceRunLogIndex()) {
+    if (!row || String(row.runId || "") !== id) continue;
+    summary = { ...(summary || {}), ...row };
+  }
+  if (!summary) return null;
+  let lastEventAt = Number(summary.updatedAt || summary.startedAt || 0);
+  try {
+    const stat = fs.statSync(eventPath(id));
+    lastEventAt = Math.max(lastEventAt, Math.floor(stat.mtimeMs));
+  } catch {}
+  return { ...summary, lastEventAt };
+}
+
 export function listWorkspaceRunLogs(filter = {}) {
   const byRun = new Map();
   for (const row of readWorkspaceRunLogIndex()) {

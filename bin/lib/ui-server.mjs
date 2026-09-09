@@ -182,6 +182,7 @@ import {
   readCursorMcpConfig,
   readCursorMcpServers,
   readDisplayShares,
+  resolveWorkspaceReviewToken,
   readUserWorkspaces,
   readUserMcpPrivate,
   readWorkspaceGraph,
@@ -209,6 +210,7 @@ import {
 } from "./workspace-server.mjs";
 import { handleWorkspaceRoutes, workspaceGraphWithScheduleMode } from "./workspace-routes.mjs";
 import { findWorkspaceInterruptByToken } from "./workspace-interrupt.mjs";
+import { htmlEscapeAttribute } from "./html-escape.mjs";
 import {
   createSpace,
   deleteSpacePage,
@@ -1630,6 +1632,94 @@ function html(res, status, content, headers = {}) {
   res.end(body);
 }
 
+const REVIEW_NOTICE_STYLE = "body{margin:0;background:#f5f7fb;color:#172033;font:15px/1.7 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}"
+  + ".wrap{max-width:640px;margin:0 auto;padding:48px 18px}"
+  + ".card{background:#fff;border:1px solid #dde3ef;border-radius:14px;padding:24px;box-shadow:0 8px 30px #17203312}"
+  + "h1{margin:0 0 10px;font-size:22px}p{margin:0 0 10px}"
+  + ".hint{color:#667085;font-size:14px}"
+  + "dl{margin:16px 0 0;display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:13px;color:#475467}"
+  + "dt{color:#98a2b3}dd{margin:0;word-break:break-all;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}";
+
+function formatReviewTime(value) {
+  const ts = typeof value === "number" ? value : Date.parse(String(value || ""));
+  if (!Number.isFinite(ts) || !ts) return "";
+  try {
+    return new Date(ts).toLocaleString("zh-CN");
+  } catch {
+    return new Date(ts).toISOString();
+  }
+}
+
+/**
+ * 把审核 token 的非 open 状态渲染成一页能自证的说明。
+ *
+ * 以前这四种情况共用一句「审核链接已失效或已处理」，谁也没法据此判断该刷新、
+ * 该找人、还是该重跑流程——问题因此反复回到开发手上。
+ *
+ * @param {{state:string, token:string, interrupt?:object|null, share?:object|null, run?:object|null}} view
+ * @returns {{status:number, body:string}}
+ */
+function renderReviewTokenNotice(view) {
+  const interrupt = view?.interrupt || null;
+  const share = view?.share || null;
+  const run = view?.run || null;
+  const flowId = String(interrupt?.flowId || share?.flowId || "");
+  const runId = String(interrupt?.runId || share?.runId || run?.runId || "");
+  const rows = [];
+  if (flowId) rows.push(["流程", flowId]);
+  if (runId) rows.push(["运行", runId]);
+  let status = 200;
+  let title = "审核链接不可用";
+  let heading = "审核链接不可用";
+  let paragraphs = [];
+  let refresh = 0;
+  if (view?.state === "resolved") {
+    const approved = String(interrupt?.approvalStatus || "") !== "rejected";
+    const reviewer = String(interrupt?.reviewer || interrupt?.resolvedBy || "").trim();
+    const at = formatReviewTime(interrupt?.resolvedAt || interrupt?.updatedAt);
+    title = "审核已处理";
+    heading = approved ? "该审核已通过" : "该审核已驳回";
+    paragraphs = [`${reviewer ? `${reviewer} ` : ""}${at ? `于 ${at} ` : ""}${approved ? "确认了这次执行" : "驳回了这次执行"}，链接不再需要操作。`];
+    if (String(interrupt?.reviewComment || "").trim()) rows.push(["审核意见", String(interrupt.reviewComment).trim()]);
+  } else if (view?.state === "pending") {
+    title = "审核链接尚未生效";
+    heading = "审核内容还在生成";
+    paragraphs = [
+      "链接已经发出，但这次运行还没执行到审批节点。",
+      "页面会每 10 秒自动刷新一次，等节点开始等待就会显示审核内容。",
+    ];
+    refresh = 10;
+  } else if (view?.state === "lost") {
+    const label = { failed: "已失败", stopped: "被中止", success: "已结束", running: "已中断", waiting: "停在了别处" }[String(run?.status || "")];
+    title = "审核链接不可用";
+    heading = "这次运行没有走到审批节点";
+    paragraphs = [
+      label
+        ? `发出链接后运行${label}，审批节点没有登记过这个链接，它不会再生效。`
+        : "审批节点没有登记过这个链接，它不会再生效。",
+      "请重新运行流程，使用新一次运行发出的链接。",
+    ];
+    if (String(run?.error || "").trim()) rows.push(["失败原因", String(run.error).trim().slice(0, 400)]);
+    status = 410;
+  } else {
+    title = "审核链接无效";
+    heading = "审核链接无效";
+    paragraphs = ["这个链接不属于当前服务，可能已被清理或复制不完整。请向流程发起人索取新的审核链接。"];
+    status = 404;
+  }
+  const body = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width,initial-scale=1">`
+    + (refresh ? `<meta http-equiv="refresh" content="${refresh}">` : "")
+    + `<title>${htmlEscapeAttribute(title)}</title><style>${REVIEW_NOTICE_STYLE}</style></head>`
+    + `<body><main class="wrap"><section class="card"><h1>${htmlEscapeAttribute(heading)}</h1>`
+    + paragraphs.map((text) => `<p>${htmlEscapeAttribute(text)}</p>`).join("")
+    + (rows.length
+      ? `<dl>${rows.map(([key, value]) => `<dt>${htmlEscapeAttribute(key)}</dt><dd>${htmlEscapeAttribute(value)}</dd>`).join("")}</dl>`
+      : "")
+    + `</section></main></body></html>`;
+  return { status, body };
+}
+
 async function readUrlEncodedBody(req) {
   const body = await readBody(req);
   return new URLSearchParams(String(body || ""));
@@ -2655,11 +2745,25 @@ export function startUiServer({
     } : {};
     if (req.method === "GET" && url.pathname === "/review/plan") {
       const token = String(url.searchParams.get("token") || "").trim();
-      const interrupt = findWorkspaceInterruptByToken(token);
-      if (!interrupt) {
-        html(res, 404, "<!doctype html><meta charset=\"utf-8\"><title>审核链接不可用</title><main style=\"font:16px sans-serif;padding:32px\">审核链接已失效或已处理。</main>");
+      const review = resolveWorkspaceReviewToken(token);
+      if (review.state !== "open") {
+        // token 有分享记录、却从来没有中断节点登记过它：这条链接本来就不是审批
+        // 入口，是展示分享链接被发成了审核页地址。把人送到展示页，而不是送到
+        // 一句「已失效」——历史上已经发出去的那些链接就是这样坏的。
+        const shareId = String(review.share?.id || "");
+        if (review.state === "lost" && shareId && !review.interrupt) {
+          res.writeHead(302, {
+            Location: `/display/${encodeURIComponent(shareId)}`,
+            "Cache-Control": "no-store, max-age=0",
+          });
+          res.end();
+          return;
+        }
+        const notice = renderReviewTokenNotice(review);
+        html(res, notice.status, notice.body);
         return;
       }
+      const interrupt = review.interrupt;
       const signedInReviewer = getAuthUserFromRequest(req);
       const configuredApprovers = Array.isArray(interrupt.approvers)
         ? interrupt.approvers.map((item) => String(item || "").trim()).filter(Boolean)
@@ -2683,9 +2787,28 @@ export function startUiServer({
     }
     if (req.method === "GET" && url.pathname.startsWith("/api/v1/public/reviews/")) {
       const token = decodeURIComponent(url.pathname.slice("/api/v1/public/reviews/".length));
-      const interrupt = findWorkspaceInterruptByToken(token);
-      if (!interrupt) { json(res, 404, { error: "Review link not found or expired" }); return; }
-      json(res, 200, { ok: true, flowId: interrupt.flowId, runId: interrupt.runId, interruptId: interrupt.interruptId, value: interrupt.value, status: interrupt.status });
+      const review = resolveWorkspaceReviewToken(token);
+      const interrupt = review.state === "open" ? review.interrupt : null;
+      if (!interrupt) {
+        // 425 Too Early 说的正是 pending：链接没失效，只是 Run 还没跑到审批节点。
+        const statusByState = { unknown: 404, pending: 425 };
+        json(res, statusByState[review.state] || 410, {
+          error: {
+            resolved: "Review link already handled",
+            pending: "Review link is not armed yet; the run has not reached the approval node",
+            lost: "Run ended before the approval node registered this review link",
+          }[review.state] || "Review link not found or expired",
+          state: review.state,
+          flowId: review.interrupt?.flowId || review.share?.flowId || "",
+          runId: review.interrupt?.runId || review.share?.runId || "",
+          runStatus: review.run?.status || "",
+          approvalStatus: review.interrupt?.approvalStatus || "",
+          reviewer: review.interrupt?.reviewer || review.interrupt?.resolvedBy || "",
+          resolvedAt: review.interrupt?.resolvedAt || "",
+        });
+        return;
+      }
+      json(res, 200, { ok: true, state: review.state, flowId: interrupt.flowId, runId: interrupt.runId, interruptId: interrupt.interruptId, value: interrupt.value, status: interrupt.status });
       return;
     }
     const legacyFlowManagementPath = new Set([

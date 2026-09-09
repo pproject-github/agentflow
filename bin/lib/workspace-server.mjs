@@ -47,9 +47,9 @@ import { getWorkspaceCollaborationByFlow, getWorkspaceCollaborationForProject, l
 import { FLOW_SOURCE_FILENAME, WORKSPACE_GRAPH_FILENAME, WorkspaceFlowParseError, readWorkspaceGraphFiles, readWorkspaceRunFingerprints, writeWorkspaceGraphFiles } from "./workspace-flow-store.mjs";
 import { workspaceDesignRevision } from "./workspace-graph-merge.mjs";
 import { createWorkspaceRunController, terminateWorkspaceChild } from "./workspace-run-controller.mjs";
-import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession } from "./workspace-run-logs.mjs";
+import { appendWorkspaceRunLogEvent, createWorkspaceRunLogSession, finishWorkspaceRunLogSession, readWorkspaceRunLogSummary } from "./workspace-run-logs.mjs";
 import { appendWorkspaceRunState, appendWorkspaceRunStateCheckpoint, createWorkspaceRunState, patchWorkspaceRunState, readWorkspaceRunState, readWorkspaceRunStateEvents, readWorkspaceRunStateHistory, replaceWorkspaceRunState, workspaceRunStateEventsPath, workspaceRunStatePath } from "./workspace-run-state.mjs";
-import { consumeWorkspaceInterrupt, createWorkspaceInterrupt, readWorkspaceInterrupt, resolveWorkspaceInterrupt, requeueWorkspaceInterrupt } from "./workspace-interrupt.mjs";
+import { consumeWorkspaceInterrupt, createWorkspaceInterrupt, findWorkspaceInterruptRecordByToken, isOpenWorkspaceInterrupt, readWorkspaceInterrupt, resolveWorkspaceInterrupt, requeueWorkspaceInterrupt } from "./workspace-interrupt.mjs";
 import { mergeWorkspaceState, splitWorkspaceGraph } from "./workspace-state.mjs";
 import { isWorkspaceDraftDir } from "./workspace-draft.mjs";
 import { getPipelineFiles } from "./workspace-tree.mjs";
@@ -1526,7 +1526,7 @@ function normalizeDisplayShareLayout(layout, fallback = "canvas") {
   return ["canvas", "gallery", "slides", "document", "single"].includes(text) ? text : fallback;
 }
 
-export function createDisplayShareRecord({ userId, flowId, flowSource, archived, title, layout, nodeIds, expiresMode, expiresInDays, permanent, expiresAt, visibility = "public", reviewToken = "" }) {
+export function createDisplayShareRecord({ userId, flowId, flowSource, archived, title, layout, nodeIds, expiresMode, expiresInDays, permanent, expiresAt, visibility = "public", reviewToken = "", runId = "" }) {
   const shares = readDisplayShares();
   let id = createDisplayShareId();
   while (shares[id]) id = createDisplayShareId();
@@ -1543,6 +1543,10 @@ export function createDisplayShareRecord({ userId, flowId, flowSource, archived,
     layout: normalizeDisplayShareLayout(layout, "canvas"),
     nodeIds: Array.isArray(nodeIds) ? nodeIds : [],
     reviewToken: String(reviewToken || crypto.randomBytes(24).toString("base64url")),
+    // 审核链接一发出去就得能被反查。中断记录是下游的 control_interrupt 节点才写的，
+    // 中间任何一次失败/进程被杀都会让 token 变成无主的；分享记录带上 runId，审核页
+    // 才能说清「这次运行没走到审批节点」而不是含糊地说「链接已失效」。
+    runId: String(runId || ""),
     visibility: String(visibility || "").trim().toLowerCase() === "private" ? "private" : "public",
     createdAt: now,
     updatedAt: now,
@@ -1553,6 +1557,95 @@ export function createDisplayShareRecord({ userId, flowId, flowSource, archived,
   shares[id] = share;
   writeDisplayShares(shares);
   return share;
+}
+
+/**
+ * 图里有没有 control_interrupt 消费本分享节点的 reviewToken。
+ *
+ * 有 → 这条链接是审批入口，url 给审核页；没有 → 它只是一个展示分享页，
+ * 再发审核页地址出去就只会得到一个永远登记不上、点开就说「已失效」的链接
+ * ——日报类流程今天就是这么坏的。
+ *
+ * @param {object} graph
+ * @param {string} nodeId
+ * @returns {string} 消费 token 的中断节点 id，没有则为空串
+ */
+function workspaceShareLinkApprovalGate(graph, nodeId) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  for (const edge of Array.isArray(graph?.edges) ? graph.edges : []) {
+    if (String(edge?.source || "") !== String(nodeId || "")) continue;
+    const targetId = String(edge?.target || "");
+    if (String(instances[targetId]?.definitionId || "") !== "control_interrupt") continue;
+    if (workspaceEdgeSourceSlotName(graph, edge) !== "reviewToken") continue;
+    if (workspaceEdgeTargetSlotName(graph, edge) !== "resumeToken") continue;
+    return targetId;
+  }
+  return "";
+}
+
+/** Run 索引没更新超过这个时长还停在 running，就当它是被杀掉了。 */
+const REVIEW_RUN_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * 按审核 token 反查分享记录。
+ * @param {string} token
+ * @returns {object|null}
+ */
+export function findDisplayShareByReviewToken(token) {
+  const wanted = String(token || "").trim();
+  if (!wanted) return null;
+  let shares = {};
+  try {
+    shares = readDisplayShares();
+  } catch {
+    return null;
+  }
+  const matches = Object.values(shares).filter((item) => String(item?.reviewToken || "") === wanted);
+  if (!matches.length) return null;
+  return matches.sort((a, b) => String(b?.createdAt || "").localeCompare(String(a?.createdAt || "")))[0];
+}
+
+/**
+ * 审核 token 的完整状态。审核页和公开审核 API 都走这里，好让「打不开」的四种
+ * 原因彼此分得开：
+ *
+ * - `open`：中断还在等，正常渲染审核页；
+ * - `resolved`：已经有人处理过，能说出是谁、什么时候、同意还是驳回；
+ * - `pending`：链接已发出但 Run 还没跑到审批节点，刷新即可；
+ * - `lost`：Run 在到达审批节点前就失败/中断/被杀，这条链接永远不会生效；
+ * - `unknown`：token 根本不属于本机（换了数据目录、伪造、或分享记录被清掉）。
+ *
+ * @param {string} token
+ * @returns {{state:string, token:string, interrupt?:object|null, share?:object|null, run?:object|null, idleMs?:number}}
+ */
+export function resolveWorkspaceReviewToken(token) {
+  const wanted = String(token || "").trim();
+  if (!wanted) return { state: "unknown", token: "" };
+  const interrupt = findWorkspaceInterruptRecordByToken(wanted);
+  const share = findDisplayShareByReviewToken(wanted);
+  if (interrupt) {
+    // 索引是整份 JSONL，open 状态的审核页用不到它，别为每次打开都解析一遍。
+    const open = isOpenWorkspaceInterrupt(interrupt);
+    return {
+      state: open ? "open" : "resolved",
+      token: wanted,
+      interrupt,
+      share,
+      run: open ? null : readWorkspaceRunLogSummary(interrupt.runId),
+    };
+  }
+  if (!share) return { state: "unknown", token: wanted, interrupt: null, share: null, run: null };
+  // 分享记录在、中断记录不在：Run 要么还没跑到审批节点，要么再也跑不到了。
+  // 只有「还活着且刚有过动静」才算 pending——旧版本发出的链接（没有 runId）和
+  // 索引里已经翻篇的 Run 都会落到 lost，免得页面永远劝人再刷新一次。
+  const run = share.runId ? readWorkspaceRunLogSummary(share.runId) : null;
+  const status = String(run?.status || "");
+  const active = run ? (status === "running" || status === "waiting") : true;
+  const idleMs = Math.max(0, Date.now() - (run
+    ? Number(run.lastEventAt || run.updatedAt || run.startedAt || 0)
+    : (Date.parse(String(share.createdAt || "")) || 0)));
+  const state = active && idleMs <= REVIEW_RUN_STALE_MS ? "pending" : "lost";
+  return { state, token: wanted, interrupt: null, share, run, idleMs };
 }
 
 function parseDisplayShareNodeIdInput(value) {
@@ -7256,12 +7349,19 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
         permanent: payload.permanent,
         expiresAt: payload.expiresAt,
         reviewToken: inputValues.reviewToken || "",
+        runId: runtimeRunId,
       });
       const reviewPath = `/review/plan?token=${encodeURIComponent(share.reviewToken)}`;
-      const url = baseUrl ? new URL(reviewPath, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).href : reviewPath;
+      const reviewUrl = baseUrl ? new URL(reviewPath, baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`).href : reviewPath;
+      const shareUrl = displayShareOutputUrl(share.id, baseUrl);
+      // url 跟着图走：只有当下游真的有中断节点消费这个 token 时才是审核入口，
+      // 否则它就是它名字说的那个东西——展示分享链接。
+      const approvalGateNodeId = workspaceShareLinkApprovalGate(graph, nodeId);
+      const url = approvalGateNodeId ? reviewUrl : shareUrl;
       let nextInstance = workspaceSetOutputSlot(instance, "url", url);
       nextInstance = workspaceSetOutputSlot(nextInstance, "shareId", share.id);
       nextInstance = workspaceSetOutputSlot(nextInstance, "reviewToken", share.reviewToken);
+      nextInstance = workspaceSetOutputSlot(nextInstance, "reviewUrl", reviewUrl);
       nextInstance = workspaceSetOutputSlot(nextInstance, "expiresAt", share.expiresAt);
       graph.instances[nodeId] = nextInstance;
       const updatedDisplays = publishNodeOutput(nodeId, url);

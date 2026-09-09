@@ -47,6 +47,10 @@ output:
     name: reviewToken
     default: ""
     showOnNode: false
+  - type: text
+    name: reviewUrl
+    default: ""
+    showOnNode: false
 ui:
   card:
     template: details
@@ -54,10 +58,10 @@ ui:
     tone: blue
     sections:
       - type: binding
-        label: 审核页标题
+        label: 分享页标题
         input: title
       - type: summary
-        label: 一次性审核入口
+        label: 分享链接
         output: url
       - type: summary
         label: 有效期
@@ -65,3 +69,9 @@ ui:
         format: datetime
 ---
 Create a share link for connected Display nodes. Connect a Display node to this node, optionally set title, and use the url output.
+
+`url` follows the graph: it is the display share page (`/display/<shareId>`) unless a
+`control_interrupt` node consumes this node's `reviewToken` through its `resumeToken`
+input — only then is the link an approval entry, because only then does something
+register the token. `reviewUrl` always carries the approval page address, and it is
+useless on its own: an approval link that no interrupt node registers can never open.
