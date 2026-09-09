@@ -8485,6 +8485,11 @@ export async function runWorkspaceScheduledEntry(root, entry) {
   activeWorkspaceRuns.set(runKey, runEntry);
   appendWorkspaceRunStarted(runEntry);
   updateWorkspaceScheduleEntry(entry.key, {
+    // 开跑的这一刻就把这个 cron 槽位用掉。轮询每 30 秒一次，而一次执行动辄几十秒——
+    // 只在收尾时推进 nextRunAt 的话，运行期间的每一次轮询都会看到"早就该跑了"，
+    // 于是重新触发一遍，再被 overlap 检查拦成 skipped。线上表现就是每个整点
+    // 稳定多出一条 skipped 记录。
+    nextRunAt,
     lastStatus: "running",
     lastTriggeredAt: runEntry.startedAt,
     lastRunId: runEntry.runId,
