@@ -2115,9 +2115,11 @@ function setWorkspaceScheduleEnabled(root, payload = {}, authUser = {}, userCtx 
 }
 
 function schedulesForRequest(root, authUser = {}, userCtx = {}) {
+  const currentUserId = String(userCtx?.userId || authUser?.userId || "");
   if (!authUser?.isAdmin) {
     return {
       adminView: false,
+      currentUserId,
       users: [],
       schedules: listWorkspaceScheduleStatuses(root, userCtx),
     };
@@ -2153,6 +2155,9 @@ function schedulesForRequest(root, authUser = {}, userCtx = {}) {
   const ownerIds = new Set(schedules.map((schedule) => String(schedule.ownerUserId || "")).filter(Boolean));
   return {
     adminView: true,
+    // 前端要靠它区分"别人的排程"和"我自己的排程"：只有前者该带 adminOwnerId，
+    // 后者带上会把自己的流程锁成只读。
+    currentUserId,
     users: users.filter((user) => ownerIds.has(user.userId)),
     schedules,
   };

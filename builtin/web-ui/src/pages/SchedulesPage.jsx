@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
-import { scheduleTargetLabel, scheduleTargetUrl } from "../scheduleNavigation.js";
+import { scheduleOwnerQueryParam, scheduleTargetLabel, scheduleTargetUrl } from "../scheduleNavigation.js";
 import LoadingState from "../components/LoadingState.jsx";
 import WorkspaceRunLogsDrawer from "../components/WorkspaceRunLogsDrawer.jsx";
 
@@ -32,6 +32,7 @@ export default function SchedulesPage() {
   const [schedules, setSchedules] = useState([]);
   const [scheduleOwners, setScheduleOwners] = useState([]);
   const [adminView, setAdminView] = useState(false);
+  const [currentUserId, setCurrentUserId] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -48,6 +49,7 @@ export default function SchedulesPage() {
       setSchedules(Array.isArray(json.schedules) ? json.schedules : []);
       setScheduleOwners(Array.isArray(json.users) ? json.users : []);
       setAdminView(json.adminView === true);
+      setCurrentUserId(String(json.currentUserId || ""));
       setOwnerFilter((current) => (
         current === "all" || json.users?.some?.((user) => user.userId === current) ? current : "all"
       ));
@@ -56,6 +58,7 @@ export default function SchedulesPage() {
       setSchedules([]);
       setScheduleOwners([]);
       setAdminView(false);
+      setCurrentUserId("");
     } finally {
       setLoading(false);
     }
@@ -149,7 +152,7 @@ export default function SchedulesPage() {
             {visibleSchedules.map((schedule) => {
               const key = `${schedule.ownerUserId || "self"}:${schedule.kind}:${schedule.flowSource || "user"}:${schedule.flowId || ""}:${schedule.scheduleNodeId || ""}`;
               const busy = updatingKey === key;
-              const targetUrl = scheduleTargetUrl(schedule);
+              const targetUrl = scheduleTargetUrl(schedule, currentUserId);
               return (
                 <article key={key} className="af-schedule-card">
                   <div className="af-schedule-card__main">
@@ -222,7 +225,9 @@ export default function SchedulesPage() {
               flowParams={{
                 flowId: inspectingSchedule.flowId || "",
                 flowSource: inspectingSchedule.flowSource || "user",
-                ...(adminView && inspectingSchedule.ownerUserId ? { adminOwnerId: inspectingSchedule.ownerUserId } : {}),
+                ...(scheduleOwnerQueryParam(inspectingSchedule, currentUserId)
+                  ? { adminOwnerId: scheduleOwnerQueryParam(inspectingSchedule, currentUserId) }
+                  : {}),
               }}
               scheduleNodeId={inspectingSchedule.scheduleNodeId || ""}
               lastRunId={inspectingSchedule.lastRunId || ""}
