@@ -20,7 +20,7 @@ const CAS_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const LEGACY_LINK_FAILURE_LIMIT = 5;
 const LEGACY_LINK_FAILURE_WINDOW_MS = 15 * 60 * 1000;
 const CLI_AUTHORIZATION_TTL_MS = 10 * 60 * 1000;
-const CLI_AUTHORIZATION_SCOPES = [
+export const CLI_AUTHORIZATION_SCOPES = [
   "workspace:read",
   "workspace:write",
   "workspace:run",
@@ -179,6 +179,24 @@ function bearerTokenFromAuthHeader(header) {
 
 export function readAuthUsers() {
   return readJsonObject(usersPath());
+}
+
+/**
+ * 发一个「某应用代表某用户」的会话。
+ *
+ * 和 CLI 授权的区别：scopes 由互信登记里那条应用记录决定，TTL 短，且 `kind` 记成
+ * `app:<appId>`——运行记录和审计里能一眼看出这不是本人操作，而是哪个应用代的劳。
+ */
+export function issueAppDelegatedSession({ userId, appId, scopes = [], ttlMs } = {}) {
+  const id = String(userId || "").trim();
+  const app = String(appId || "").trim();
+  if (!id || !app) return { ok: false, error: "缺少 userId 或 appId" };
+  return createSessionForUser(id, {
+    kind: `app:${app}`,
+    clientName: app,
+    scopes,
+    ttlMs: Number(ttlMs) || 15 * 60 * 1000,
+  });
 }
 
 /**

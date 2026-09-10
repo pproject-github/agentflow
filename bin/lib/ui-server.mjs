@@ -92,6 +92,8 @@ import {
   revokeSessionToken,
   verifyLegacyAccountLink,
   writeUserAllowlist,
+  CLI_AUTHORIZATION_SCOPES,
+  issueAppDelegatedSession,
 } from "./auth.mjs";
 import {
   beginCasLogin,
@@ -117,11 +119,21 @@ import { readGlobalEnvRows, readMergedEnvObject, readUserEnvRows, writeGlobalEnv
 import {
   backfillWecomBindings,
   directoryLookupName,
+  findUserIdByWecomUserId,
   readWecomBinding,
   resolveWecomUserId,
   writeManualWecomBinding,
 } from "./wecom-directory.mjs";
 import { sendWecomAppMarkdown } from "./wecom.mjs";
+import { appendRunLedgerEvent } from "./run-ledger.mjs";
+import {
+  APP_TRUST_MAX_SKEW_MS,
+  listAppTrustPeers,
+  removeAppTrustPeer,
+  selfPublicKey,
+  upsertAppTrustPeer,
+  verifyAppRequest,
+} from "./app-trust.mjs";
 import { runCursorAgentWithPrompt } from "./agent-runners.mjs";
 import {
   clearCursorApiKeyCooldown,
@@ -2713,6 +2725,78 @@ export function startUiServer({
       return;
     }
 
+    // 应用互信：外部应用（萌买）用自己的 Ed25519 私钥签名，我们用登记的公钥验，
+    // 验过之后把企微 userid 落到 AgentFlow 用户，发一个短时会话。
+    // 这条路由必须在鉴权中间件之前——它自己就是一种鉴权。
+    if (url.pathname === "/api/app/tokens/exchange" && req.method === "POST") {
+      const rawBody = await readBody(req);
+      const verified = verifyAppRequest({
+        method: "POST",
+        requestPath: url.pathname,
+        body: rawBody,
+        headers: req.headers,
+      });
+      if (!verified.ok) {
+        // 对外只说一句，不区分「应用不存在 / 时钟偏了 / 签名不对」——那是免费的探测信道
+        log.warn(`[app-trust] exchange 拒绝：${verified.reason} app=${String(req.headers["x-agentflow-app"] || "-")}`);
+        json(res, 401, { error: "应用签名校验失败" });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(rawBody || "{}");
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const wecomUserId = String(payload?.wecomUserId || "").trim();
+      if (!wecomUserId) {
+        json(res, 400, { error: "Missing wecomUserId" });
+        return;
+      }
+      const match = findUserIdByWecomUserId(wecomUserId, {
+        allowManual: verified.peer.requirePrivilegeBinding === false,
+      });
+      if (!match) {
+        log.warn(`[app-trust] exchange 未命中用户：app=${verified.appId} wecomUserId=${wecomUserId}`);
+        json(res, 404, { error: "该企业微信用户没有可用的 AgentFlow 账号绑定" });
+        return;
+      }
+      const issued = issueAppDelegatedSession({
+        userId: match.userId,
+        appId: verified.appId,
+        scopes: verified.peer.scopes,
+        ttlMs: verified.peer.sessionTtlMs,
+      });
+      if (!issued.ok) {
+        json(res, 400, { error: issued.error || "发放会话失败" });
+        return;
+      }
+      appendRunLedgerEvent({
+        type: "app_token_exchanged",
+        kind: "app-trust",
+        runId: `apptrust-${Date.now().toString(36)}-${crypto.randomBytes(4).toString("hex")}`,
+        userId: match.userId,
+        username: issued.user?.username || match.userId,
+        flowId: verified.appId,
+        flowSource: "app-trust",
+        runNodeId: wecomUserId,
+        at: Date.now(),
+        status: "success",
+      });
+      log.info(`[app-trust] ${verified.appId} 代表 ${match.userId}（企微 ${wecomUserId}）换出会话`);
+      json(res, 201, {
+        token: issued.token,
+        tokenType: "Bearer",
+        expiresAt: issued.expiresAt,
+        appId: verified.appId,
+        userId: match.userId,
+        username: issued.user?.username || match.userId,
+        scopes: verified.peer.scopes,
+      });
+      return;
+    }
+
     if (url.pathname === "/api/admin/auth/login" && req.method === "POST") {
       let payload;
       try {
@@ -4452,6 +4536,45 @@ export function startUiServer({
       return;
     }
 
+    // 应用互信登记：把我们的公钥给对方，把对方的公钥登记进来。私钥永远不出现在响应里。
+    if (url.pathname === "/api/admin/app-trust") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      try {
+        if (req.method === "GET") {
+          json(res, 200, {
+            selfPublicKey: selfPublicKey(),
+            peers: listAppTrustPeers(),
+            availableScopes: CLI_AUTHORIZATION_SCOPES,
+            maxSkewMs: APP_TRUST_MAX_SKEW_MS,
+          });
+          return;
+        }
+        if (req.method === "POST") {
+          let payload = {};
+          try {
+            payload = JSON.parse((await readBody(req)) || "{}");
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return;
+          }
+          const saved = upsertAppTrustPeer(payload);
+          json(res, saved.ok ? 200 : 400, saved);
+          return;
+        }
+        if (req.method === "DELETE") {
+          const removed = removeAppTrustPeer(url.searchParams.get("appId") || "");
+          json(res, removed.ok ? 200 : 404, removed);
+          return;
+        }
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+        return;
+      }
+    }
+
     // 管理员替某个人试发一条：确认"这个人收得到"，不用本人登录一次
     if (req.method === "POST" && url.pathname === "/api/admin/wecom-bindings/test") {
       if (!authUser?.isAdmin) {
@@ -4525,6 +4648,14 @@ export function startUiServer({
             payload = JSON.parse((await readBody(req)) || "{}");
           } catch {
             json(res, 400, { error: "Invalid JSON body" });
+            return;
+          }
+          // 手工指定：Privilege 里查不到的老账号（登录名和内网用户名对不上）先兜住，
+          // 不然他们的定时会一直发不出去，而本人自助绑定要等下次 CAS 登录。
+          const manualUserId = String(payload?.userId || "").trim();
+          if (manualUserId) {
+            const saved = writeManualWecomBinding(manualUserId, payload?.wecomUserId);
+            json(res, saved.ok ? 200 : 400, { ...saved, userId: manualUserId });
             return;
           }
           const result = await backfillWecomBindings({
