@@ -181,6 +181,23 @@ export function readAuthUsers() {
   return readJsonObject(usersPath());
 }
 
+/**
+ * 往用户记录上挂通知绑定（企微 userid 等），只合并 `notify` 子对象。
+ *
+ * 和 CAS 登录写的是同一个 users.json，所以这里只动 notify，其余字段原样带过去。
+ */
+export function writeAuthUserNotify(userId, notify = {}) {
+  const id = String(userId || "").trim();
+  if (!id) return null;
+  const users = readAuthUsers();
+  const user = users[id];
+  if (!user) return null;
+  const merged = { ...(user.notify && typeof user.notify === "object" ? user.notify : {}), ...notify };
+  users[id] = { ...user, notify: merged, updatedAt: new Date().toISOString() };
+  writeJsonObject(usersPath(), users);
+  return merged;
+}
+
 export function listAuthUsers() {
   return Object.entries(readAuthUsers())
     .map(([userId, user]) => ({

@@ -2012,6 +2012,31 @@ export function workspaceScopedUserContext(scoped = {}, userCtx = {}) {
   };
 }
 
+/**
+ * 当前用户在这个作用域下的协作登记。
+ *
+ * 个人作用域的流程靠 (ownerId, flowId) 才唯一——两个人各留一份同名流程是常态，
+ * `flowKey` 就是为此存在的。只按 flowId 找，会把「别人分享过来的同名流程」当成我打开的
+ * 这一份：目录解到别人那儿，定时登记和运行记录跟着改姓，事后从记录里看不出真正的作者。
+ * 顺序是：先自己名下的登记，再自己的目录，最后才是别人分享过来的同名登记。
+ */
+function workspaceProjectCollaborationForActor(userCtx = {}, flowSource = "user", flowId = "", archived = false) {
+  const actorId = String(userCtx?.userId || "");
+  if (!flowId || !actorId) return null;
+  const own = getWorkspaceCollaborationForProject({ flowId, flowSource, archived, ownerId: actorId });
+  if (own) return own;
+  const shared = listWorkspaceCollaborationsForUser(actorId).find((record) => (
+    record.flowId === flowId
+    && record.archived === (archived === true)
+    && (record.projectSource || record.flowSource || "workspace") === flowSource
+  )) || null;
+  if (!shared || String(shared.ownerId || "") === actorId) return shared;
+  // 个人作用域下自己就有这份流程：那是我的那份，不能被别人的同名登记接管。
+  // 真要打开别人分享的那份，请求会带 workspaceId，走不到这里。
+  if (flowSource === "user" && workspaceFlowDirExistsForScope("", flowId, "user", archived, actorId)) return null;
+  return shared;
+}
+
 export function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {}) {
   const flowId = params.flowId != null ? String(params.flowId).trim() : "";
   if (!flowId) return { root: path.resolve(workspaceRoot), flowId: "", flowSource: "", archived: false };
@@ -2096,11 +2121,7 @@ export function resolveWorkspaceScopeRoot(workspaceRoot, params = {}, opts = {})
     ownerId: workspaceId ? "" : opts.userId,
   });
   if (!collaboration && !workspaceId) {
-    collaboration = listWorkspaceCollaborationsForUser(opts.userId).find((record) => (
-      record.flowId === flowId
-      && record.archived === archived
-      && (record.projectSource || record.flowSource || "workspace") === flowSource
-    )) || null;
+    collaboration = workspaceProjectCollaborationForActor({ userId: opts.userId }, flowSource, flowId, archived);
   }
   if (!collaboration && flowSource === "workspace") {
     collaboration = getWorkspaceCollaborationByFlow(flowId, archived);
@@ -8074,11 +8095,7 @@ function workspaceIntervalMinutesToCron(intervalMinutes) {
 
 export function workspaceRunKey(userCtx, flowSource, flowId) {
   const source = flowSource || "user";
-  const collaboration = listWorkspaceCollaborationsForUser(userCtx?.userId).find((record) => (
-    record.flowId === flowId
-    && record.archived !== true
-    && (record.projectSource || record.flowSource || "workspace") === source
-  ));
+  const collaboration = workspaceProjectCollaborationForActor(userCtx, source, flowId, false);
   if (collaboration?.id) return `shared:${collaboration.id}`;
   const actorScope = source === "workspace" ? "shared" : userCtx?.userId || "";
   return `${actorScope}:${source}:${flowId}`;
@@ -8086,11 +8103,7 @@ export function workspaceRunKey(userCtx, flowSource, flowId) {
 
 export function workspaceCollaborationEventKey(userCtx, flowSource, flowId, archived = false) {
   const source = flowSource || "user";
-  const collaboration = listWorkspaceCollaborationsForUser(userCtx?.userId).find((record) => (
-    record.flowId === flowId
-    && record.archived === (archived === true)
-    && (record.projectSource || record.flowSource || "workspace") === source
-  ));
+  const collaboration = workspaceProjectCollaborationForActor(userCtx, source, flowId, archived === true);
   if (collaboration?.id) return `shared:${collaboration.id}:${archived ? "1" : "0"}`;
   const actorScope = source === "workspace" ? "shared" : userCtx?.userId || "";
   return `${actorScope}:${source}:${flowId}:${archived ? "1" : "0"}`;
@@ -8353,19 +8366,46 @@ function workspaceScheduleKey(userId, flowSource, flowId, scheduleNodeId) {
   ].join(":");
 }
 
-function workspaceScheduleOwnerUserId(userCtx = {}, flowSource = "user", flowId = "") {
-  const collaboration = listWorkspaceCollaborationsForUser(userCtx.userId).find((record) => (
-    record.flowId === flowId
-    && record.archived !== true
-    && (record.projectSource || record.flowSource || "workspace") === flowSource
-  ));
-  if (collaboration?.ownerId) return String(collaboration.ownerId);
-  return String(userCtx.userId || "");
+/**
+ * 定时登记归谁：**目录在谁名下就归谁**。
+ *
+ * 传 scoped（已经解析过作用域的那次）时直接采信它——登记要跟着真正被调度的那份流程走，
+ * 否则同名流程会让登记和运行记录改姓。没有 scoped 的读接口才回退到协作登记查找。
+ */
+function workspaceScheduleOwnerUserId(userCtx = {}, flowSource = "user", flowId = "", options = {}) {
+  const actorId = String(userCtx?.userId || "");
+  const scoped = options?.scoped;
+  const archived = options?.archived === true || scoped?.archived === true;
+  if (scoped && (scoped.root || scoped.flowId)) {
+    return String(scoped.collaboration?.ownerId || actorId);
+  }
+  const collaboration = workspaceProjectCollaborationForActor({ userId: actorId }, flowSource, flowId, archived);
+  return String(collaboration?.ownerId || actorId);
 }
 
-export function listWorkspaceScheduleStatusesForFlow(userCtx = {}, flowSource = "user", flowId = "") {
+/**
+ * 已登记的定时属于谁：只认登记表自己写的 userId。
+ *
+ * 共享作用域的流程人人可见，按「当前查看者」推断归属，会把流程记在一个从没打开过它的
+ * 人头上（管理员视图逐用户枚举，第一个被枚举到的人就被顶上去）。有登记就用登记的，
+ * 没登记就用协作登记里的 owner，两者都没有时宁可留空。
+ */
+function workspaceRegisteredScheduleOwnerUserId(registry, flowSource, flowId, scheduleNodeId, archived = false) {
+  const entry = Object.values(registry?.schedules || {}).find((item) => (
+    String(item?.flowId || "") === String(flowId || "")
+    && String(item?.flowSource || "user") === String(flowSource || "user")
+    && String(item?.scheduleNodeId || "") === String(scheduleNodeId || "")
+  ));
+  if (entry?.userId) return String(entry.userId);
+  if (String(flowSource || "user") === "workspace") {
+    return String(getWorkspaceCollaborationByFlow(flowId, archived === true)?.ownerId || "");
+  }
+  return "";
+}
+
+export function listWorkspaceScheduleStatusesForFlow(userCtx = {}, flowSource = "user", flowId = "", options = {}) {
   const registry = readWorkspaceScheduleRegistry();
-  const userId = workspaceScheduleOwnerUserId(userCtx, flowSource, flowId);
+  const userId = workspaceScheduleOwnerUserId(userCtx, flowSource, flowId, options);
   return Object.values(registry.schedules || {})
     .filter((entry) => (
       String(entry?.userId || "") === userId &&
@@ -8377,15 +8417,16 @@ export function listWorkspaceScheduleStatusesForFlow(userCtx = {}, flowSource = 
 
 export function listWorkspaceScheduleStatuses(root, userCtx = {}) {
   const registry = readWorkspaceScheduleRegistry();
+  const scheduleAuthUsers = readAuthUsers();
   const flows = listFlowsJson(root, { ...userCtx, includeWorkspaceFlows: true })
     .filter((flow) => !flow.archived && !isReadonlyBuiltinFlowSource(flow.source || "user"));
   const rows = [];
   for (const flow of flows) {
     const flowId = String(flow.id || "");
     const flowSource = String(flow.source || "user");
-    const scheduleUserId = workspaceScheduleOwnerUserId(userCtx, flowSource, flowId);
     const scoped = resolveWorkspaceScopeRoot(root, { flowId, flowSource }, userCtx);
     if (scoped.error || !scoped.root) continue;
+    const scopeOwnerUserId = workspaceScheduleOwnerUserId(userCtx, flowSource, flowId, { scoped });
     let draftGraph;
     try {
       draftGraph = readWorkspaceGraph(scoped.root, root).graph;
@@ -8407,6 +8448,10 @@ export function listWorkspaceScheduleStatuses(root, userCtx = {}) {
       const instance = graph?.instances?.[scheduleNodeId];
       if (String(instance?.definitionId || "") !== "workspace_scheduled_run") continue;
       const config = normalizeWorkspaceScheduledRunConfig(instance.body || "");
+      // 登记表里已经有这条定时，就以登记的归属为准；没登记过的才按当前作用域算。
+      // 共享作用域人人可见，算不出归属时留空——空归属好过记在一个没打开过它的人头上。
+      const scheduleUserId = workspaceRegisteredScheduleOwnerUserId(registry, flowSource, flowId, scheduleNodeId, scoped.archived)
+        || (flowSource === "workspace" ? "" : scopeOwnerUserId);
       const key = workspaceScheduleKey(scheduleUserId, flowSource, flowId, scheduleNodeId);
       const current = registry.schedules?.[key] && typeof registry.schedules[key] === "object" ? registry.schedules[key] : {};
       const targetRunNodeId = workspaceScheduleInferTargetRunNodeId(graph, scheduleNodeId, config);
@@ -8431,7 +8476,10 @@ export function listWorkspaceScheduleStatuses(root, userCtx = {}) {
         key,
         registered: Boolean(registry.schedules?.[key]),
         ownerUserId: scheduleUserId,
-        ownerUsername: String(current.username || scheduleUserId),
+        // 登记里的 username 可能是历史上判错归属时留下的，认 userId 对应的账号名。
+        ownerUsername: scheduleUserId
+          ? String(scheduleAuthUsers[scheduleUserId]?.username || scheduleUserId)
+          : "",
         flowId,
         flowSource,
         workspaceId: String(flow.collaboration?.id || scoped.workspaceId || ""),
@@ -8496,6 +8544,7 @@ export function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, us
     { userId: userCtx.userId || authUser?.userId || "" },
     flowSource,
     flowId,
+    { scoped },
   );
   if (!flowId || !userId) return [];
   const now = Date.now();
@@ -8594,7 +8643,7 @@ export function syncWorkspaceSchedulesForGraph(root, scoped, graph, authUser, us
   }
   const nextRegistry = { version: 1, schedules };
   writeWorkspaceScheduleRegistry(nextRegistry);
-  return listWorkspaceScheduleStatusesForFlow(userCtx, flowSource, flowId);
+  return listWorkspaceScheduleStatusesForFlow(userCtx, flowSource, flowId, { scoped });
 }
 
 export function updateWorkspaceScheduleEntry(key, patch) {

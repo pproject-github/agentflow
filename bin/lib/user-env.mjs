@@ -3,6 +3,7 @@ import os from "os";
 import path from "path";
 
 import { getAgentflowDataRoot, getAgentflowUserEnvAbs, sanitizeAgentflowUserId } from "./paths.mjs";
+import { readWecomBinding } from "./wecom-directory.mjs";
 
 function normalizeEnvKey(key) {
   return String(key || "").trim();
@@ -116,12 +117,20 @@ export function resolveUserEnvValue(key, userId) {
  * 子进程环境：进程自身的 env + 该用户配置的 env + 调用方补的 extra。
  *
  * `AGENTFLOW_USER_ID` 放最后，防止用户在自己的 env 里把它改成别人。
+ *
+ * `WECOM_TO_USER` 放在用户 env **之前**：平台把「你的企微是谁」当默认值给出去，
+ * 流程不用再各自去查（以前每条流程都得自己拼一遍，或者手填一个填错的名字）；
+ * 但要发给别人时，用户自己配的那份仍然盖得住这个默认值。
  * @param {{ userId?: string }} [userCtx]
  * @param {Record<string, string>} [extra]
  */
 export function runtimeEnvForUser(userCtx = {}, extra = {}) {
+  const binding = readWecomBinding(userCtx.userId);
   return {
     ...process.env,
+    ...(binding?.wecomUserId
+      ? { WECOM_TO_USER: binding.wecomUserId, AGENTFLOW_WECOM_USER_ID: binding.wecomUserId }
+      : {}),
     ...readMergedEnvObject(userCtx.userId),
     ...extra,
     AGENTFLOW_USER_ID: userCtx.userId || "",
