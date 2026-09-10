@@ -113,7 +113,15 @@ import {
   renderCliAuthorizationPage,
   renderCliAuthorizationResult,
 } from "./cli-auth-page.mjs";
-import { readGlobalEnvRows, readUserEnvRows, writeGlobalEnvRows, writeUserEnvRows } from "./user-env.mjs";
+import { readGlobalEnvRows, readMergedEnvObject, readUserEnvRows, writeGlobalEnvRows, writeUserEnvRows } from "./user-env.mjs";
+import {
+  backfillWecomBindings,
+  directoryLookupName,
+  readWecomBinding,
+  resolveWecomUserId,
+  writeManualWecomBinding,
+} from "./wecom-directory.mjs";
+import { sendWecomAppMarkdown } from "./wecom.mjs";
 import { runCursorAgentWithPrompt } from "./agent-runners.mjs";
 import {
   clearCursorApiKeyCooldown,
@@ -2495,6 +2503,14 @@ export function startUiServer({
           res.end();
           return;
         }
+        // 顺手把企微 ID 绑上：登录是唯一一个"人一定在场"的时刻，绑定放这里，
+        // 新人不用再等管理员批量补。查不到不影响登录，只留一行日志。
+        void resolveWecomUserId(result.user.userId, { env: readMergedEnvObject(result.user.userId) })
+          .then((bound) => {
+            if (!bound.ok) log.warn(`[wecom-binding] ${result.user.userId} 未绑定：${bound.error}`);
+            else if (!bound.cached) log.info(`[wecom-binding] ${result.user.userId} -> ${bound.wecomUserId}`);
+          })
+          .catch((e) => log.warn(`[wecom-binding] ${result.user.userId} 解析异常：${(e && e.message) || String(e)}`));
         res.writeHead(303, {
           Location: sanitizeCasReturnTo(flow.returnTo),
           "Set-Cookie": [buildSessionCookie(result.token, { secure }), buildClearCasFlowCookie({ secure })],
@@ -4366,6 +4382,163 @@ export function startUiServer({
         json(res, 500, { error: (e && e.message) || String(e) });
       }
       return;
+    }
+
+    // 「我的企业微信 ID」：以前每条流程自己去 Privilege 查一遍，平台不留结果。
+    // 这里查一次存进用户记录，运行时统一注入 WECOM_TO_USER（见 user-env.mjs）。
+    if (url.pathname === "/api/me/wecom-binding") {
+      try {
+        if (req.method === "GET") {
+          const binding = readWecomBinding(userCtx.userId);
+          json(res, 200, {
+            userId: userCtx.userId,
+            lookupName: directoryLookupName(userCtx.userId),
+            bound: Boolean(binding?.wecomUserId),
+            ...(binding || {}),
+          });
+          return;
+        }
+        if (req.method === "POST") {
+          let payload = {};
+          try {
+            payload = JSON.parse((await readBody(req)) || "{}");
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return;
+          }
+          // 手工指定优先于反查：Privilege 查不到，或者故意要发给别人时用
+          if (String(payload?.wecomUserId || "").trim()) {
+            const saved = writeManualWecomBinding(userCtx.userId, payload.wecomUserId);
+            json(res, saved.ok ? 200 : 400, saved);
+            return;
+          }
+          const resolved = await resolveWecomUserId(userCtx.userId, {
+            env: readMergedEnvObject(userCtx.userId),
+            force: payload?.force === true,
+          });
+          json(res, resolved.ok ? 200 : 400, resolved);
+          return;
+        }
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+        return;
+      }
+    }
+
+    // 绑定完必须真发一条：ID 对不对是一回事，人在不在这个应用的可见范围内是另一回事，
+    // 只有发出去才知道。线上那批 81013 就是死在第二件事上。
+    if (req.method === "POST" && url.pathname === "/api/me/wecom-binding/test") {
+      try {
+        const binding = readWecomBinding(userCtx.userId);
+        if (!binding?.wecomUserId) {
+          json(res, 400, { error: "还没有绑定企微 ID，先调用 POST /api/me/wecom-binding" });
+          return;
+        }
+        const env = readMergedEnvObject(userCtx.userId);
+        const result = await sendWecomAppMarkdown({
+          toUser: binding.wecomUserId,
+          markdown: [
+            "**AgentFlow 通知绑定测试**",
+            `> 收件人：\`${binding.wecomUserId}\`（来源：${binding.source || "unknown"}）`,
+            `> 时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`,
+            "",
+            "收到这条，说明定时任务的失败通知能发到你这里。",
+          ].join("\n"),
+        }, env);
+        json(res, 200, { ...result, toUser: binding.wecomUserId });
+      } catch (e) {
+        json(res, 502, { error: (e && e.message) || String(e), hint: "81013 通常是 userid 无效或本人不在该应用可见范围内" });
+      }
+      return;
+    }
+
+    // 管理员替某个人试发一条：确认"这个人收得到"，不用本人登录一次
+    if (req.method === "POST" && url.pathname === "/api/admin/wecom-bindings/test") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      let payload = {};
+      try {
+        payload = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const targetUserId = String(payload?.userId || "").trim();
+      if (!targetUserId) {
+        json(res, 400, { error: "Missing userId" });
+        return;
+      }
+      try {
+        const binding = readWecomBinding(targetUserId);
+        if (!binding?.wecomUserId) {
+          json(res, 400, { error: `${targetUserId} 还没有绑定企微 ID` });
+          return;
+        }
+        const result = await sendWecomAppMarkdown({
+          toUser: binding.wecomUserId,
+          markdown: [
+            "**AgentFlow 通知绑定测试**",
+            `> 目标用户：\`${targetUserId}\` → 企微 \`${binding.wecomUserId}\`（来源：${binding.source || "unknown"}）`,
+            `> 时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`,
+            "",
+            "收到这条，说明定时任务的失败通知能发到你这里。",
+          ].join("\n"),
+        }, readMergedEnvObject(userCtx.userId));
+        json(res, 200, { ...result, userId: targetUserId, toUser: binding.wecomUserId });
+      } catch (e) {
+        json(res, 502, {
+          error: (e && e.message) || String(e),
+          hint: "81013 通常是 userid 无效或本人不在该应用可见范围内",
+        });
+      }
+      return;
+    }
+
+    if (url.pathname === "/api/admin/wecom-bindings") {
+      if (!authUser?.isAdmin) {
+        json(res, 403, { error: "Admin permission required" });
+        return;
+      }
+      try {
+        if (req.method === "GET") {
+          const users = readAuthUsers();
+          const rows = Object.keys(users).map((userId) => {
+            const binding = readWecomBinding(userId, users);
+            return {
+              userId,
+              username: String(users[userId]?.username || userId),
+              lookupName: directoryLookupName(userId, users),
+              linkedToUserId: String(users[userId]?.linkedToUserId || ""),
+              wecomUserId: binding?.wecomUserId || "",
+              source: binding?.source || "",
+              verifiedAt: binding?.verifiedAt || "",
+            };
+          }).sort((a, b) => a.userId.localeCompare(b.userId));
+          json(res, 200, { total: rows.length, bound: rows.filter((row) => row.wecomUserId).length, rows });
+          return;
+        }
+        if (req.method === "POST") {
+          let payload = {};
+          try {
+            payload = JSON.parse((await readBody(req)) || "{}");
+          } catch {
+            json(res, 400, { error: "Invalid JSON body" });
+            return;
+          }
+          const result = await backfillWecomBindings({
+            env: readMergedEnvObject(userCtx.userId),
+            userIds: Array.isArray(payload?.userIds) ? payload.userIds : undefined,
+            force: payload?.force === true,
+          });
+          json(res, 200, result);
+          return;
+        }
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+        return;
+      }
     }
 
     if (req.method === "GET" && url.pathname === "/api/admin/cursor-api-keys/status") {
