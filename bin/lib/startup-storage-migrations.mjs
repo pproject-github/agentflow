@@ -9,6 +9,7 @@ import fs from "fs";
 import path from "path";
 
 import { migrateFlowDirToDsl } from "./flow-dsl/cli.mjs";
+import { readWorkspaceDesign } from "./workspace-flow-store.mjs";
 import {
   ARCHIVED_PIPELINES_DIR_NAME,
   LEGACY_PIPELINES_DIR,
@@ -19,6 +20,7 @@ import {
 
 export const STORAGE_SCHEMA_VERSION = 1;
 export const WORKSPACE_FLOW_DSL_MIGRATION_ID = "workspace-flow-dsl-v1";
+export const WORKSPACE_SCHEDULE_OWNER_MIGRATION_ID = "workspace-schedule-owner-v1";
 
 const STATE_FILENAME = "storage-migrations.json";
 const LOCK_FILENAME = "storage-migrations.lock";
@@ -193,6 +195,126 @@ function summarizeRows(rows) {
   };
 }
 
+function readJsonObjectFile(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+/** 这个用户的这份流程里，`scheduleNodeId` 确实是一个 workspace_scheduled_run 节点吗 */
+function flowDeclaresScheduleNode(flowDir, scheduleNodeId) {
+  if (!scheduleNodeId || !fs.existsSync(flowDir) || !isFlowDir(flowDir)) return false;
+  try {
+    const { graph } = readWorkspaceDesign(flowDir);
+    return String(graph?.instances?.[scheduleNodeId]?.definitionId || "") === "workspace_scheduled_run";
+  } catch {
+    return false;
+  }
+}
+
+function userFlowDir(dataRoot, userId, flowId, archived) {
+  const root = path.join(dataRoot, "users", String(userId || ""), "pipelines");
+  return archived === true ? path.join(root, ARCHIVED_PIPELINES_DIR_NAME, flowId) : path.join(root, flowId);
+}
+
+/**
+ * 修定时登记里判错的归属。
+ *
+ * 历史上归属只按 flowId 找协作登记，两个人各有一份同名个人流程时会判成对方：登记、
+ * 调度身份、运行记录一起改姓，事后从记录里看不出真正的作者。这里按**目录**认回来——
+ * 哪个用户的 pipelines 里确实有这份流程、且图里确实有这个定时节点，就是谁的。
+ * 认不回来的（流程已删、多个用户都对得上）一律不动，只记进结果里。
+ */
+export function repairWorkspaceScheduleOwners(dataRoot, { dryRun = false } = {}) {
+  const schedulesPath = path.join(dataRoot, "workspace-schedules.json");
+  const registry = readJsonObjectFile(schedulesPath, null);
+  const schedules = registry?.schedules && typeof registry.schedules === "object" ? registry.schedules : null;
+  if (!schedules) return { total: 0, repaired: [], dropped: [], unresolved: [], skipped: true };
+
+  const authUsers = readJsonObjectFile(path.join(dataRoot, "auth", "users.json"), {});
+  const collaborations = Object.values(
+    readJsonObjectFile(path.join(dataRoot, "collaboration", "workspaces.json"), {})?.workspaces || {},
+  ).filter(Boolean);
+  const userIds = (() => {
+    const usersRoot = path.join(dataRoot, "users");
+    try {
+      return fs.readdirSync(usersRoot, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+    } catch {
+      return [];
+    }
+  })();
+
+  const next = {};
+  const repaired = [];
+  const dropped = [];
+  const unresolved = [];
+  for (const [key, entry] of Object.entries(schedules)) {
+    const flowId = String(entry?.flowId || "");
+    const flowSource = String(entry?.flowSource || "user");
+    const scheduleNodeId = String(entry?.scheduleNodeId || key.split(":").pop() || "");
+    const currentUserId = String(entry?.userId || "");
+    const archived = entry?.archived === true;
+    let ownerUserId = "";
+    if (flowSource === "workspace") {
+      // 共享作用域全局唯一：协作登记里的 owner 就是答案。
+      ownerUserId = String(collaborations.find((record) => (
+        String(record?.flowId || "") === flowId
+        && record?.archived === archived
+        && String(record?.projectSource || record?.flowSource || "workspace") === "workspace"
+      ))?.ownerId || "");
+    } else {
+      const candidates = userIds.filter((userId) => (
+        flowDeclaresScheduleNode(userFlowDir(dataRoot, userId, flowId, archived), scheduleNodeId)
+      ));
+      if (candidates.length === 1) ownerUserId = candidates[0];
+      else if (candidates.includes(currentUserId)) ownerUserId = currentUserId;
+    }
+    if (!ownerUserId || ownerUserId === currentUserId) {
+      if (!ownerUserId) unresolved.push({ key, flowId, flowSource, userId: currentUserId });
+      next[key] = entry;
+      continue;
+    }
+    const nextKey = [ownerUserId, flowSource, flowId, scheduleNodeId].join(":");
+    if (schedules[nextKey]) {
+      // 正主自己那条已经在了：判错主留下的是重复登记，同一个定时会被触发两次。
+      dropped.push({ key, flowId, flowSource, userId: currentUserId, keptKey: nextKey });
+      continue;
+    }
+    next[nextKey] = {
+      ...entry,
+      key: nextKey,
+      userId: ownerUserId,
+      username: String(authUsers?.[ownerUserId]?.username || ownerUserId),
+    };
+    repaired.push({ key, nextKey, flowId, flowSource, from: currentUserId, to: ownerUserId });
+  }
+
+  let backup = "";
+  if ((repaired.length > 0 || dropped.length > 0) && !dryRun) {
+    // 认错的判断只能靠磁盘上的图，万一认反了要有原件可回滚。带时间戳，不覆盖上一次。
+    backup = path.join(
+      dataRoot,
+      "admin",
+      "backups",
+      `workspace-schedules.${WORKSPACE_SCHEDULE_OWNER_MIGRATION_ID}.${Date.now()}.json`,
+    );
+    fs.mkdirSync(path.dirname(backup), { recursive: true });
+    fs.copyFileSync(schedulesPath, backup);
+    writeJsonAtomic(schedulesPath, {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      schedules: next,
+    });
+  }
+  return { total: Object.keys(schedules).length, repaired, dropped, unresolved, skipped: false, ...(backup ? { backup } : {}) };
+}
+
 /**
  * 根据独立的存储结构版本执行一次启动迁移。重复启动幂等；同一个 dataRoot 下换了新的
  * workspaceRoot 时，只补迁这个新 Workspace，不会重扫已经完成的目标。
@@ -248,6 +370,21 @@ export function runStartupStorageMigrations({
       targets[target.key] = record;
       attempted.push(record);
     }
+    // 定时归属的修复跟着流程迁移一起跑：都要在 scheduler 起来之前落定，
+    // 否则第一次轮询就会用判错的身份去跑别人的流程。
+    const scheduleOwnerState = state.migrations[WORKSPACE_SCHEDULE_OWNER_MIGRATION_ID] || {};
+    const scheduleOwnerDone = !force
+      && Number(scheduleOwnerState.version || 0) >= STORAGE_SCHEMA_VERSION
+      && scheduleOwnerState.completed === true;
+    const scheduleOwners = scheduleOwnerDone
+      ? { ...scheduleOwnerState, rerun: false }
+      : {
+        version: STORAGE_SCHEMA_VERSION,
+        completed: true,
+        attemptedAt: new Date().toISOString(),
+        rerun: true,
+        ...repairWorkspaceScheduleOwners(resolvedDataRoot),
+      };
     const nextState = {
       ...state,
       schemaVersion: Math.max(Number(state.schemaVersion || 0), STORAGE_SCHEMA_VERSION),
@@ -258,6 +395,7 @@ export function runStartupStorageMigrations({
           version: STORAGE_SCHEMA_VERSION,
           targets,
         },
+        [WORKSPACE_SCHEDULE_OWNER_MIGRATION_ID]: scheduleOwners,
       },
     };
     writeJsonAtomic(statePath, nextState);
@@ -267,6 +405,7 @@ export function runStartupStorageMigrations({
       statePath,
       attempted,
       skipped,
+      scheduleOwners,
     };
   } finally {
     releaseLock();

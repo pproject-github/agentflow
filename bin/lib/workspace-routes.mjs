@@ -3320,7 +3320,7 @@ async function workspaceRoutes(req, res, ctx) {
             ownerUsername: scoped.ownerUsername,
           } : null,
           release: readWorkspaceReleaseStatus(scoped.root, root, hydratedGraph),
-          workspaceSchedules: listWorkspaceScheduleStatusesForFlow(scopedUserCtx, scoped.flowSource || "user", scoped.flowId || ""),
+          workspaceSchedules: listWorkspaceScheduleStatusesForFlow(scopedUserCtx, scoped.flowSource || "user", scoped.flowId || "", { scoped }),
         });
       } catch (e) {
         // 流程文件语法错时给出可修的定位，而不是一句 500——这条路径就是手改 / AI 改
@@ -3667,6 +3667,7 @@ async function workspaceRoutes(req, res, ctx) {
             workspaceScopedUserContext(scoped, userCtx),
             flowSource,
             flowId,
+            { scoped },
           ),
         });
       } catch (e) {

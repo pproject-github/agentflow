@@ -46,3 +46,44 @@ AgentFlow 将一次 Workspace 执行使用的文件分为三类，三者不能�
 现在管理员分支在列表落空时回落到 `getPipelineFiles`，与 owner 落到同一个目录。
 可见性由目录决定，只读属性仍由作用域决定：`adminReadonly: true`，
 `collaborationAccess` 的 `writable` / `runnable` 都是 `false`。
+
+## 定时归属：目录在谁名下就归谁
+
+个人作用域的流程靠 `(ownerId, flowId)` 才唯一——两个人各留一份同名流程是常态，
+协作登记的 `flowKey` 就是为此存在的。归属判断只比对 `flowId` + 作用域时，
+`find` 命中的是注册表里**第一条当前用户有权限的**记录：A 保存自己的流程，可能被判成
+B 的，登记随之改姓，调度按 B 的身份解析作用域、跑的是 B 的那份，运行记录也记到 B 头上。
+前缀删除用的是同一个错 userId，还会顺手删掉 B 真实的那条登记。
+
+现在统一走 `workspaceProjectCollaborationForActor`：
+
+1. 先找**自己名下**的协作登记（`getWorkspaceCollaborationForProject` 带 ownerId）；
+2. 再看自己在这个作用域下**有没有这份目录**——有就是自己的，不被别人的同名登记接管；
+3. 最后才认别人分享过来的同名登记。要打开别人分享的那份，请求带 `workspaceId`，
+   在第一步之前就短路了。
+
+`syncWorkspaceSchedulesForGraph` 不再二次推断，直接采信已解析的 `scoped`：
+**谁的目录被调度，登记就归谁**。`workspaceRunKey`（并发锁）和
+`workspaceCollaborationEventKey`（协作推送）走同一套查找，避免两个人的同名流程
+被合并成一个 key。
+
+### 没有归属的共享定时
+
+管理员定时页是逐用户枚举出来的。共享作用域的流程人人可见，用"枚举到的这个人"兜底
+归属，等于把流程记在字典序最靠前的账号头上——线上出现过 `registered=false`、
+且没有任何协作登记的 workspace 流程被记到一个从没打开过它的人名下。
+
+现在的口径：有登记就用登记里的 `userId`，没登记则用协作登记的 owner，两者都没有时
+**留空**。归属为空的行在页面上显示 `-`；`registered=false` 同时意味着轮询根本扫不到它，
+图里的"已启用"只是设计态，不代表在跑。
+
+### 存量修复
+
+`workspace-schedule-owner-v1` 启动迁移（与流程迁移同一把锁，在 scheduler 起来之前跑）：
+
+- 个人作用域：按目录认回来——哪个用户的 pipelines 里确实有这份流程、且图里确实有这个
+  定时节点，就是谁的；
+- 共享作用域：认协作登记的 owner；
+- 正主那条已经在了，判错主留下的就是重复登记，删掉（否则同一个定时触发两次）；
+- 认不回来的（流程已删、多个用户都对得上、图解析失败）**一律不动**，记进 `unresolved`；
+- 改写前把原 `workspace-schedules.json` 备份到 `admin/backups/`。

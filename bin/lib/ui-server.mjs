@@ -2220,13 +2220,19 @@ function schedulesForRequest(root, authUser = {}, userCtx = {}) {
   for (const user of users) {
     const rows = listWorkspaceScheduleStatuses(root, { ...userCtx, userId: user.userId });
     for (const row of rows) {
-      const ownerUserId = String(row.ownerUserId || row.userId || user.userId);
+      // 这里是「逐个用户枚举」出来的行。共享流程人人可见，拿枚举到的这个人兜底，
+      // 等于把流程记在字典序最靠前的那个账号头上——他可能从没打开过这个流程。
+      const ownerUserId = String(row.ownerUserId || row.userId || "");
       const key = String(row.key || `${ownerUserId}:${row.flowSource || "user"}:${row.flowId || ""}:${row.scheduleNodeId || ""}`);
       const identity = String(row.flowSource || "user") === "workspace"
         ? `workspace:${row.workspaceId || row.flowId || ""}:${row.scheduleNodeId || ""}`
         : key;
       const existing = byIdentity.get(identity);
-      if (existing && (existing.registered || !row.registered)) continue;
+      if (existing) {
+        const better = (!existing.registered && row.registered)
+          || (existing.registered === row.registered && !existing.ownerUserId && ownerUserId);
+        if (!better) continue;
+      }
       byIdentity.set(identity, {
         ...row,
         ownerUserId,
@@ -2397,6 +2403,20 @@ export function startUiServer({
     );
     for (const item of summary.needsDecision) log.warn(`[storage-migration] needs decision: ${item}`);
     for (const item of summary.failed) log.warn(`[storage-migration] failed: ${item}`);
+  }
+  if (startupMigration.scheduleOwners?.rerun) {
+    const owners = startupMigration.scheduleOwners;
+    log.info(
+      `[schedule-owner] checked=${owners.total || 0}, repaired=${owners.repaired?.length || 0}, `
+      + `unresolved=${owners.unresolved?.length || 0}`,
+    );
+    for (const item of owners.repaired || []) {
+      log.warn(`[schedule-owner] ${item.flowSource}/${item.flowId}: ${item.from || "-"} -> ${item.to}`);
+    }
+    for (const item of owners.dropped || []) {
+      log.warn(`[schedule-owner] 去重 ${item.flowSource}/${item.flowId}: 删掉 ${item.key}，保留 ${item.keptKey}`);
+    }
+    if (owners.backup) log.info(`[schedule-owner] 原登记已备份到 ${owners.backup}`);
   }
   // 用户需求点: 线上首次启动自动种子 release-projects.json；已有文件不覆盖。
   try {
