@@ -4527,6 +4527,14 @@ export function startUiServer({
             json(res, 400, { error: "Invalid JSON body" });
             return;
           }
+          // 手工指定：Privilege 里查不到的老账号（登录名和内网用户名对不上）先兜住，
+          // 不然他们的定时会一直发不出去，而本人自助绑定要等下次 CAS 登录。
+          const manualUserId = String(payload?.userId || "").trim();
+          if (manualUserId) {
+            const saved = writeManualWecomBinding(manualUserId, payload?.wecomUserId);
+            json(res, saved.ok ? 200 : 400, { ...saved, userId: manualUserId });
+            return;
+          }
           const result = await backfillWecomBindings({
             env: readMergedEnvObject(userCtx.userId),
             userIds: Array.isArray(payload?.userIds) ? payload.userIds : undefined,

@@ -46,6 +46,7 @@
 | CAS 登录 | 登录成功后异步解析一次，失败只记日志，不挡登录 |
 | 用户自助 | `GET/POST /api/me/wecom-binding`，POST 传 `wecomUserId` 即手工指定 |
 | 管理员批量 | `POST /api/admin/wecom-bindings`，历史 linked 账号自动跳过 |
+| 管理员手工 | `POST /api/admin/wecom-bindings` + `{"userId":"...","wecomUserId":"..."}` |
 | 查看全员 | `GET /api/admin/wecom-bindings` |
 
 ## 绑定完必须真发一条
@@ -58,3 +59,18 @@ ID 对不对是一回事，人在不在这个应用（`WECOM_AGENT_ID`）的可�
   不需要本人登录。
 
 两个接口在失败时都会带上 `hint`，指明 81013 的两种可能。
+
+## 查不到的账号
+
+Privilege 按内网用户名查，查询名是 `casUsername` 优先、没有才退回 AgentFlow `userId`。
+早期密码账号的 `casUsername` 为空，登录名又未必等于内网用户名，就会查不到——线上
+46 个账号里有 3 个真人属于这种（他们的定时因此一直投递失败）。
+
+两条路：
+
+1. **改用 CAS 登录**（推荐）：登录会写入 `casUsername` 并当场绑定，之后每次登录都校准；
+   登录名与老账号不同的，走一次老账号关联把项目带过去。
+2. **管理员手工绑**：`POST /api/admin/wecom-bindings` 传 `{userId, wecomUserId}`，
+   记为 `source: "manual"`。查不到的当天就能先把投递恢复。
+
+普通用户密码登录已停用（`/api/auth/login` 返回 410），所以自动绑定只需要挂在 CAS 分支。

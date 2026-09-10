@@ -3493,22 +3493,29 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, rea
   const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
   const filePath = kind === "image" ? "" : displayTextFilePath(unwrappedRawContent, kind);
   const [fileContent, setFileContent] = useState("");
+  // 手里这份内容是哪个文件的。换文件时不能把上一份接着显示，重读同一个文件时才允许留着
+  const [loadedFilePath, setLoadedFilePath] = useState("");
   const [fileError, setFileError] = useState("");
   const [fileLoading, setFileLoading] = useState(false);
   useEffect(() => {
     let cancelled = false;
     if (!filePath) {
       setFileContent("");
+      setLoadedFilePath("");
       setFileError("");
       setFileLoading(false);
       return () => { cancelled = true; };
     }
     setFileLoading(true);
     setFileError("");
-    setFileContent("");
+    // 这里**不清空** fileContent：displayReloadKey 一变就重读，清空会让 iframe 从 DOM 上
+    // 摘掉、露出底下的画布，全屏预览里看着就像整页刷新了一下。旧内容留着顶到新内容回来。
     readWorkspaceTextFile(flowParams, filePath)
       .then((text) => {
-        if (!cancelled) setFileContent(text);
+        if (cancelled) return;
+        setLoadedFilePath(filePath);
+        // 内容没变就不动 state：srcDoc 不重写，iframe 不重载，正在播的动画/滚动位置都保住
+        setFileContent((previous) => (previous === text ? previous : text));
       })
       .catch((error) => {
         if (!cancelled) setFileError(String(error.message || error));
@@ -3518,7 +3525,8 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, rea
       });
     return () => { cancelled = true; };
   }, [filePath, flowParams?.flowId, flowParams?.flowSource, flowParams?.archived, data?.displayReloadKey]);
-  const resolvedContent = filePath ? fileContent : unwrappedRawContent;
+  const hasLoadedThisFile = Boolean(filePath) && loadedFilePath === filePath;
+  const resolvedContent = filePath ? (hasLoadedThisFile ? fileContent : "") : unwrappedRawContent;
   const content = kind === "html"
     ? normalizeHtmlDisplayContent(resolvedContent)
     : kind === "react"
@@ -3530,8 +3538,9 @@ function DisplayBody({ data, flowParams, htmlFrameRef, htmlFrameVersion = 0, rea
   }
   if (!kind) return null;
   const contentProblem = validateDisplayContentForWrite(kind, content);
-  if (fileLoading) return <VisibleScrollFrame className="af-work-display-empty">Loading {filePath}...</VisibleScrollFrame>;
-  if (fileError) return <VisibleScrollFrame className="af-work-display-empty">{fileError}</VisibleScrollFrame>;
+  // 只有手上还没有这个文件的内容时才让位给 Loading；重读期间继续显示旧的那份
+  if (fileLoading && !hasLoadedThisFile) return <VisibleScrollFrame className="af-work-display-empty">Loading {filePath}...</VisibleScrollFrame>;
+  if (fileError && !hasLoadedThisFile) return <VisibleScrollFrame className="af-work-display-empty">{fileError}</VisibleScrollFrame>;
   if (contentProblem) return <VisibleScrollFrame className="af-work-display-empty">{contentProblem}</VisibleScrollFrame>;
   if (!content.trim()) return <VisibleScrollFrame className="af-work-display-empty">No display content</VisibleScrollFrame>;
   if (kind === "html" || kind === "react") {
@@ -3761,36 +3770,44 @@ function DisplayPickerPreview({ node }) {
   const unwrappedRawContent = kind === "image" ? rawContent : displayOutputEnvelopeContent(rawContent);
   const filePath = kind === "image" ? "" : displayTextFilePath(unwrappedRawContent, kind);
   const [fileContent, setFileContent] = useState("");
+  const [loadedFilePath, setLoadedFilePath] = useState("");
   const [fileLoading, setFileLoading] = useState(false);
   useEffect(() => {
     let cancelled = false;
     if (!filePath) {
       setFileContent("");
+      setLoadedFilePath("");
       setFileLoading(false);
       return () => { cancelled = true; };
     }
     setFileLoading(true);
-    setFileContent("");
+    // 同 DisplayBody：重读期间不清空，避免 iframe 被摘掉再挂回来
     readWorkspaceTextFile(node?.data?.flowParams || {}, filePath)
       .then((text) => {
-        if (!cancelled) setFileContent(text);
+        if (cancelled) return;
+        setLoadedFilePath(filePath);
+        setFileContent((previous) => (previous === text ? previous : text));
       })
       .catch(() => {
-        if (!cancelled) setFileContent("");
+        if (!cancelled) {
+          setLoadedFilePath("");
+          setFileContent("");
+        }
       })
       .finally(() => {
         if (!cancelled) setFileLoading(false);
       });
     return () => { cancelled = true; };
   }, [filePath, node?.data?.flowParams?.flowId, node?.data?.flowParams?.flowSource, node?.data?.flowParams?.archived, node?.data?.displayReloadKey]);
-  const resolvedContent = filePath ? fileContent : unwrappedRawContent;
+  const hasLoadedThisFile = Boolean(filePath) && loadedFilePath === filePath;
+  const resolvedContent = filePath ? (hasLoadedThisFile ? fileContent : "") : unwrappedRawContent;
   const content = kind === "html"
     ? normalizeHtmlDisplayContent(resolvedContent)
     : kind === "react"
       ? normalizeReactAppDisplayContent(resolvedContent)
       : displayOutputEnvelopeContent(resolvedContent);
   const contentProblem = validateDisplayContentForWrite(kind, content);
-  if (fileLoading) return <div className="af-display-picker-preview__empty">Loading</div>;
+  if (fileLoading && !hasLoadedThisFile) return <div className="af-display-picker-preview__empty">Loading</div>;
   if (contentProblem) return <div className="af-display-picker-preview__empty">{contentProblem}</div>;
   if (!content.trim()) return <div className="af-display-picker-preview__empty">No content</div>;
   if (kind === "html" || kind === "react") {
