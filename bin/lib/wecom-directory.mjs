@@ -162,3 +162,30 @@ export async function backfillWecomBindings(options = {}) {
     rows,
   };
 }
+
+/**
+ * 反查：企微 userid → AgentFlow 用户。
+ *
+ * 外部应用（比如萌买）手里只有企微 id，要代表这个人操作就得先落到我们的用户上。
+ * 只认绑定来源是 `privilege` 的——`manual` 是管理员手填的，可能填错，不能当强身份用。
+ * @param {string} wecomUserId
+ * @param {{ allowManual?: boolean }} [options]
+ */
+export function findUserIdByWecomUserId(wecomUserId, options = {}) {
+  const target = String(wecomUserId || "").trim();
+  if (!target) return null;
+  const users = readAuthUsers();
+  const matches = [];
+  for (const [userId, user] of Object.entries(users)) {
+    const notify = user?.notify;
+    if (String(notify?.wecomUserId || "").trim() !== target) continue;
+    const source = String(notify?.wecomUserIdSource || "");
+    if (source !== "privilege" && options.allowManual !== true) continue;
+    // 历史链接账号自己不干活，真正的身份在它指向的那个账号上
+    if (String(user?.linkedToUserId || "").trim()) continue;
+    matches.push({ userId, source });
+  }
+  // 同一个企微 id 落到多个账号是数据问题，不猜——猜错等于把身份判给别人
+  if (matches.length !== 1) return null;
+  return matches[0];
+}
