@@ -96,6 +96,24 @@ import {
   issueAppDelegatedSession,
 } from "./auth.mjs";
 import {
+  appendRadarEvent,
+  boardsByFlow,
+  createRadarBoard,
+  isValidBoardId,
+  listRadarBoards,
+  readRadarBoard,
+  readRadarEvents,
+  setRadarBoardArchived,
+  setRadarItemState,
+} from "./radar.mjs";
+import {
+  buildRadarPlanPrompt,
+  normalizeRadarPlan,
+  parseRadarPlan,
+} from "./radar-planner.mjs";
+import { startComposerAgent } from "./composer-agent.mjs";
+import { sweepAllRadarBoards } from "./radar-alert-sweep.mjs";
+import {
   beginCasLogin,
   buildClearCasFlowCookie,
   consumeCasLoginFlow,
@@ -2224,6 +2242,30 @@ function setWorkspaceScheduleEnabled(root, payload = {}, authUser = {}, userCtx 
   return { success: true, workspaceSchedules };
 }
 
+/**
+ * 给定时任务行补上「它在喂哪块雷达」。
+ *
+ * 归属不存在 schedule 里（存了就会和分片发散），每次列表时从板目录反查一遍。板和分片都是
+ * 几十个量级，一次 readdir 就完事。
+ *
+ * `stale` 是这里最值钱的一位：定时任务「跑成功了」和「真的写进板了」是两回事，
+ * 只看 schedule 那一侧永远发现不了流程在空转。
+ */
+function attachTracks(schedules = []) {
+  let index;
+  try {
+    index = boardsByFlow();
+  } catch {
+    // 反查失败不该让整个定时任务列表打不开——归属是附加信息，不是主干
+    return schedules;
+  }
+  if (!index.size) return schedules;
+  return schedules.map((row) => {
+    const tracks = index.get(String(row?.flowId || "")) || [];
+    return tracks.length ? { ...row, tracks } : row;
+  });
+}
+
 function schedulesForRequest(root, authUser = {}, userCtx = {}) {
   const currentUserId = String(userCtx?.userId || authUser?.userId || "");
   if (!authUser?.isAdmin) {
@@ -2231,7 +2273,7 @@ function schedulesForRequest(root, authUser = {}, userCtx = {}) {
       adminView: false,
       currentUserId,
       users: [],
-      schedules: listWorkspaceScheduleStatuses(root, userCtx),
+      schedules: attachTracks(listWorkspaceScheduleStatuses(root, userCtx)),
     };
   }
   const users = listAuthUsers();
@@ -2275,7 +2317,7 @@ function schedulesForRequest(root, authUser = {}, userCtx = {}) {
     // 后者带上会把自己的流程锁成只读。
     currentUserId,
     users: users.filter((user) => ownerIds.has(user.userId)),
-    schedules,
+    schedules: attachTracks(schedules),
   };
 }
 
@@ -5691,6 +5733,234 @@ finishedAt: "${new Date().toISOString()}"
       return;
     }
 
+    /** 建一块空板。板先立起来，再让流程往里写 */
+    if (req.method === "POST" && url.pathname === "/api/radar/board") {
+      let payload = {};
+      try {
+        payload = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const boardId = String(payload?.board || "").trim();
+      if (!isValidBoardId(boardId)) {
+        json(res, 400, { error: "板 id 只能用字母数字和 - _ .，且要字母数字开头" });
+        return;
+      }
+      try {
+        const by = String(authUser?.username || userCtx?.userId || "");
+        const created = createRadarBoard(boardId, {
+          title: String(payload?.title || "").trim(),
+          icon: String(payload?.icon || "radar").trim(),
+          createdBy: by,
+        });
+        if (!created.ok) {
+          json(res, 409, created);
+          return;
+        }
+        appendRadarEvent(boardId, { kind: "board_created", by, title: String(payload?.title || boardId) });
+        json(res, 200, { ...created, title: String(payload?.title || boardId) });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    /**
+     * 归档 / 取消归档。
+     *
+     * 界面上的「删除」落到这里，而不是真删：这类板攒的是时间，半年的状态变迁没法重建，
+     * 误点一次却只要一秒。彻底删除留在 `agentflow track rm`。
+     */
+    if (req.method === "POST" && url.pathname === "/api/radar/board/archive") {
+      let payload = {};
+      try {
+        payload = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const boardId = String(payload?.board || "").trim();
+      if (!isValidBoardId(boardId)) {
+        json(res, 400, { error: "board 参数不合法" });
+        return;
+      }
+      const archived = payload?.archived !== false;
+      try {
+        const saved = setRadarBoardArchived(boardId, archived);
+        if (!saved.ok) {
+          json(res, 404, saved);
+          return;
+        }
+        appendRadarEvent(boardId, {
+          kind: archived ? "board_archived" : "board_restored",
+          by: String(authUser?.username || userCtx?.userId || ""),
+        });
+        json(res, 200, { ...saved, archived });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    /**
+     * 人工改一条的状态。
+     *
+     * 只写覆盖层，碰不到流程分片——流程下次照样写它的观测值，两边各说各的，
+     * 读的时候合并并把矛盾标出来。
+     */
+    if (req.method === "POST" && url.pathname === "/api/radar/item") {
+      let payload = {};
+      try {
+        payload = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const boardId = String(payload?.board || "").trim();
+      if (!isValidBoardId(boardId)) {
+        json(res, 400, { error: "board 参数不合法" });
+        return;
+      }
+      try {
+        const saved = setRadarItemState(boardId, payload?.itemId, {
+          state: payload?.state,
+          settled: payload?.settled,
+          note: payload?.note,
+          by: String(authUser?.username || userCtx?.userId || ""),
+        });
+        json(res, saved.ok ? 200 : 400, saved);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    /**
+     * 板级编排规划：读当前这块板，产出「该配几条定时、各管哪些条目、各自什么节奏」的计划。
+     *
+     * 只出计划，不动任何东西——建流程是人确认之后的另一步。模型给的东西不该直接落地。
+     */
+    if (req.method === "POST" && url.pathname === "/api/radar/plan") {
+      let payload = {};
+      try {
+        payload = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const boardId = String(payload?.board || "").trim();
+      const ask = String(payload?.ask || "").trim();
+      if (boardId && !isValidBoardId(boardId)) {
+        json(res, 400, { error: "board 参数不合法" });
+        return;
+      }
+      if (!ask) {
+        json(res, 400, { error: "说一下你想盯什么" });
+        return;
+      }
+      // 流式回：一次规划要跑几十秒到几分钟，等它跑完再一次性给结果，
+      // 人只能看着转圈，出错也只剩一行红字
+      res.writeHead(200, {
+        "Content-Type": "application/x-ndjson; charset=utf-8",
+        "Cache-Control": "no-store, max-age=0",
+        "X-Accel-Buffering": "no",
+      });
+      const emit = (event) => {
+        try {
+          res.write(`${JSON.stringify(event)}\n`);
+        } catch {
+          // 客户端已经断了，后面的事件写不出去也不该把这次运行拖垮
+        }
+      };
+      try {
+        const board = boardId
+          ? readRadarBoard(boardId, {
+            scope: "all",
+            userId: String(userCtx?.userId || ""),
+            username: String(authUser?.username || ""),
+          })
+          : null;
+        emit({ type: "started", board: boardId, flows: (board?.flows || []).length, rows: (board?.rows || []).length });
+        const prompt = buildRadarPlanPrompt({ board, ask, boardId });
+        let result = "";
+        const segments = [];
+        const handle = startComposerAgent({
+          uiWorkspaceRoot: root,
+          prompt,
+          modelKey: String(payload?.modelKey || ""),
+          agentflowUserId: String(userCtx?.userId || ""),
+          onStreamEvent: (ev) => {
+            if (ev?.type !== "natural" || typeof ev.text !== "string") return;
+            const text = ev.text.trim();
+            if (!text) return;
+            if (ev.kind === "result") result = text;
+            else if (ev.kind === "assistant") { segments.push(text); emit({ type: "log", text }); }
+          },
+        });
+        await handle.finished;
+        const parsed = parseRadarPlan(result || segments.at(-1) || "");
+        if (!parsed.ok) {
+          emit({ type: "error", error: parsed.error, raw: (result || segments.at(-1) || "").slice(0, 2000) });
+        } else {
+          emit({ type: "plan", board: boardId, ...normalizeRadarPlan(parsed.plan, board) });
+        }
+      } catch (e) {
+        emit({ type: "error", error: (e && e.message) || String(e) });
+      }
+      res.end();
+      return;
+    }
+
+    // 雷达：定时流程产出的专项监控板。板和视角都走 query，深链才能精确到「某块板的某个形态」
+    if (req.method === "GET" && url.pathname.startsWith("/api/radar/")) {
+      const scope = url.searchParams.get("scope") === "all" ? "all" : "mine";
+      const actor = {
+        scope,
+        userId: String(userCtx?.userId || authUser?.userId || ""),
+        username: String(authUser?.username || userCtx?.userId || ""),
+      };
+      try {
+        if (url.pathname === "/api/radar/boards") {
+          // 归档的板默认不列。要在页面上翻出来恢复，才显式带 archived=1
+          const includeArchived = url.searchParams.get("archived") === "1";
+          json(res, 200, {
+            boards: listRadarBoards({ ...actor, includeArchived }),
+            scope,
+            includeArchived,
+            currentUser: actor.username,
+          });
+          return;
+        }
+        if (url.pathname === "/api/radar/board") {
+          const board = String(url.searchParams.get("board") || "");
+          if (!isValidBoardId(board)) {
+            json(res, 400, { error: "board 参数不合法" });
+            return;
+          }
+          const found = readRadarBoard(board, actor);
+          if (!found) {
+            json(res, 404, { error: "板不存在" });
+            return;
+          }
+          json(res, 200, { ...found, scope, currentUser: actor.username });
+          return;
+        }
+        if (url.pathname === "/api/radar/events") {
+          const board = String(url.searchParams.get("board") || "");
+          if (!isValidBoardId(board)) {
+            json(res, 400, { error: "board 参数不合法" });
+            return;
+          }
+          json(res, 200, { board, events: readRadarEvents(board) });
+          return;
+        }
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+        return;
+      }
+    }
+
     if (req.method === "GET" && url.pathname === "/api/schedules") {
       try {
         // 旧 Pipeline schedule 随 Start/End 执行一并下线：它们只会驱动已废弃的
@@ -5905,6 +6175,25 @@ finishedAt: "${new Date().toISOString()}"
       }
     }, 500).unref?.();
   }
+
+  /**
+   * 雷达告警扫描。
+   *
+   * 每小时一次即可——降噪是判定函数按天做的，扫描频率只决定「跨过 T-7 之后多久收到」。
+   * 扫描本身幂等，多扫几次不会多发。
+   */
+  const radarAlertTimer = setInterval(() => {
+    sweepAllRadarBoards().then((results) => {
+      const sent = results.reduce((sum, item) => sum + (item.sent?.filter((row) => row.ok).length || 0), 0);
+      if (sent > 0) log.info(`[radar-alert] 发出 ${sent} 条`);
+    }).catch((e) => {
+      log.debug(`[radar-alert] sweep failed: ${(e && e.message) || String(e)}`);
+    });
+  }, 60 * 60 * 1000);
+  try {
+    radarAlertTimer.unref?.();
+  } catch (_) {}
+  server.on("close", () => clearInterval(radarAlertTimer));
 
   const workspacePreviewCleanupTimer = setInterval(() => {
     try {

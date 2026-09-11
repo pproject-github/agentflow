@@ -170,9 +170,24 @@ const INTERRUPT_CAPABLE_DEFINITION_IDS = new Set([
 /* global __APP_VERSION__ */
 const APP_VERSION = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "0.0.0";
 
+/**
+ * 返回地址只认白名单里的站内页面。
+ *
+ * 这是防开放重定向的，不是防手滑的——`//evil.com` 在浏览器眼里是协议相对的外链，
+ * 所以光判断开头是不是 `/` 不够。
+ */
+const RETURN_TO_ALLOWED = ["/workflows", "/radar"];
+
+function safeWorkspaceReturnTo(value) {
+  const raw = String(value || "").trim();
+  if (!raw.startsWith("/") || raw.startsWith("//")) return "";
+  const pathname = raw.split("?")[0].split("#")[0];
+  return RETURN_TO_ALLOWED.includes(pathname) ? raw : "";
+}
+
 function readFlowParamsFromUrl() {
   const sp = new URLSearchParams(window.location.search);
-  const returnTo = String(sp.get("returnTo") || "").trim();
+  const returnTo = safeWorkspaceReturnTo(sp.get("returnTo"));
   return {
     flowId: sp.get("flowId") || "",
     flowSource: sp.get("flowSource") || "user",
@@ -180,7 +195,10 @@ function readFlowParamsFromUrl() {
     workflowShare: sp.get("workflowShare") || "",
     adminOwnerId: sp.get("adminOwnerId") || "",
     archived: sp.get("archived") === "1" || sp.get("flowArchived") === "1",
-    returnTo: returnTo === "/workflows" || returnTo.startsWith("/workflows?") ? returnTo : "",
+    returnTo,
+    // 从雷达「新建追踪」带过来的提示词。只填进输入框，不自动发起——
+    // 替人按下发送等于替人花钱，而且他还没看过这段提示词
+    aiPrompt: sp.get("aiPrompt") || "",
     workflowDemo: sp.get("workflowDemo") === "1",
     marketplacePreview: sp.get("marketplacePreview") === "1",
     marketplaceKind: sp.get("marketplaceKind") || "flow",
@@ -9489,6 +9507,7 @@ function WorkspacePageInner() {
   const quickAddInputRef = useRef(null);
   const [skillsMenuStyle, setSkillsMenuStyle] = useState({});
   const [composerText, setComposerText] = useState("");
+  const [aiPromptSeeded, setAiPromptSeeded] = useState(false);
   const [composerRunning, setComposerRunning] = useState(false);
   const [composerMessages, setComposerMessages] = useState([]);
   const [composerRunSessions, setComposerRunSessions] = useState([]);
@@ -15717,6 +15736,12 @@ function WorkspacePageInner() {
     link.remove();
   }, [flowParams]);
 
+  useEffect(() => {
+    if (aiPromptSeeded || !flowParams.aiPrompt) return;
+    setAiPromptSeeded(true);
+    setComposerText((current) => (current ? current : flowParams.aiPrompt));
+  }, [aiPromptSeeded, flowParams.aiPrompt]);
+
   const submitWorkspaceAi = useCallback(async () => {
     if (!workspaceWritable) {
       setStatus("Readonly workspace");
@@ -15948,9 +15973,11 @@ function WorkspacePageInner() {
     : workspaceDisplayNodes;
   const workspaceBackTarget = flowParams.marketplacePreview
     ? `/marketplace?kind=${flowParams.marketplaceKind === "node" ? "node" : "flow"}`
-    : flowParams.adminOwnerId
-    ? "/admin/usage"
-    : flowParams.returnTo || (workspaceMode === "workflow" ? "/workflows" : "/projects");
+    // 显式带来的返回地址优先于「看到 adminOwnerId 就回管理看板」这个猜测：
+    // 从雷达点编排进来的管理员，返回该回那块板，不是回管理看板
+    : flowParams.returnTo
+    || (flowParams.adminOwnerId ? "/admin/usage" : "")
+    || (workspaceMode === "workflow" ? "/workflows" : "/projects");
 
   return (
     <div className="af-workspace-page">

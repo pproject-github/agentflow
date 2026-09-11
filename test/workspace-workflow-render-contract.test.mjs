@@ -96,15 +96,16 @@ test("Action checklists keep cards concise and open a dedicated document route",
 test("Workflow details return to the iteration list with its filters and pagination", async () => {
   const source = await readFile(workspacePagePath, "utf8");
 
-  assert.match(
-    source,
-    /returnTo: returnTo === "\/workflows" \|\| returnTo\.startsWith\("\/workflows\?"\) \? returnTo : ""/,
-  );
+  // 钉的是「返回地址被白名单挡过」这个不变量，不是某一行的写法——
+  // 换成函数、多放行一个页面，都不该让这条红，但把白名单去掉必须红
+  assert.match(source, /RETURN_TO_ALLOWED\s*=\s*\[[^\]]*"\/workflows"/);
+  assert.match(source, /function safeWorkspaceReturnTo/);
+  assert.match(source, /returnTo = safeWorkspaceReturnTo\(sp\.get\("returnTo"\)\)/);
+  // 协议相对的 //evil.com 在浏览器眼里是外链，光判断开头是不是 / 不够
+  assert.match(source, /raw\.startsWith\("\/\/"\)/);
   assert.match(source, /if \(params\.returnTo\) q\.set\("returnTo", params\.returnTo\)/);
-  assert.match(
-    source,
-    /flowParams\.returnTo \|\| \(workspaceMode === "workflow" \? "\/workflows" : "\/projects"\)/,
-  );
+  assert.match(source, /flowParams\.returnTo/);
+  assert.match(source, /workspaceMode === "workflow" \? "\/workflows" : "\/projects"/);
   assert.match(source, /onClick=\{\(\) => navigate\(workspaceBackTarget\)\}/);
 });
 

@@ -1,6 +1,7 @@
 import { RouteProvider, useRoute } from "./routeContext.jsx";
 import { Component, useEffect, useState } from "react";
 import Sidebar from "./layout/Sidebar.jsx";
+import RadarPage from "./pages/RadarPage.jsx";
 import ProjectsPage from "./pages/ProjectsPage.jsx";
 import MarketplacePage from "./pages/MarketplacePage.jsx";
 import SpacesPage from "./pages/SpacesPage.jsx";
@@ -146,6 +147,7 @@ function RoutedContent({ authUser }) {
   if (path === "/workflow-checklist") return <WorkflowChecklistPage />;
   if (path === "/mcps") return <McpPage />;
   if (path === "/schedules") return <SchedulesPage />;
+  if (path === "/radar") return <RadarPage />;
   if (path === "/node-studio") return <NodeStudioPage />;
   if (path === "/flow") return <RedirectFlowToWorkspace />;
   if (path === "/workspace") return <WorkspacePage />;
@@ -321,7 +323,7 @@ function AppShell({ authUser, onLogout }) {
   const fullBleed = pipelineFullBleed || workflowReportStandalone;
   return (
     <div className="af-app">
-      {path !== "/settings" && !workflowReportStandalone ? <OnboardingTour page={pipelineFullBleed ? "flow" : "projects"} /> : null}
+      {path !== "/settings" && path !== "/radar" && !workflowReportStandalone ? <OnboardingTour page={pipelineFullBleed ? "flow" : "projects"} /> : null}
       {!fullBleed ? <Sidebar authUser={authUser} onLogout={onLogout} /> : null}
       <div className={fullBleed ? "af-main af-main--pipeline" : "af-main"}>
         <RoutedContent authUser={authUser} />

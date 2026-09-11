@@ -19,6 +19,8 @@
   --af-tertiary: #00e475;
   --af-error: #ffb4ab;
   --af-outline-variant: #494455;
+  /* 跑道要表达「进行中」；现有功能色里没有琥珀，这是唯一新增的 token */
+  --af-caution: #ffca6a;
   --af-headline: "Space Grotesk", system-ui, sans-serif;
   --af-body: Inter, system-ui, sans-serif;
 }
@@ -31160,4 +31162,942 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 
 @media (max-width: 820px) {
   .af-legacy-link-form { grid-template-columns: 1fr; }
+}
+
+
+/* ========== 雷达 ==========
+   页面不认识业务：合规、证书、线上问题共用同一份渲染，区别只在板带的 spec.encode。
+   分隔一律用 surface 层次和 inset 阴影，不画 1px 线。 */
+
+.af-radar-page .af-settings-inner { max-width: 1180px; }
+
+.af-radar-empty code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--af-surface-lowest);
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: var(--af-primary);
+}
+
+/* 板切换：tab 就是标题，不另开列表页 */
+.af-radar-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 26px;
+  margin-bottom: 18px;
+}
+
+.af-radar-tab {
+  position: relative;
+  background: none;
+  border: 0;
+  padding: 0 0 9px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--af-headline);
+  font-size: 1.3rem;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--af-on-surface-variant);
+  opacity: 0.55;
+}
+
+.af-radar-tab--on { color: var(--af-on-surface); opacity: 1; }
+
+.af-radar-tab--on::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--af-primary-container);
+  box-shadow: 0 0 14px -1px var(--af-primary-container);
+}
+
+.af-radar-badge {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6875rem;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.af-radar-badge--risk { background: rgba(255, 180, 171, 0.18); color: var(--af-error); }
+.af-radar-badge--warn { background: rgba(255, 202, 106, 0.16); color: var(--af-caution); }
+.af-radar-badge--idle { background: rgba(203, 195, 216, 0.14); color: var(--af-on-surface-variant); }
+.af-radar-badge--ok { background: rgba(0, 228, 117, 0.14); color: var(--af-tertiary); }
+
+.af-radar-health {
+  margin-left: auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  color: var(--af-outline-variant);
+  background: var(--af-surface-low);
+  border-radius: 999px;
+  padding: 5px 14px;
+}
+
+.af-radar-health b { color: var(--af-tertiary); font-weight: 500; }
+.af-radar-health b.af-radar-bad { color: var(--af-error); }
+
+.af-radar-dot, .af-radar-dot-bad {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--af-tertiary);
+  flex: none;
+}
+
+.af-radar-dot-bad { background: var(--af-error); }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* 运行态用呼吸，不用转圈 */
+  .af-radar-dot { animation: af-radar-breathe 2s ease-in-out infinite; }
+  @keyframes af-radar-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+}
+
+.af-radar-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.af-radar-seg {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--af-surface-low);
+  border-radius: 999px;
+  padding: 3px;
+}
+
+.af-radar-seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 0.8rem;
+  border: 0;
+  background: transparent;
+  color: var(--af-on-surface-variant);
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.af-radar-seg button .material-symbols-outlined { font-size: 1.05rem; }
+.af-radar-seg button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.af-radar-seg button.af-radar-seg--on {
+  background: var(--af-primary-container);
+  color: var(--af-on-primary-container);
+  font-weight: 500;
+}
+
+.af-radar-views { margin-left: auto; display: flex; align-items: center; gap: 10px; position: relative; }
+
+.af-radar-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--af-primary);
+  background: transparent;
+  border: 0;
+  box-shadow: inset 0 0 0 1px rgba(124, 77, 255, 0.35);
+  border-radius: 999px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.af-radar-ghost .material-symbols-outlined { font-size: 1rem; }
+
+.af-radar-ghost--primary { color: var(--af-primary); box-shadow: inset 0 0 0 1px rgba(124, 77, 255, 0.5); }
+
+.af-radar-ghost--ai {
+  background: var(--af-primary-container);
+  color: var(--af-on-primary-container);
+  box-shadow: none;
+  font-weight: 500;
+}
+
+/* 浮层的标题行：标题在左、关闭在右。删编排面板时把这块一起删了，新建面板还在用 */
+.af-radar-arrange-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.af-radar-arrange-head h6 {
+  font-family: var(--af-headline);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--af-on-surface-variant);
+  margin: 0;
+}
+
+.af-radar-arrange-head button {
+  background: none;
+  border: 0;
+  color: var(--af-on-surface-variant);
+  font-size: 1.05rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.af-radar-arrange-head button:hover { color: var(--af-on-surface); }
+
+/* 新建追踪：浮层用 blur ＋ 半透明 surface，和画布上的悬浮菜单一致 */
+.af-radar-new {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  width: 340px;
+  z-index: 6;
+  background: rgba(53, 53, 52, 0.9);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border-radius: 1.5rem;
+  padding: 15px 16px 16px;
+  box-shadow: 0 18px 46px -14px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  text-align: left;
+}
+
+.af-radar-new-field { display: block; margin-bottom: 11px; }
+.af-radar-new-field > span { display: block; font-size: 0.72rem; color: var(--af-on-surface-variant); margin-bottom: 5px; }
+
+.af-radar-new-field textarea,
+.af-radar-new-field input {
+  width: 100%;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface);
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-family: inherit;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.af-radar-new-field input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; }
+
+.af-radar-new-field textarea:focus,
+.af-radar-new-field input:focus {
+  outline: none;
+  background: var(--af-surface-bright);
+  box-shadow: 0 0 0 1px var(--af-primary-container), 0 0 16px -5px var(--af-primary-container);
+}
+
+.af-radar-new-field i {
+  display: block; margin-top: 5px; font-style: normal; font-size: 0.63rem;
+  color: var(--af-on-surface-variant); opacity: 0.65;
+}
+
+.af-radar-new-examples { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 11px; }
+
+.af-radar-new-examples button {
+  font: inherit;
+  font-size: 0.66rem;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface-variant);
+  border: 0;
+  border-radius: 999px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+
+.af-radar-new-examples button:hover { background: var(--af-surface-bright); color: var(--af-on-surface); }
+
+.af-radar-new-go {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  justify-content: center;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 500;
+  background: var(--af-primary-container);
+  color: var(--af-on-primary-container);
+  border: 0;
+  border-radius: 999px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+
+.af-radar-new-go:disabled { opacity: 0.55; cursor: progress; }
+.af-radar-new-go .material-symbols-outlined { font-size: 1.05rem; }
+.af-radar-new-error { color: var(--af-error); font-size: 0.72rem; margin: 0 0 9px; }
+
+.af-radar-new-hint {
+  margin: 10px 0 0; font-size: 0.66rem; line-height: 1.55;
+  color: var(--af-on-surface-variant); opacity: 0.7;
+}
+
+/* 编排选择：一块板由多条流程喂时，挑一条进 */
+.af-radar-flows { width: 320px; }
+
+.af-radar-flow-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--af-surface-lowest);
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 7px;
+  cursor: pointer;
+  color: var(--af-on-surface);
+}
+
+.af-radar-flow-row:hover { background: var(--af-surface-bright); }
+.af-radar-flow-row--stale { box-shadow: inset 0 0 0 1px rgba(255, 180, 171, 0.4); }
+
+.af-radar-flow-name {
+  display: block;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.76rem;
+  font-weight: 500;
+}
+
+.af-radar-flow-meta {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.65rem;
+  color: var(--af-outline-variant);
+}
+
+.af-radar-flow-stale { font-style: normal; color: var(--af-error); margin-left: 6px; }
+.af-radar-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.72rem; }
+
+/* AI 编排：走右侧抽屉，过程摊开给人看 */
+.af-radar-plan-drawer { width: min(520px, 100%); }
+
+.af-radar-plan-log {
+  background: var(--af-surface-lowest);
+  border-radius: 12px;
+  padding: 11px 13px;
+  margin-top: 12px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.af-radar-plan-log p {
+  margin: 0 0 7px;
+  font-size: 0.74rem;
+  line-height: 1.55;
+  color: var(--af-on-surface-variant);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.af-radar-plan-log p:last-child { margin-bottom: 0; }
+
+.af-radar-plan-log-live {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  font-size: 0.74rem;
+  color: var(--af-primary);
+}
+
+.af-radar-plan-log-live .af-radar-dot { background: var(--af-primary); }
+
+.af-radar-plan-summary {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  color: var(--af-on-surface);
+}
+
+.af-radar-plan-flow {
+  background: var(--af-surface-lowest);
+  border-radius: 12px;
+  padding: 11px 13px;
+  margin-bottom: 8px;
+}
+
+.af-radar-plan-top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+
+.af-radar-plan-act {
+  font-size: 0.62rem;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 5px;
+}
+
+.af-radar-plan-act--create { background: rgba(124, 77, 255, 0.24); color: var(--af-primary); }
+.af-radar-plan-act--update { background: rgba(255, 202, 106, 0.16); color: var(--af-caution); }
+.af-radar-plan-act--keep { background: var(--af-surface-high); color: var(--af-outline-variant); }
+
+.af-radar-plan-why { margin: 0 0 5px; font-size: 0.76rem; line-height: 1.55; color: var(--af-on-surface-variant); }
+
+.af-radar-plan-meta {
+  margin: 0 0 3px;
+  font-size: 0.68rem;
+  color: var(--af-outline-variant);
+  line-height: 1.5;
+}
+
+.af-radar-plan-meta code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--af-surface-high);
+  color: var(--af-secondary);
+  padding: 1px 6px;
+  border-radius: 5px;
+  margin-right: 5px;
+}
+
+.af-radar-plan-go {
+  margin-top: 8px;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 500;
+  background: var(--af-surface-high);
+  color: var(--af-primary);
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 13px;
+  cursor: pointer;
+}
+
+.af-radar-plan-go:hover { background: var(--af-primary-container); color: var(--af-on-primary-container); }
+.af-radar-plan-go:disabled { opacity: 0.5; cursor: progress; }
+
+/* 会不会造出重复认领、漏掉条目——必须当面说，不能埋在计划里 */
+.af-radar-plan-warn {
+  background: rgba(255, 180, 171, 0.1);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 10px;
+  font-size: 0.72rem;
+  line-height: 1.6;
+}
+
+.af-radar-plan-warn b { color: var(--af-error); font-size: 0.68rem; }
+.af-radar-plan-warn ul { margin: 5px 0 0; padding-left: 16px; color: var(--af-on-surface-variant); }
+
+.af-radar-plan-notes {
+  margin: 10px 0 0;
+  padding-left: 16px;
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: var(--af-outline-variant);
+}
+
+/* 改状态：人的判断优先，但脚本观测留在上面，两者矛盾时当面说 */
+.af-radar-conflict {
+  background: rgba(255, 202, 106, 0.12);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-top: 14px;
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+
+.af-radar-conflict b { display: block; color: var(--af-caution); font-size: 0.72rem; margin-bottom: 3px; }
+.af-radar-conflict p { margin: 0; color: var(--af-on-surface-variant); }
+
+.af-radar-setstate { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.af-radar-setstate button {
+  font: inherit;
+  font-size: 0.75rem;
+  background: var(--af-surface-high);
+  color: var(--af-on-surface-variant);
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 13px;
+  cursor: pointer;
+}
+
+.af-radar-setstate button:hover { background: var(--af-surface-bright); color: var(--af-on-surface); }
+.af-radar-setstate button:disabled { opacity: 0.5; cursor: progress; }
+
+.af-radar-setstate button.af-radar-setstate--on {
+  background: var(--af-primary-container);
+  color: var(--af-on-primary-container);
+  font-weight: 500;
+}
+
+.af-radar-setstate button.af-radar-setstate--reset {
+  background: transparent;
+  color: var(--af-outline-variant);
+  box-shadow: inset 0 0 0 1px var(--af-surface-bright);
+}
+
+.af-radar-setstate-hint {
+  margin: 9px 0 0;
+  font-size: 0.68rem;
+  line-height: 1.55;
+  color: var(--af-outline-variant);
+}
+
+.af-radar-setstate-hint b { color: var(--af-on-surface-variant); font-weight: 600; }
+
+.af-radar-plan-back {
+  margin-top: 10px;
+  width: 100%;
+  font: inherit;
+  font-size: 0.72rem;
+  background: transparent;
+  color: var(--af-on-surface-variant);
+  border: 0;
+  box-shadow: inset 0 0 0 1px var(--af-surface-bright);
+  border-radius: 999px;
+  padding: 7px 13px;
+  cursor: pointer;
+}
+.af-radar-new-hint b { color: var(--af-on-surface-variant); font-weight: 600; }
+.af-radar-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.af-radar-ghost-count {
+  font-style: normal;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.62rem;
+  background: var(--af-surface-high);
+  color: var(--af-on-surface-variant);
+  padding: 0 6px;
+  border-radius: 999px;
+}
+
+/* 跑道 */
+.af-radar-runway { background: var(--af-surface-high); border-radius: 1.5rem; overflow: hidden; }
+
+.af-radar-axis { background: var(--af-surface-highest); height: 34px; position: relative; }
+
+.af-radar-track { position: absolute; inset: 0 96px 0 250px; }
+
+.af-radar-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--af-surface-bright); }
+
+.af-radar-tick b {
+  position: absolute; bottom: 5px; left: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem; font-weight: 400; color: var(--af-on-surface-variant); opacity: 0.5;
+  /* 定位元素只有 1px 宽，不锁 nowrap 的话「10月」会被挤成竖排 */
+  white-space: nowrap;
+}
+
+.af-radar-train { position: absolute; top: 0; bottom: 0; border-left: 2px dotted var(--af-secondary); opacity: 0.55; }
+
+.af-radar-train b {
+  position: absolute; top: 4px; left: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem; color: var(--af-secondary); opacity: 0.9;
+  white-space: nowrap;
+}
+
+.af-radar-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--af-primary-container); }
+
+.af-radar-now b {
+  position: absolute; top: 4px; left: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem; color: var(--af-primary);
+  white-space: nowrap;
+}
+
+.af-radar-row {
+  position: relative;
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-align: left;
+  cursor: pointer;
+  color: var(--af-on-surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.af-radar-row:hover { background: var(--af-surface-bright); }
+.af-radar-row--done { opacity: 0.62; }
+.af-radar-row--settled { opacity: 0.42; }
+
+/* 过期未完成是最该被看见的一种，所以它比别的行更重，而不是更轻 */
+.af-radar-row--overdue {
+  opacity: 1;
+  background: rgba(255, 180, 171, 0.07);
+  box-shadow: inset 3px 0 0 var(--af-error), inset 0 1px 0 rgba(255, 255, 255, 0.045);
+}
+
+.af-radar-row--overdue:hover { background: rgba(255, 180, 171, 0.12); }
+
+.af-radar-badges i.af-radar-badge--settled { background: var(--af-surface-high); color: var(--af-outline-variant); }
+.af-radar-badges i.af-radar-badge--stale { background: rgba(255, 202, 106, 0.16); color: var(--af-caution); }
+.af-radar-badges i.af-radar-badge--override { background: rgba(124, 77, 255, 0.2); color: var(--af-primary); }
+
+.af-radar-value--overdue { color: var(--af-error); font-weight: 600; }
+
+.af-radar-label { position: absolute; left: 20px; top: 10px; width: 216px; }
+.af-radar-name { display: block; font-size: 0.82rem; font-weight: 500; line-height: 1.32; }
+.af-radar-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
+
+.af-radar-badges i {
+  font-style: normal;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface-variant);
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+
+.af-radar-badges i.af-radar-badge--none { background: rgba(255, 180, 171, 0.14); color: var(--af-error); }
+
+.af-radar-bar { position: absolute; top: 21px; left: 0; height: 13px; border-radius: 4px; }
+.af-radar-bar--ok { background: var(--af-tertiary); }
+.af-radar-bar--warn { background: var(--af-caution); }
+.af-radar-bar--idle { background: var(--af-outline-variant); }
+
+/* 未开始用斜纹：光靠颜色的话色觉障碍分不出「未开始」和「进行中」 */
+.af-radar-bar--risk {
+  background: repeating-linear-gradient(135deg, var(--af-error) 0 5px, rgba(255, 180, 171, 0.38) 5px 10px);
+}
+
+.af-radar-bar--clipped { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+
+.af-radar-cut {
+  position: absolute;
+  top: 15px;
+  width: 3px;
+  height: 25px;
+  border-radius: 2px;
+  background: var(--af-on-surface);
+  transform: translateX(-50%);
+}
+
+.af-radar-value {
+  position: absolute;
+  right: 18px;
+  white-space: nowrap;
+  top: 19px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+
+.af-radar-value--ok { color: var(--af-tertiary); }
+.af-radar-value--warn { color: var(--af-caution); }
+.af-radar-value--risk { color: var(--af-error); }
+.af-radar-value--idle { color: var(--af-on-surface-variant); opacity: 0.75; }
+
+/* 看板 */
+.af-radar-kanban { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+
+.af-radar-column { background: var(--af-surface-low); border-radius: 1.5rem; padding: 14px; min-height: 120px; }
+
+.af-radar-col-head {
+  display: flex; justify-content: space-between; align-items: center;
+  font-family: var(--af-headline); font-size: 0.78rem; font-weight: 600;
+  margin: 0 0 10px; color: var(--af-on-surface-variant);
+}
+
+.af-radar-col-head--risk { color: var(--af-error); }
+.af-radar-col-head--warn { color: var(--af-caution); }
+.af-radar-col-head--ok { color: var(--af-tertiary); }
+.af-radar-col-empty { color: var(--af-outline-variant); font-size: 0.75rem; margin: 0; }
+
+.af-radar-card {
+  display: block; width: 100%; text-align: left; cursor: pointer;
+  background: var(--af-surface-high); border: 0; border-radius: 12px;
+  padding: 11px 12px; margin-bottom: 8px; color: var(--af-on-surface);
+}
+
+.af-radar-card:hover { background: var(--af-surface-bright); }
+
+.af-radar-card-meta {
+  display: block; margin-top: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.65rem; color: var(--af-outline-variant);
+}
+
+/* 表格：没有终点日期的数据退回这里，比硬凑一根条诚实 */
+.af-radar-table-wrap { overflow-x: auto; background: var(--af-surface-high); border-radius: 1.5rem; }
+.af-radar-table { border-collapse: collapse; width: 100%; font-size: 0.82rem; }
+
+.af-radar-table th {
+  text-align: left; padding: 11px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.65rem; letter-spacing: 0.05em;
+  color: var(--af-outline-variant); background: var(--af-surface-highest);
+}
+
+.af-radar-table td { padding: 10px 16px; color: var(--af-on-surface-variant); }
+.af-radar-table tbody tr { cursor: pointer; }
+.af-radar-table tbody tr:hover td { background: var(--af-surface-bright); }
+.af-radar-table tbody tr + tr td { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045); }
+.af-radar-cell--risk { color: var(--af-error); }
+.af-radar-cell--warn { color: var(--af-caution); }
+.af-radar-cell--ok { color: var(--af-tertiary); }
+
+/* 变更流：走侧边抽屉，不占主屏。大多数天它是空的，常驻只会让人习惯性略过 */
+.af-radar-events { list-style: none; margin: 0; padding: 0; }
+.af-radar-events li { padding: 12px 0; }
+.af-radar-events li + li { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06); }
+.af-radar-event-top { display: flex; align-items: center; gap: 9px; margin-bottom: 5px; }
+
+.af-radar-events time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.65rem; color: var(--af-outline-variant);
+}
+
+.af-radar-events p { margin: 0; font-size: 0.85rem; line-height: 1.55; color: var(--af-on-surface); }
+
+.af-radar-event-item {
+  display: inline-block; margin-top: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.62rem; color: var(--af-outline-variant);
+  background: var(--af-surface-high); padding: 1px 7px; border-radius: 5px;
+}
+
+.af-radar-kind {
+  font-size: 0.63rem; font-weight: 600; padding: 1px 8px; border-radius: 5px;
+  background: var(--af-surface-high); color: var(--af-on-surface-variant);
+}
+
+.af-radar-kind--moved { background: rgba(255, 202, 106, 0.16); color: var(--af-caution); }
+.af-radar-kind--worse { background: rgba(255, 180, 171, 0.16); color: var(--af-error); }
+.af-radar-kind--better { background: rgba(0, 228, 117, 0.14); color: var(--af-tertiary); }
+.af-radar-kind--new { background: rgba(124, 77, 255, 0.18); color: var(--af-primary); }
+
+.af-radar-drawer-lead { color: var(--af-outline-variant); font-size: 0.78rem; margin: 0 0 6px; }
+.af-radar-note { color: var(--af-outline-variant); }
+.af-radar-bad { color: var(--af-error); }
+
+/* 抽屉：主图放不下的维度全沉到这里 */
+.af-radar-scrim { position: fixed; inset: 0; background: rgba(10, 10, 10, 0.55); z-index: 40; }
+
+.af-radar-drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: min(460px, 100%);
+  background: var(--af-surface-low); z-index: 41; overflow-y: auto;
+  padding: 20px 24px 48px;
+  box-shadow: -20px 0 50px -20px rgba(0, 0, 0, 0.85);
+}
+
+.af-radar-drawer-close {
+  position: sticky; top: 0; float: right;
+  background: var(--af-surface-high); border: 0; color: var(--af-on-surface-variant);
+  border-radius: 8px; width: 30px; height: 30px; font-size: 1rem; cursor: pointer; line-height: 1;
+}
+
+.af-radar-drawer h3 { font-family: var(--af-headline); font-size: 1.25rem; margin: 2px 40px 10px 0; }
+
+.af-radar-drawer h4 {
+  font-family: var(--af-headline); font-size: 0.68rem; font-weight: 600;
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--af-outline-variant);
+  margin: 20px 0 8px; padding-top: 14px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.af-radar-dl { display: grid; grid-template-columns: 92px 1fr; gap: 7px 14px; margin: 0; font-size: 0.82rem; }
+.af-radar-dl dt { color: var(--af-outline-variant); font-size: 0.72rem; }
+.af-radar-dl dd { margin: 0; color: var(--af-on-surface); word-break: break-word; }
+
+.af-radar-dl--raw dd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.7rem; color: var(--af-on-surface-variant);
+}
+
+.af-radar-pill { display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 2px 10px; border-radius: 999px; }
+.af-radar-pill--risk { background: rgba(255, 180, 171, 0.16); color: var(--af-error); }
+.af-radar-pill--warn { background: rgba(255, 202, 106, 0.16); color: var(--af-caution); }
+.af-radar-pill--ok { background: rgba(0, 228, 117, 0.14); color: var(--af-tertiary); }
+.af-radar-pill--idle { background: rgba(203, 195, 216, 0.12); color: var(--af-on-surface-variant); }
+
+.af-radar-error { color: var(--af-error); font-size: 0.85rem; }
+.af-radar-none { color: var(--af-outline-variant); font-size: 0.88rem; padding: 26px 0; }
+
+@media (max-width: 900px) {
+  .af-radar-kanban { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .af-radar-track { inset: 0 88px 0 0; }
+  .af-radar-label { position: static; width: auto; padding: 10px 16px 0; }
+  .af-radar-row { min-height: 82px; padding-bottom: 30px; }
+  .af-radar-bar, .af-radar-cut, .af-radar-tick, .af-radar-train, .af-radar-now { top: auto; bottom: 10px; }
+  .af-radar-bar { height: 11px; }
+  .af-radar-cut { height: 19px; bottom: 6px; }
+  .af-radar-value { top: auto; bottom: 10px; }
+  .af-radar-events li { grid-template-columns: 1fr; gap: 3px; }
+}
+
+/* 空状态里的那行命令。人要能整行选中复制，所以用 pre 而不是拼在段落里 */
+.af-radar-empty-cmd {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--af-surface-container-lowest, #0e0e0e);
+  color: var(--af-on-surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+
+/* ── 板的增删（归档）：全部就地展开，不开弹框 ───────────── */
+
+.af-radar-empty-actions { margin: 18px 0 26px; display: flex; gap: 10px; }
+
+.af-radar-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--af-primary-container);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.af-radar-primary:hover { filter: brightness(1.12); }
+.af-radar-primary:disabled { opacity: .5; cursor: default; filter: none; }
+.af-radar-primary .material-symbols-outlined { font-size: 18px; }
+
+.af-radar-danger {
+  padding: 9px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--af-error, #ffb4ab) 88%, #000);
+  color: #3a0a06;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.af-radar-danger:hover { filter: brightness(1.08); }
+.af-radar-danger:disabled { opacity: .5; cursor: default; filter: none; }
+
+/* tab 条末尾的「＋」。和 tab 同高，但不抢视觉重量——它是次要动作 */
+.af-radar-tab-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  /* tab 靠 `align-items: flex-end` 对齐，而它自己有 9px 下内边距垫着下划线。
+     不补这一下，「＋」会整整低 9px，看着像掉出了这一行 */
+  margin: 0 0 9px -14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--af-on-surface-variant, #c9c5ca);
+  cursor: pointer;
+}
+.af-radar-tab-add:hover,
+.af-radar-tab-add--on { background: var(--af-surface-container-highest, #353534); color: var(--af-on-surface); }
+.af-radar-tab-add .material-symbols-outlined { font-size: 19px; }
+
+/* 归档可逆，所以平时不喊人，只在 hover 时透出 error 色 */
+.af-radar-ghost--danger:hover {
+  color: var(--af-error, #ffb4ab);
+  background: color-mix(in srgb, var(--af-error, #ffb4ab) 12%, transparent);
+}
+
+/* 建板条：就地展开在 tab 下面，已有的板还看得见——人正是照着它们取名字的 */
+.af-radar-newbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr) auto auto;
+  gap: 10px;
+  align-items: end;
+  padding: 16px 18px;
+  margin: 0 0 20px;
+  border-radius: 16px;
+  background: var(--af-surface-container-high, #2a2a2a);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--af-primary-container) 26%, transparent);
+}
+.af-radar-newbar-hint {
+  grid-column: 1 / -1;
+  margin: -2px 0 0;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--af-on-surface-variant, #c9c5ca);
+  opacity: .82;
+}
+.af-radar-newbar-hint code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.af-radar-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.af-radar-field > span { font-size: 11px; color: var(--af-on-surface-variant, #c9c5ca); }
+.af-radar-field input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--af-surface-container-lowest, #0e0e0e);
+  color: var(--af-on-surface);
+  font: inherit;
+  font-size: 13px;
+}
+.af-radar-field input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--af-primary-container) 55%, transparent);
+}
+.af-radar-field--mono input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+/* 确认行说「留什么」，不问「确定吗」——人犹豫的是会不会把半年的记录删掉 */
+.af-radar-confirm {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 13px 18px;
+  margin: 0 0 18px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--af-error, #ffb4ab) 11%, var(--af-surface-container-high, #2a2a2a));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--af-error, #ffb4ab) 30%, transparent);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.af-radar-confirm b { color: var(--af-error, #ffb4ab); font-weight: 600; }
+
+.af-radar-undo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 18px;
+  margin: 0 0 18px;
+  border-radius: 14px;
+  background: var(--af-surface-container-high, #2a2a2a);
+  font-size: 13px;
+  color: var(--af-on-surface-variant, #c9c5ca);
+}
+.af-radar-undo b { color: var(--af-on-surface); font-weight: 600; }
+.af-radar-undo-sp { flex: 1; min-width: 12px; }
+
+.af-radar-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--af-primary-fixed, #e8deff);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.af-radar-link:disabled { opacity: .5; cursor: default; }
+
+@media (max-width: 640px) {
+  .af-radar-newbar { grid-template-columns: 1fr; }
 }

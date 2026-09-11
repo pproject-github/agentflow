@@ -23,6 +23,7 @@ import { LOG_LEVELS, log, setLogLevel, setMachineReadable } from "./log.mjs";
 import { updateModelLists } from "./model-lists.mjs";
 import { LEGACY_PIPELINES_DIR, PIPELINES_DIR, USER_AGENTFLOW_PIPELINES_LABEL } from "./paths.mjs";
 import { isValidUuid, runNodeScript } from "./pipeline-scripts.mjs";
+import { runTrackCommand } from "./radar-cli.mjs";
 import { Table } from "./table.mjs";
 import { ensureReference, findFlowNameByUuid, getFlowDir, listRunsWithLogs } from "./workspace.mjs";
 import { startUiServer } from "./ui-server.mjs";
@@ -388,6 +389,11 @@ export async function main() {
     // `flow preview` 曾经在这儿。它把 flow.yaml 原文塞进页面，代码化流程没有 yaml 可塞；
     // Web 的 /api/workspace/preview 接的是图对象，本来就通用，所以删掉而不是重写。
     throw new Error("Usage: agentflow flow dsl <export|import|lint|layout|migrate> <FlowName|dir> [--out <dir>] [--all]");
+  }
+  if (sub === "track") {
+    // 追踪板的读写。`commit` 是定时流程写回结果的那条路，其余给人排查用
+    process.exitCode = await runTrackCommand(argv);
+    return;
   }
   if (sub === "ui") {
     let port = 8765;
