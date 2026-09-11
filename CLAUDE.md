@@ -201,126 +201,55 @@ AgentFlow/
 
 ---
 
-## Flow Editing Skills
+## Authoring Workspace Graphs
 
-> The rest of this section is about **`flow.yaml`**, which is legacy read/migrate/audit
-> material. To change a Workspace graph, edit `workspace.flow.js` — see
-> `agentflow-flow-dsl`.
+Edit `workspace.flow.js`, then `agentflow flow dsl lint <flowDir>`. Syntax lives in
+`docs/wiki/flow-dsl.zh-CN.md` and the `agentflow-flow-dsl` skill.
 
-### Editing Existing Node Fields (`agentflow-flow-edit-node-fields`)
-
-When modifying **existing** `instances` in `flow.yaml` without changing topology:
-
-**Allowed fields (whitelist):**
-| Field | Description |
-|-------|-------------|
-| `label` | Canvas display name |
-| `role` | Role category string |
-| `body` | Node body content (agent task description) |
-| `script` | **Only for `tool_nodejs`** — actual shell command to execute |
-| `input[].value` | Default values for input slots (don't change `type`/`name`) |
-| `output[].value` | Default values for output slots (don't change `type`/`name`) |
-
-**Forbidden changes (blacklist):**
-- `definitionId` — changing type requires add-new + delete-old + rewire flow
-- `instanceId` — renaming requires updating all edges and ui.nodePositions
-- `input`/`output` array structure — no adding/removing/reordering items
-- `edges` — no modifications to connections
-- Adding/removing entire instance blocks — use `agentflow-flow-add-instances`
-
-**Critical `tool_nodejs` rule:**
-- `script` field contains the actual command to execute
-- `body` is documentation only — **ignored when `script` exists**
-- Always write complete, executable commands in `script`, never natural language
-- **`script` must reference ALL non-node input and output pins as `${slotName}`** (hard validation error):
-  - Input pins: `${slotName}` resolves to upstream data value/path
-  - Output pins: `${slotName}` resolves to output file path — script writes directly via `fs.writeFileSync(path, value)`
-  - Use exit code for success/failure (0 = success, non-0 = failed). Do NOT use JSON stdout wrapping
-- **Scripts under `scripts/` MUST be referenced via `${flowDir}/scripts/xxx.mjs`.** `${flowDir}` resolves to the flow's actual install location (user `~/agentflow/pipelines/`, workspace `.workspace/agentflow/pipelines/`, or package builtin). **Never hardcode `${workspaceRoot}/.workspace/agentflow/pipelines/${flowName}/scripts/...`** — that path only works for workspace-scope installs and breaks for Hub downloads / user-scope / builtin flows. `flow-write` and Hub import normalize known bad prefixes to `${flowDir}` automatically, but handwritten flows should still follow this rule.
-
-### Adding New Instances (`agentflow-flow-add-instances`)
-
-When adding **new nodes** to a flow:
+`flow.yaml` authoring is retired along with its runtime. The three skills that documented it
+(`agentflow-flow-edit-node-fields`, `agentflow-flow-add-instances`, `agentflow-flow-sync-ui`)
+are redirect stubs, and `/api/flow-editor-sync` is legacy. What follows is what still applies
+to a Workspace graph.
 
 **Node type selection:**
-| Condition | Recommended `definitionId` |
-|-----------|---------------------------|
+
+| Condition | `definitionId` |
+|-----------|----------------|
 | Behavior fully determined by input, no AI reasoning | `tool_nodejs` + `script` |
-| Display prominent output to user | `tool_print` ⚠️ |
 | Requires AI understanding, judgment, content generation | `agent_subAgent` |
-| Pause and wait for the user to confirm/edit content | `tool_user_check` ⚠️ |
-| Pause and let the user pick one of N branches (human-driven switch) | `tool_user_ask` ⚠️ |
+| Display prominent output to the user | `display_markdown` |
 
-⚠️ = `runtime: none` in `builtin/nodes/<id>.md`. These only ever ran under the retired
-Start/End Pipeline runtime. **Never put them in a Workspace graph** — use `display_markdown`
-instead of `tool_print`; there is no Workspace equivalent for the two human-gate nodes.
-
-**YAML structure:**
-```yaml
-instances:
-  <instanceId>:
-    definitionId: <builtin or existing definition>
-    label: ...
-    role: ...
-    input: [ { type, name, value }, ... ]
-    output: [ { type, name, value }, ... ]
-    script: <optional, tool_nodejs only>
-    body: | ...
-edges:
-  - source: <instanceId>
-    target: <instanceId>
-    sourceHandle: output-0    # flow.yaml 用位置下标；Workspace 图用槽位名（next / prev / content…）
-    targetHandle: input-0
-ui:
-  nodePositions:
-    <instanceId>:
-      x: <number>
-      y: <number>
-```
-
-**Handle quick reference** — positional handles below describe **`flow.yaml` only**. A
-Workspace graph names the slots an edge connects (`sourceHandle: next`, `targetHandle: prev`);
-positional handles are still read there but never written, because adding a slot to a
-definition shifts every index past it onto a different pin.
-
-(⚠️ = `runtime: none`, legacy Start/End only — never in a Workspace graph):
-| definitionId | Common outputs | Common inputs |
-|--------------|----------------|---------------|
-| control_start ⚠️ | next → output-0 | — |
-| control_end ⚠️ | — | prev → input-0 |
-| control_if | next1(TRUE) → output-0, next2(FALSE) → output-1 | prev → input-0, prediction → input-1 |
-| control_toBool ⚠️ | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
-| control_agent_toBool | next → output-0, prediction → output-1 | prev → input-0, value → input-1 |
-| control_anyOne ⚠️ | next → output-0 | prev1 → input-0, prev2 → input-1 |
-| tool_nodejs | next → output-0, result → output-1 | prev → input-0, [dynamic inputs] |
-| tool_user_check ⚠️ | next → output-0, content → output-1 | prev → input-0, content → input-1 |
-| tool_user_ask ⚠️ | option_0 → output-0, option_1 → output-1, ...（每个 output 槽位 = 一个选项，槽位 description 是选项文案） | prev → input-0, question → input-1 |
+`tool_print`, `tool_user_check` and `tool_user_ask` are `runtime: none` — they only ever ran
+under the retired Start/End runtime. **Never put them in a Workspace graph.** Use
+`display_markdown` instead of `tool_print`; there is no Workspace equivalent for the two
+human-gate nodes.
 
 `control_agent_toBool` is `runtime: degraded` — it does run, but only because the generic
-agent path honors the output envelope. Nothing constrains the model's `prediction` value,
-and `parse-bool.mjs` accepts only exactly `true` / `1` / `yes` / `on`; `是` or
-`true（因为…）` silently yields false.
+agent path honors the output envelope. Nothing constrains the model's `prediction` value, and
+`parse-bool.mjs` accepts only exactly `true` / `1` / `yes` / `on`; `是` or `true（因为…）`
+silently yields false.
 
-**Edge fan-out / fan-in rule:** One output can connect to multiple inputs (fan-out OK). One input can only have one incoming edge (fan-in forbidden). Never write two edges with the same `target + targetHandle` — runtime only uses the first match, the rest are silently ignored.
+**Edges name slots, not positions.** A Workspace edge connects named slots
+(`sourceHandle: next`, `targetHandle: prev`). Positional handles (`output-0`) are still read
+so historical graphs parse, but never written — adding a slot to a definition shifts every
+index past it onto a different pin.
 
-**Default node position:** Place new nodes starting at `x: 100, y: 300`. For linear/main-chain flows, increment `x` by **280** per node (e.g. `x: 100 + i * 280, y: 300`). For branches, offset `y` by **200** between paths. For parallel nodes, keep same `x` and offset `y` by **200**.
+**Fan-out / fan-in:** one output → many inputs is fine; one input takes **exactly one**
+incoming edge. Two edges sharing `target + targetHandle` means the runtime uses the first and
+silently ignores the rest.
 
-**Single responsibility principle:** Each node does one thing. Split multi-step tasks into separate nodes connected by edges.
+**Scripts under `scripts/` MUST be referenced as `${flowDir}/scripts/xxx.mjs`.** `${flowDir}`
+resolves to the flow's real install location (user `~/agentflow/pipelines/`, workspace
+`.workspace/agentflow/pipelines/`, or package builtin). Never hardcode
+`${workspaceRoot}/.workspace/agentflow/pipelines/${flowName}/scripts/...` — that path only
+works for workspace-scope installs and breaks Hub downloads, user-scope and builtin flows.
+`flow-write` and Hub import normalize known bad prefixes, but handwritten flows should follow
+the rule.
 
-### Sync Web UI After Flow Changes (`agentflow-flow-sync-ui`)
+**Layout:** new nodes start at `x: 100, y: 300`; linear chains step `x` by **280**; branches
+and parallel nodes offset `y` by **200**.
 
-After writing `flow.yaml` to disk in Web UI + Composer context:
-
-```bash
-curl -sS -X POST http://127.0.0.1:<PORT>/api/flow-editor-sync \
-  -H 'Content-Type: application/json' \
-  -d '{"flowId":"<flowId>","flowSource":"user"}'
-```
-
-**`flowSource` values:**
-- `user` — `~/agentflow/pipelines` directory
-- `workspace` — `.workspace/agentflow/pipelines` in current project
-- `builtin` — package's `builtin/pipelines` (read-only templates)
+**One node, one job.** Split multi-step tasks into separate nodes connected by edges.
 
 ---
 
