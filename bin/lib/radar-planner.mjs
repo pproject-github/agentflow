@@ -92,6 +92,9 @@ export function buildRadarPlanPrompt({ board, ask, boardId }) {
     "   绝不能默认当成通过——那等于发了一张假的合格证。",
     "4. **抓取失败要和「没有变化」分开记**，否则监控静默死掉时，面板看起来一切正常。",
     "5. 已经存在、而且还合适的流程用 `keep`，不要重建。已经哑了的流程优先诊断，别直接另起一条。",
+    "6. **`items` 是要盯的具体事项，一条一个。** 它们的初始 state 一律留空——这一刻你还没扫过，",
+    "   写任何值都是编的。`tasks` 拆成人能直接照着做的步骤，`unknowns` 写你查不到、需要人补的。",
+    "7. `flows[].owns` 里的 id 必须来自 `items` 或板上已有的条目，不能凭空出现。",
     "",
     "## 只输出一段 JSON，不要别的",
     "```json",
@@ -108,6 +111,18 @@ export function buildRadarPlanPrompt({ board, ask, boardId }) {
     '      "updates": ["state", "current", "evidence"],',
     '      "prompt": "交给 AI 去搭这条流程时用的提示词，要具体到抓哪个页面、判定哪个文件",',
     '      "why": "这条流程为什么存在"',
+    "    }",
+    "  ],",
+    '  "items": [',
+    "    {",
+    '      "id": "英文小写、连字符分隔、稳定不变，比如 play-target-api-36",',
+    '      "title": "一句话说清楚这是什么事",',
+    '      "due": "YYYY-MM-DD，没有确定截止日就留空字符串",',
+    '      "required": "满足的标准是什么",',
+    '      "owner": "负责人的用户名，不知道就留空",',
+    '      "source": "依据的原始链接",',
+    '      "tasks": ["要做的第一步", "第二步"],',
+    '      "unknowns": ["还需要人确认的事"]',
     "    }",
     "  ],",
     '  "notes": ["需要人确认的事，比如某个条目现在没人负责"]',
@@ -143,9 +158,50 @@ export function parseRadarPlan(text) {
  * 检查的重点是**这份计划会不会造出我们刚防住的那些问题**：一个条目两条流程抢着写、
  * cron 写错、引用了板上不存在的条目。模型给的计划不该直接落地，它只是一份待审的草案。
  */
+/** 只留认得出的 id 格式：它会进文件名、进深链、进 `--board=` */
+const ITEM_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/**
+ * 规整模型产出的追踪项。
+ *
+ * **初始 state 一律不收**：规划这一刻还没扫过任何东西，写进去的任何状态都是编的，
+ * 而板上一条绿色的 ok 会让人以为已经查过了。条目建出来就是待扫描，由监控流程去填。
+ */
+export function normalizeRadarItems(raw = [], existingIds = new Set()) {
+  const items = [];
+  const warnings = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    const id = String(entry?.id || "").trim().toLowerCase();
+    if (!ITEM_ID.test(id)) { warnings.push(`条目 id 不合法，已丢掉：${entry?.id ?? "(空)"}`); continue; }
+    if (seen.has(id) || existingIds.has(id)) { warnings.push(`条目 ${id} 重复，已丢掉`); continue; }
+    seen.add(id);
+    const title = String(entry?.title || "").trim();
+    if (!title) { warnings.push(`条目 ${id} 缺 title，已丢掉`); continue; }
+    const due = String(entry?.due || "").trim();
+    if (due && !/^\d{4}-\d{2}-\d{2}$/.test(due)) {
+      warnings.push(`条目 ${id} 的截止日不是 YYYY-MM-DD，已留空：${due}`);
+    }
+    items.push({
+      id,
+      title,
+      due: /^\d{4}-\d{2}-\d{2}$/.test(due) ? due : "",
+      required: String(entry?.required || "").trim(),
+      owner: String(entry?.owner || "").trim(),
+      source: String(entry?.source || "").trim(),
+      tasks: (Array.isArray(entry?.tasks) ? entry.tasks : []).map((x) => String(x).trim()).filter(Boolean),
+      unknowns: (Array.isArray(entry?.unknowns) ? entry.unknowns : []).map((x) => String(x).trim()).filter(Boolean),
+    });
+  }
+  return { items, warnings };
+}
+
 export function normalizeRadarPlan(plan, board) {
   const warnings = [];
-  const knownRows = new Set((board?.rows || []).map((row) => String(row.id || row.title || "")).filter(Boolean));
+  const existing = new Set((board?.rows || []).map((row) => String(row.id || row.title || "")).filter(Boolean));
+  // 这一轮新提的条目也算「已知」：流程认领它们是正常的，不该被当成引用了不存在的条目
+  const { items, warnings: itemWarnings } = normalizeRadarItems(plan?.items, existing);
+  const knownRows = new Set([...existing, ...items.map((item) => item.id)]);
   const knownFlows = new Set((board?.flows || []).map((flow) => String(flow.flowId || "")).filter(Boolean));
   const ownedBy = new Map();
   const flows = [];
@@ -208,8 +264,9 @@ export function normalizeRadarPlan(plan, board) {
 
   return {
     summary: String(plan?.summary || ""),
+    items,
     flows,
     notes: (Array.isArray(plan?.notes) ? plan.notes : []).map((note) => String(note || "")).filter(Boolean),
-    warnings,
+    warnings: [...itemWarnings, ...warnings],
   };
 }

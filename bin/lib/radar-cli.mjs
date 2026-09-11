@@ -23,7 +23,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { createEmptyFlow, resolveFlowDirForWrite } from "./flow-write.mjs";
-import { readTrackerDocs, writeTrackerDoc } from "./radar-docs.mjs";
+import { autoCommit, readTrackerDocs, writeTrackerDoc } from "./radar-docs.mjs";
 import { applyGate } from "./radar-gate.mjs";
 import { writeWorkspaceGraph } from "./workspace-server.mjs";
 import { materializeFlow, planToPending } from "./radar-plan-apply.mjs";
@@ -63,33 +63,6 @@ import {
 const ACCEPTED_STATES = new Set([...RADAR_STATES, "unknown"]);
 /** 核心字段。和 radar-planner 的 UPDATABLE_FIELDS 对齐，两处发散了板上就会出现对不上的列 */
 const CORE_FIELDS = ["state", "current", "required", "evidence", "due", "owner", "title", "source"];
-
-/**
- * 机器写完文件立刻自己提交。
- *
- * 不提交的话，下一个提交的人会「认领」所有机器写的行——`git blame` 把它们全算成人改的，
- * 门禁当场变成一堵墙。这是实测撞出来的：一次 `track export` + 一次人工 `commit -a`，
- * 之后每个字段都被当成人工判断。
- *
- * 不是 git 仓库就跳过，不报错：文件形态本来就该在没有 git 的地方也能用。
- */
-function autoCommit(dir, message) {
-  try {
-    execFileSync("git", ["rev-parse", "--git-dir"], { cwd: dir, stdio: "ignore" });
-  } catch {
-    return false;
-  }
-  try {
-    execFileSync("git", ["add", "-A", "."], { cwd: dir, stdio: "ignore" });
-    execFileSync("git", [
-      "-c", "user.name=agentflow", "-c", "user.email=agentflow@local",
-      "commit", "-q", "-m", message,
-    ], { cwd: dir, stdio: "ignore" });
-    return true;
-  } catch {
-    return false; // 没有改动可提交
-  }
-}
 
 /**
  * 上次由**人**改过的字段，精确到行。

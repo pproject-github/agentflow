@@ -11,6 +11,7 @@
  * 同一个文件里，机器读的部分有契约，人读的部分没有。这样 agent 拿到整个目录当上下文时，
  * 它能自由地写正文，却改不动会影响告警的那几个字段——那几个字段要过 `track sync` 的校验。
  */
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -128,4 +129,66 @@ export function writeTrackerDoc(dir, row = {}, body = "") {
   const front = yaml.dump(meta, { lineWidth: 100, noRefs: true }).trimEnd();
   fs.writeFileSync(file, `---\n${front}\n---\n\n${keep || "<!-- 任务拆解、调研、待确认的事写在这儿。agent 和人都可以改 -->"}\n`, "utf-8");
   return { ok: true, path: file };
+}
+
+/**
+ * 机器写完文件立刻自己提交。
+ *
+ * 不提交的话，下一个提交的人会「认领」所有机器写的行——`git blame` 把它们全算成人改的，
+ * 门禁当场变成一堵墙。这是实测撞出来的：一次 `track export` + 一次人工 `commit -a`，
+ * 之后每个字段都被当成人工判断。
+ *
+ * 不是 git 仓库就跳过，不报错：文件形态本来就该在没有 git 的地方也能用。
+ */
+/** 这个目录自己是不是一个 git 仓库根（而不是嵌在别人的仓库里） */
+function isOwnRepo(dir) {
+  try {
+    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: dir, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return Boolean(top) && fs.realpathSync(top) === fs.realpathSync(dir);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 把板目录变成 git 仓库。
+ *
+ * 不是可选项：**门禁靠 `git blame` 分辨哪些字段是人改的**。没有 git 的话
+ * `humanEditedFields` 返回空集，门禁降级成「不拦」——人工判断就再也保不住了。
+ *
+ * 已经是仓库就什么都不做。
+ */
+export function ensureGitRepo(dir) {
+  try {
+    // 必须比对顶层目录：板目录可能嵌在别的仓库里（数据根放在某个 repo 下面很常见），
+    // 只问 `--git-dir` 的话会认到**父仓库**，于是 blame 把所有行算到父仓库的提交者头上，
+    // 门禁分不清人和机器，再次失效
+    const top = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: dir, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (top && fs.realpathSync(top) === fs.realpathSync(dir)) return true;
+  } catch { /* 还不是仓库 */ }
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: dir, stdio: "ignore" });
+    return true;
+  } catch {
+    return false; // 没装 git，门禁会降级成不拦，但建板本身不该因此失败
+  }
+}
+
+export function autoCommit(dir, message) {
+  // 同样要比对顶层：认到父仓库的话，`git add -A .` 会把父仓库的改动一起提交
+  if (!isOwnRepo(dir)) return false;
+  try {
+    execFileSync("git", ["add", "-A", "."], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", [
+      "-c", "user.name=agentflow", "-c", "user.email=agentflow@local",
+      "commit", "-q", "-m", message,
+    ], { cwd: dir, stdio: "ignore" });
+    return true;
+  } catch {
+    return false; // 没有改动可提交
+  }
 }

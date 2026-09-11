@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   buildRadarPlanPrompt,
   describeBoardState,
+  normalizeRadarItems,
   normalizeRadarPlan,
   parseRadarPlan,
 } from "../bin/lib/radar-planner.mjs";
@@ -202,4 +203,59 @@ test("规划接口先挡住坏输入，再谈调模型", async () => {
     else process.env.AGENTFLOW_HOME = previousHome;
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
+});
+
+/**
+ * 规划这一刻还没扫过任何东西。写进去的任何 state 都是编的，
+ * 而板上一条绿色的 ok 会让人以为已经查过了。
+ */
+test("条目的初始 state 一概不收", () => {
+  const { items } = normalizeRadarItems([
+    { id: "a", title: "A", state: "ok", current: "已满足" },
+  ]);
+  assert.equal(items[0].state, undefined);
+  assert.equal(items[0].current, undefined);
+});
+
+test("条目 id 不合法或重复的丢掉并点名", () => {
+  const { items, warnings } = normalizeRadarItems([
+    { id: "Play Target", title: "空格" },
+    { id: "../evil", title: "穿越" },
+    { id: "ok-one", title: "行" },
+    { id: "ok-one", title: "重复" },
+  ]);
+  assert.deepEqual(items.map((item) => item.id), ["ok-one"]);
+  assert.equal(warnings.filter((w) => /不合法/.test(w)).length, 2);
+  assert.ok(warnings.some((w) => /重复/.test(w)));
+});
+
+test("和板上已有条目撞 id 的也丢掉", () => {
+  const { items, warnings } = normalizeRadarItems([{ id: "已有", title: "x" }, { id: "new-one", title: "y" }], new Set(["new-one"]));
+  assert.deepEqual(items.map((item) => item.id), []);
+  assert.ok(warnings.some((w) => /new-one 重复/.test(w)));
+});
+
+// 截止日写错格式比没有截止日更糟：它会被解析成别的日子，倒计时全是错的
+test("截止日格式不对就留空并报出来，不猜", () => {
+  const { items, warnings } = normalizeRadarItems([{ id: "a", title: "A", due: "2026年10月" }]);
+  assert.equal(items[0].due, "");
+  assert.ok(warnings.some((w) => /不是 YYYY-MM-DD/.test(w)));
+});
+
+test("tasks 和 unknowns 收进来，供细化那一步给人看", () => {
+  const { items } = normalizeRadarItems([
+    { id: "a", title: "A", tasks: ["升 compileSdk", "", "回归"], unknowns: ["要不要声明前台服务类型"] },
+  ]);
+  assert.deepEqual(items[0].tasks, ["升 compileSdk", "回归"]);
+  assert.deepEqual(items[0].unknowns, ["要不要声明前台服务类型"]);
+});
+
+// 新提的条目和新建的流程是一起提交的，流程认领它们天经地义
+test("流程可以认领这一轮新提的条目，不算引用不存在", () => {
+  const result = normalizeRadarPlan({
+    items: [{ id: "brand-new", title: "新的" }],
+    flows: [{ action: "create", flowId: "watch", owns: ["brand-new"] }],
+  }, null);
+  assert.equal(result.items.length, 1);
+  assert.equal(result.warnings.some((w) => /声称负责 brand-new/.test(w)), false);
 });

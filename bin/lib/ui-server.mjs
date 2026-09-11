@@ -115,6 +115,10 @@ import {
 import { startComposerAgent } from "./composer-agent.mjs";
 import { sweepAllRadarBoards } from "./radar-alert-sweep.mjs";
 import { listWorkspaceRunLogs } from "./workspace-run-logs.mjs";
+import { commitTrack } from "./radar-cli.mjs";
+import { materializeFlow } from "./radar-plan-apply.mjs";
+import { setupBoard } from "./radar-setup.mjs";
+import { autoCommit as autoCommitBoardWorkspace, ensureGitRepo } from "./radar-docs.mjs";
 import {
   beginCasLogin,
   buildClearCasFlowCookie,
@@ -5732,6 +5736,62 @@ finishedAt: "${new Date().toISOString()}"
       if (collaboration?.id) deleteWorkspaceCollaborationById(collaboration.id);
       else deleteWorkspaceCollaborationForFlow(flowId, flowArchived);
       json(res, 200, { success: true, flowId, flowSource, deleted: true });
+      return;
+    }
+
+    /**
+     * 一次建完：板 + 板目录 + 条目 + 监控流程。
+     *
+     * 用户视角只有一个输入框，剩下的由规划接手。**第一次建板时人已经把条目和流程
+     * 一条条过目了，那两次确认就是审批本身**——再让他去审批页批一遍同样的东西，
+     * 只会教会他闭眼点。之后指挥官再改什么，才走门禁。
+     */
+    if (req.method === "POST" && url.pathname === "/api/radar/setup") {
+      let payload = {};
+      try {
+        payload = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const boardId = String(payload?.board || "").trim();
+      if (!isValidBoardId(boardId)) {
+        json(res, 400, { error: "板 id 只能用字母数字和 - _ .，且要字母数字开头" });
+        return;
+      }
+      const topic = String(payload?.topic || "").trim();
+      if (!topic) {
+        json(res, 400, { error: "说一下这块板要盯什么" });
+        return;
+      }
+      try {
+        const by = String(authUser?.username || userCtx?.userId || "");
+        const plan = payload?.plan && typeof payload.plan === "object" ? payload.plan : {};
+        const result = setupBoard({
+          board: boardId,
+          title: String(payload?.title || boardId).trim(),
+          topic,
+          plan,
+          dataRoot: getAgentflowDataRoot(),
+          createdBy: by,
+        }, {
+          createRadarBoard,
+          commitTrack,
+          materializeFlow,
+          autoCommit: autoCommitBoardWorkspace,
+          ensureGitRepo,
+          workspaceRoot: root,
+          userId: String(userCtx?.userId || ""),
+          createEmptyFlow,
+          writeWorkspaceGraph,
+          resolveFlowDirForWrite,
+        });
+        if (!result.ok) { json(res, 409, result); return; }
+        appendRadarEvent(boardId, { kind: "board_created", by, title: payload?.title || boardId });
+        json(res, 200, result);
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
       return;
     }
 
