@@ -142,6 +142,18 @@ export function createWorkspaceInterrupt(runId, record = {}) {
   };
   assertPayloadSize(payload);
   writeAtomic(interruptPath(id), payload);
+  /**
+   * 通知该看的人。在此之前审批只有拉取——没人打开页面就没人知道，
+   * 而挂起期间流程是停着的。
+   *
+   * 故意不 await，也故意吞掉失败：通知挂了不该让审批创建失败。
+   * 宁可没人收到提醒（页面上还看得见），也不能因为企微不通就让整条运行崩掉。
+   */
+  if (payload.approvers.length) {
+    import("./approval-notify.mjs")
+      .then(({ notifyApproval }) => notifyApproval(payload))
+      .catch(() => {});
+  }
   return clone(payload);
 }
 

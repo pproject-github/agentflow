@@ -18,15 +18,22 @@
  *
  * 其余子命令（list/show/events/rm）是给人排查用的，不进流程。
  */
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 
+import { readTrackerDocs, writeTrackerDoc } from "./radar-docs.mjs";
+import { applyGate } from "./radar-gate.mjs";
 import {
   RADAR_STATES,
   appendRadarEvent,
+  createRadarBoard,
+  setRadarBoardArchived,
   isValidBoardId,
   isValidShardId,
   listRadarBoardIds,
   listRadarBoards,
+  radarBoardDir,
   readRadarBoard,
   readRadarEvents,
   readRadarShard,
@@ -48,6 +55,109 @@ import {
 const ACCEPTED_STATES = new Set([...RADAR_STATES, "unknown"]);
 /** 核心字段。和 radar-planner 的 UPDATABLE_FIELDS 对齐，两处发散了板上就会出现对不上的列 */
 const CORE_FIELDS = ["state", "current", "required", "evidence", "due", "owner", "title", "source"];
+
+/**
+ * 机器写完文件立刻自己提交。
+ *
+ * 不提交的话，下一个提交的人会「认领」所有机器写的行——`git blame` 把它们全算成人改的，
+ * 门禁当场变成一堵墙。这是实测撞出来的：一次 `track export` + 一次人工 `commit -a`，
+ * 之后每个字段都被当成人工判断。
+ *
+ * 不是 git 仓库就跳过，不报错：文件形态本来就该在没有 git 的地方也能用。
+ */
+function autoCommit(dir, message) {
+  try {
+    execFileSync("git", ["rev-parse", "--git-dir"], { cwd: dir, stdio: "ignore" });
+  } catch {
+    return false;
+  }
+  try {
+    execFileSync("git", ["add", "-A", "."], { cwd: dir, stdio: "ignore" });
+    execFileSync("git", [
+      "-c", "user.name=agentflow", "-c", "user.email=agentflow@local",
+      "commit", "-q", "-m", message,
+    ], { cwd: dir, stdio: "ignore" });
+    return true;
+  } catch {
+    return false; // 没有改动可提交
+  }
+}
+
+/**
+ * 上次由**人**改过的字段，精确到行。
+ *
+ * 板目录是 git 仓库时，`git blame` 就是权威的作者记录——不用往 frontmatter 里塞
+ * `stateBy: human` 这种自制标记。约定：agent 提交时 author 设成 `agentflow`，其余当成人。
+ *
+ * **必须按行 blame，不能按文件。** 按文件的话，一次 `git commit -a` 就会把所有文件的
+ * 所有字段都标成人改的，门禁当场变成一堵墙——这是实测撞出来的，不是假想。
+ *
+ * 拿不到 git（不是仓库、没装 git）返回空集：**降级成不拦**，而不是全拦。
+ */
+function humanEditedFields(dir) {
+  const fields = new Set();
+  let files = [];
+  try {
+    files = fs.readdirSync(dir).filter((name) => name.endsWith(".md"));
+  } catch {
+    return fields;
+  }
+  for (const name of files) {
+    const id = name.replace(/\.md$/, "");
+    let text = "";
+    try {
+      // 必须 blame HEAD，不能 blame 工作区：这一轮待判定的改动本身还没提交，
+      // 对未提交的行 git 会把作者填成本机 git 用户名——那会把 agent 刚改的每一行
+      // 都算成人改的，门禁再次变成一堵墙。基线是「上一次提交时这行是谁写的」。
+      text = execFileSync("git", ["blame", "--line-porcelain", "HEAD", "--", name], {
+        cwd: dir, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
+      });
+    } catch {
+      continue; // 这个文件还没提交过，或者根本不是 git 仓库
+    }
+    let author = "";
+    for (const line of text.split(/\r?\n/)) {
+      if (line.startsWith("author ")) { author = line.slice(7).trim(); continue; }
+      // porcelain 里正文行以 tab 开头
+      if (!line.startsWith("\t")) continue;
+      const content = line.slice(1);
+      const match = content.match(/^([A-Za-z_][\w-]*):/);
+      if (!match) continue;
+      if (author && author !== "agentflow") fields.add(`${id}:${match[1]}`);
+    }
+  }
+  return fields;
+}
+
+/** 待审批的人话版。审批页和企微通知看到的都是它 */
+function heldMarkdown(board, flowId, held = []) {
+  const lines = [`**${board}** 有 ${held.length} 处改动等确认（来自 ${flowId}）`, ""];
+  for (const event of held) {
+    const change = event.from !== undefined
+      ? `\`${event.from || "空"}\` → \`${event.to || "空"}\``
+      : "";
+    lines.push(`- **${event.id}** ${event.kind} ${change}`);
+    lines.push(`  ${event.reason}`);
+  }
+  lines.push("", "在确认之前，板上这几个字段仍然是旧值；同一条目上其它改动已经落地。");
+  return lines.join("\n");
+}
+
+/** 待审批落在板目录里，和分片并列——它是板的状态，不是某次运行的副产品 */
+function writePending(board, flowId, held = []) {
+  try {
+    const dir = path.join(radarBoardDir(board));
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, "_pending.json");
+    const prev = (() => {
+      try { return JSON.parse(fs.readFileSync(file, "utf-8")); } catch { return {}; }
+    })();
+    prev[flowId] = { at: new Date().toISOString(), held };
+    fs.writeFileSync(file, `${JSON.stringify(prev, null, 2)}\n`, "utf-8");
+  } catch (e) {
+    console.error(`待审批写不进去：${(e && e.message) || e}`);
+  }
+}
 
 function fail(message) {
   const error = new Error(message);
@@ -205,6 +315,8 @@ export function commitTrack({
   staleAfterMs = 0,
   flow = null,
   now = Date.now(),
+  gate = false,
+  humanFields = new Set(),
 } = {}) {
   if (!isValidBoardId(board)) throw fail(`board 不合法：${board}`);
   if (!isValidShardId(flowId)) throw fail(`flow 不合法：${flowId}`);
@@ -240,13 +352,25 @@ export function commitTrack({
 
   const withSettled = salvaged ? finalRows : inheritSettled(finalRows, previous);
   // 保留上一片时不产事件：什么都没变，变更流不该出现一次抓取失败留下的假动静
-  const events = salvaged ? [] : diffRows(previous, withSettled);
+  const allEvents = salvaged ? [] : diffRows(previous, withSettled);
+
+  /**
+   * 门禁：会让告警闭嘴的、覆盖人工判断的、让条目消失的，拦下来等人点头；其余照常落地。
+   *
+   * 被拦的只回退那几个字段，不是整条不写——否则一条待审批会把同一条目上其它本该落地的
+   * 改动一起卡住，板照样是旧的，而发现陈旧正是这套东西存在的意义。
+   */
+  const gated = gate
+    ? applyGate(previous, withSettled, allEvents, { humanFields })
+    : { rows: withSettled, applied: allEvents, held: [] };
+  const finalWrite = gated.rows;
+  const events = gated.applied;
   const updatedAt = new Date(now).toISOString();
 
   const written = writeRadarShard(board, flowId, {
     // 保留下来的条目带着原来的 lastSeenAt：这次并没有真的看见它们，刷新时间戳
     // 等于把「已经三天没更新了」这个事实抹掉，陈旧告警就永远不会响
-    rows: withSettled,
+    rows: finalWrite,
     updatedAt,
     fetchFailures: failures,
     ...(Number(staleAfterMs) > 0 ? { staleAfterMs: Number(staleAfterMs) } : {}),
@@ -257,11 +381,11 @@ export function commitTrack({
 
   for (const event of events) appendRadarEvent(board, { ...event, flowId, by: me || "flow" });
 
-  return { ok: true, board, flowId, path: written.path, rows: withSettled.length, events, salvaged: Boolean(salvaged) };
+  return { ok: true, board, flowId, path: written.path, rows: finalWrite.length, events, held: gated.held, salvaged: Boolean(salvaged) };
 }
 
-function printBoards() {
-  const boards = listRadarBoards({ scope: "all" });
+function printBoards(includeArchived = false) {
+  const boards = listRadarBoards({ scope: "all", includeArchived });
   if (!boards.length) { console.log("还没有板。"); return 0; }
   for (const item of boards) {
     const parts = [
@@ -270,6 +394,7 @@ function printBoards() {
       String(item.counts.warn || 0).padStart(3) + " 警",
       `${item.flows.length} 片`,
     ];
+    if (item.archived) parts.push("已归档");
     if (item.staleFlows) parts.push(`${item.staleFlows} 片哑了`);
     if (item.fetchFailures) parts.push(`${item.fetchFailures} 次抓取失败`);
     console.log(parts.join("  "));
@@ -284,10 +409,12 @@ function printBoard(board, asJson) {
   if (asJson) { console.log(JSON.stringify(loaded, null, 2)); return 0; }
   console.log(`${loaded.title}（${board}）  ${loaded.rows.length} 条  ${loaded.flows.length} 片`);
   for (const row of loaded.rows) {
-    const days = row.daysLeft === null ? "   -" : String(row.daysLeft).padStart(4);
+    // 没有截止日就整块留白。`-` 后面跟个「天」会被读成「负几天」，
+    // 而「没有日期」和「还剩负几天」是完全相反的两件事
+    const days = (row.daysLeft === null ? "无期限" : `${row.daysLeft}天`).padStart(7);
     const marks = [row.settled ? "封存" : "", row.overdue ? "过期" : "", row.staleItem ? "陈旧" : ""].filter(Boolean);
     console.log(
-      `  ${row.state.padEnd(5)} ${days}天  ${String(row.id).padEnd(28)} ${row.title}` +
+      `  ${row.state.padEnd(5)} ${days}  ${String(row.id).padEnd(28)} ${row.title}` +
       (marks.length ? `  [${marks.join(" ")}]` : ""),
     );
   }
@@ -304,7 +431,11 @@ export async function runTrackCommand(argv = []) {
       "",
       "  commit --board=<板> --flow=<流程> --rows=<json文件>   写一片（流程里用）",
       "         [--fetch-failures=N] [--stale-after-ms=N] [--force]",
-      "  list                                                 列出所有板",
+      "  create <板> [--title=<标题>]                          建一块空板",
+      "  sync --board --flow --dir=<trackers 目录>             从 trackers/*.md 同步（agent 改文件，这里校验）",
+      "  export --board --flow --dir=<trackers 目录>          把一条流程那一片导成 trackers/*.md",
+      "  list [--archived]                                    列出所有板",
+      "  archive <板> [--undo]                                归档 / 取消归档（不是删除）",
       "  show <板> [--json]                                   看一块板的条目",
       "  events <板> [--limit=N]                              看变更流",
       "  rm <板> [--flow=<流程>]                              删一块板，或只删一片",
@@ -335,7 +466,113 @@ export async function runTrackCommand(argv = []) {
     return 0;
   }
 
-  if (action === "list") return printBoards();
+  if (action === "create") {
+    const board = String(positional[1] || flags.board || "");
+    const created = createRadarBoard(board, {
+      title: String(flags.title || ""),
+      icon: String(flags.icon || "radar"),
+      createdBy: String(process.env.AGENTFLOW_USER_ID || ""),
+    });
+    if (!created.ok) throw fail(created.error || "建板失败");
+    console.log(`已建板 ${board}。现在让流程往里写：`);
+    console.log(`  agentflow track commit --board=${board} --flow=<流程> --rows=<json文件>`);
+    return 0;
+  }
+
+  if (action === "archive") {
+    const board = String(positional[1] || flags.board || "");
+    if (!isValidBoardId(board)) throw fail(`board 不合法：${board}`);
+    const undo = flags.undo === true || flags.undo === "true";
+    const saved = setRadarBoardArchived(board, !undo);
+    if (!saved.ok) throw fail(saved.error || "操作失败");
+    // 说清楚它没被删：这是归档和 rm 唯一的区别，也是人最需要确认的一点
+    console.log(undo
+      ? `已取消归档 ${board}`
+      : `已归档 ${board}。分片、变更记录、告警状态都留着，agentflow track archive ${board} --undo 可恢复`);
+    return 0;
+  }
+
+  /**
+   * 从 `trackers/*.md` 同步到板。
+   *
+   * 和 `commit` 的区别只在入口：commit 吞一份 agent 直接产出的 JSON，sync 读一个目录。
+   * 校验、继承 settled、diff 事件、writtenBy 全部共用——**校验不能因为换了入口就松掉**，
+   * 那一层正是挡住「state 拼成 warning 变成假合格证」的东西。
+   */
+  if (action === "sync") {
+    const board = String(flags.board || "");
+    const flowId = String(flags.flow || flags.flowId || "");
+    const dir = String(flags.dir || "");
+    if (!board || !flowId || !dir) throw fail("sync 需要 --board、--flow、--dir");
+    const { rows, errors, notes } = readTrackerDocs(dir);
+    for (const note of notes) console.log(`  ${note}`);
+    if (errors.length) throw fail(`${errors.length} 个文件有问题，一条都没写：\n  - ${errors.join("\n  - ")}`);
+    if (!rows.length) throw fail(`${dir} 下没有带 frontmatter 的 .md`);
+
+    const result = commitTrack({
+      board,
+      flowId,
+      rows,
+      actor: String(process.env.AGENTFLOW_USER_ID || ""),
+      force: flags.force === true || flags.force === "true",
+      fetchFailures: flags["fetch-failures"] ?? 0,
+      staleAfterMs: flags["stale-after-ms"] ?? 0,
+      gate: flags.gate === true || flags.gate === "true",
+      humanFields: humanEditedFields(dir),
+    });
+    const changed = result.events.length ? `，${result.events.length} 处落地` : "，无变更";
+    console.log(`已同步 ${board}/${flowId}：${result.rows} 条${changed}`);
+    for (const event of result.events) {
+      const change = event.from !== undefined ? ` ${event.from || "空"} → ${event.to || "空"}` : "";
+      console.log(`  ${String(event.kind).padEnd(8)} ${event.id}${change}`);
+    }
+    if (result.held.length) {
+      writePending(board, flowId, result.held);
+      // 给 control.interrupt 吃的正文：人话的 diff，不是 JSON。
+      // 审批页和企微上看到的就是这一段，看不懂就只能点「通过」了事
+      const markdown = heldMarkdown(board, flowId, result.held);
+      const out = String(flags["held-out"] || "");
+      if (out) fs.writeFileSync(out, markdown, "utf-8");
+      console.log(`\n${result.held.length} 处等人点头（板上已标为待审批，值还是旧的）：`);
+      console.log(markdown.split("\n").map((line) => `  ${line}`).join("\n"));
+    }
+    return 0;
+  }
+
+  /**
+   * 把**一条流程那一片**导成文件。
+   *
+   * 必须按片导，不能导板的合并视图，两个原因：
+   *
+   * 1. 分片是原始事实，板是**推导结果**——`decorateRow` 会把 `unknown` 归一成 `idle` 给页面用。
+   *    把推导值写回文件，再 sync 回去，`unknown`（没查出来）就被悄悄改成了 `idle`（没什么可报告的）。
+   *    这正是这套设计最在意的那个区别，不能在一次往返里丢掉。
+   * 2. 板上的条目来自多片。导合并视图会让 sync 把别的流程的条目写进这一片，就是重复认领。
+   */
+  if (action === "export") {
+    const board = String(flags.board || "");
+    const flowId = String(flags.flow || flags.flowId || "");
+    const dir = String(flags.dir || "");
+    if (!board || !flowId || !dir) throw fail("export 需要 --board、--flow、--dir");
+    const shard = readRadarShard(board, flowId);
+    if (!shard) throw fail(`没有这一片：${board}/${flowId}`);
+    let written = 0;
+    for (const row of shard.rows || []) {
+      // lastSeenAt 是运行时盖的时间戳，不是人写的事实，不进文件
+      const { lastSeenAt, doc, docLines, ...core } = row;
+      const out = writeTrackerDoc(dir, core);
+      if (out.ok) written += 1;
+      else console.log(`  跳过 ${row.id}：${out.error}`);
+    }
+    if (autoCommit(dir, `track export: ${board}/${flowId} ${written} 条`)) {
+      console.log(`已导出 ${written} 条到 ${dir}（来自 ${board}/${flowId}），并以 agentflow 身份提交`);
+    } else {
+      console.log(`已导出 ${written} 条到 ${dir}（来自 ${board}/${flowId}）`);
+    }
+    return 0;
+  }
+
+  if (action === "list") return printBoards(flags.archived === true || flags.archived === "true");
   if (action === "show") return printBoard(String(positional[1] || flags.board || ""), flags.json === true);
 
   if (action === "events") {

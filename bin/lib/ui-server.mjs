@@ -113,6 +113,7 @@ import {
 } from "./radar-planner.mjs";
 import { startComposerAgent } from "./composer-agent.mjs";
 import { sweepAllRadarBoards } from "./radar-alert-sweep.mjs";
+import { listWorkspaceRunLogs } from "./workspace-run-logs.mjs";
 import {
   beginCasLogin,
   buildClearCasFlowCookie,
@@ -5946,6 +5947,55 @@ finishedAt: "${new Date().toISOString()}"
           json(res, 200, { ...found, scope, currentUser: actor.username });
           return;
         }
+        /**
+         * 喂这块板的每条流程，最近跑了哪几次。
+         *
+         * 和板上的条目状态是两码事：条目安静既可能是真没变化，也可能是流程哑了。
+         * 把运行台账按流程切开，「谁在干活、干得顺不顺」才看得见。
+         */
+        if (url.pathname === "/api/radar/runs") {
+          const board = String(url.searchParams.get("board") || "");
+          if (!isValidBoardId(board)) {
+            json(res, 400, { error: "board 参数不合法" });
+            return;
+          }
+          const loaded = readRadarBoard(board, { ...actor, scope: "all" });
+          if (!loaded) {
+            json(res, 404, { error: "板不存在" });
+            return;
+          }
+          const days = Math.max(1, Math.min(90, Number(url.searchParams.get("days")) || 14));
+          const since = Date.now() - days * 24 * 60 * 60 * 1000;
+          const lanes = (loaded.flows || []).map((shard) => {
+            const flowId = String(shard.flow?.flowId || shard.flowId || "");
+            const runs = listWorkspaceRunLogs({ flowId, limit: 200 })
+              .filter((run) => Number(run.startedAt || 0) >= since)
+              .map((run) => ({
+                runId: run.runId,
+                at: Number(run.startedAt || 0),
+                durationMs: Number(run.durationMs || 0),
+                status: String(run.status || ""),
+                trigger: String(run.trigger || ""),
+                scheduled: run.scheduled === true,
+                error: String(run.error || ""),
+              }))
+              .sort((left, right) => left.at - right.at);
+            return {
+              flowId: shard.flowId,
+              flow: shard.flow,
+              stale: shard.stale,
+              staleAfterMs: shard.staleAfterMs,
+              rows: shard.rows,
+              owns: shard.owns,
+              fetchFailures: shard.fetchFailures,
+              writtenAt: shard.updatedAt,
+              runs,
+            };
+          });
+          json(res, 200, { board, days, since, lanes, conflicts: loaded.conflicts || [] });
+          return;
+        }
+
         if (url.pathname === "/api/radar/events") {
           const board = String(url.searchParams.get("board") || "");
           if (!isValidBoardId(board)) {

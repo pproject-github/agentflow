@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
 import LoadingState from "../components/LoadingState.jsx";
 
@@ -18,6 +18,7 @@ const VIEW_META = {
   board: { label: "看板", icon: "view_kanban" },
   table: { label: "表格", icon: "table_rows" },
   calendar: { label: "日历", icon: "calendar_month" },
+  agents: { label: "协作", icon: "hub" },
 };
 const STATE_LABEL = { risk: "未开始", warn: "进行中", idle: "待确认", ok: "已满足" };
 const KIND_LABEL = { moved: "改期", worse: "变坏", better: "变好", new: "新增" };
@@ -304,7 +305,59 @@ function monthTicks(start, end) {
   return ticks;
 }
 
-function Runway({ board, encode, months, onPick }) {
+/** 跑道上固定能分的两组：负责人、来源流程。它们一定存在，也一定有意义 */
+const FIXED_GROUPS = [
+  { field: "owner", label: "负责人" },
+  { field: "flowId", label: "来源流程" },
+];
+/** 分组没有意义的字段：要么每行都不一样（证据、链接），要么是算出来的中间量 */
+const NEVER_GROUP = new Set([
+  "id", "title", "due", "effectiveDue", "cutoffDate", "daysLeft", "lastSeenAt",
+  "evidence", "source", "current", "required", "effectiveReason", "effectiveTrain",
+]);
+
+/**
+ * 哪些字段拿来分组是讲得通的。
+ *
+ * 判据是**取值的散度**：每行都不一样的字段（证据、链接）分出来是一行一组，等于没分；
+ * 全表一个值的字段分出来只有一组，也等于没分。所以只留 2～8 个取值的。
+ */
+function groupableFields(rows = []) {
+  const counts = new Map();
+  for (const row of rows) {
+    for (const [field, value] of Object.entries(row || {})) {
+      if (NEVER_GROUP.has(field) || FIXED_GROUPS.some((item) => item.field === field)) continue;
+      if (value === null || value === undefined || value === "" || typeof value === "object") continue;
+      if (typeof value === "boolean") continue;
+      const seen = counts.get(field) || new Set();
+      seen.add(String(value));
+      counts.set(field, seen);
+    }
+  }
+  const derived = [...counts.entries()]
+    .filter(([, seen]) => seen.size >= 2 && seen.size <= 8)
+    .map(([field]) => ({ field, label: field }))
+    .sort((a, b) => a.field.localeCompare(b.field));
+  return [...FIXED_GROUPS, ...derived];
+}
+
+/** 按字段把行切成段。空值单独归一组放最后——它们通常正是要补的那批 */
+function groupRows(rows = [], field = "") {
+  if (!field) return [{ key: "", label: "", rows }];
+  const buckets = new Map();
+  for (const row of rows) {
+    const raw = row?.[field];
+    const key = raw === null || raw === undefined || raw === "" ? "" : String(raw);
+    if (!buckets.has(key)) buckets.set(key, []);
+    buckets.get(key).push(row);
+  }
+  const sections = [...buckets.entries()]
+    .map(([key, list]) => ({ key, label: key || (field === "owner" ? "无人认领" : "未填"), rows: list }));
+  sections.sort((a, b) => (a.key ? 0 : 1) - (b.key ? 0 : 1) || a.key.localeCompare(b.key));
+  return sections;
+}
+
+function Runway({ board, encode, months, group, onPick }) {
   const now = Date.now();
   const start = now;
   const end = now + months * 30.44 * DAY_MS;
@@ -325,6 +378,12 @@ function Runway({ board, encode, months, onPick }) {
   return (
     <div className="af-radar-runway">
       <div className="af-radar-axis">
+        {/* 左边这 250px 是条目名那一列，之前是空的——时间轴有刻度、条目列却没抬头，
+            看着像表格少画了一块。计数跟着当前视角走（「我的」和「全部」数出来不一样） */}
+        <span className="af-radar-axis-head">
+          追踪项目<i>{board.rows.length}</i>
+        </span>
+        <span className="af-radar-axis-tail">剩余</span>
         <div className="af-radar-track">
           {ticks.map((tick) => (
             <i key={`tl${tick}`} className="af-radar-tick" style={{ left: `${at(tick)}%` }}>
@@ -340,12 +399,21 @@ function Runway({ board, encode, months, onPick }) {
         </div>
       </div>
 
-      {board.rows.map((row) => {
+      {groupRows(board.rows, group).map((section) => (
+        <Fragment key={section.key || "_all"}>
+          {/* 分组抬头。不分组时 label 是空的，这一条就不画 */}
+          {section.label ? (
+            <div className="af-radar-group">
+              <span>{section.label}</span>
+              <i>{section.rows.length}</i>
+            </div>
+          ) : null}
+          {section.rows.map((row) => {
         const endTime = toTime(readCell(row, encode.end));
         const state = String(readCell(row, encode.color) || row.state || "idle");
         const rawEnd = Number.isFinite(endTime) ? at(endTime) : null;
         const clipped = rawEnd !== null && rawEnd > 100;
-        const width = rawEnd === null ? 2.5 : Math.max(Math.min(rawEnd, 100), 1.2);
+        const width = rawEnd === null ? 0 : Math.max(Math.min(rawEnd, 100), 1.2);
         const markerTime = toTime(readCell(row, encode.marker));
         const markerAt = Number.isFinite(markerTime) ? at(markerTime) : null;
         const badges = (encode.badges || []).map((field) => row?.[field]).filter(Boolean);
@@ -377,7 +445,9 @@ function Runway({ board, encode, months, onPick }) {
               {guides}
               {/* 过期了就没有跑道可言。钳到最小宽度画出来的残条像渲染故障，
                   不如不画——红色边条和「已过期 N 天」已经把话说完了 */}
-              {row.overdue ? null : (
+              {/* 没有截止日的也不画。2.5% 的残条读起来是「快到期了」，
+                  而实际是「根本没有期限」——意思正好相反 */}
+              {row.overdue || rawEnd === null ? null : (
                 <span
                   className={`af-radar-bar af-radar-bar--${state}${clipped ? " af-radar-bar--clipped" : ""}`}
                   style={{ width: `${width}%` }}
@@ -390,11 +460,16 @@ function Runway({ board, encode, months, onPick }) {
             <span className={`af-radar-value af-radar-value--${row.overdue ? "overdue" : state}`}>
               {row.overdue
                 ? `已过期 ${Math.abs(row.daysLeft)} 天`
-                : row.done && state === "ok" ? "已满足" : formatValue(row, encode.value)}
+                : row.done && state === "ok" ? "已满足"
+                  // 空着的话这一行右边是一片空白，看着像渲染漏了
+                  : row.daysLeft === null ? "无期限"
+                    : formatValue(row, encode.value)}
             </span>
           </button>
         );
-      })}
+          })}
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -425,6 +500,158 @@ function TableView({ board, encode, onPick }) {
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/** 多久没写了，说人话。「3 天前」比一个时间戳更容易看出它是不是哑了 */
+function sinceText(iso) {
+  const at = typeof iso === "number" ? iso : toTime(iso);
+  if (!Number.isFinite(at) || !at) return "从没跑过";
+  const mins = Math.round((Date.now() - at) / 60000);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  return `${Math.round(hours / 24)} 天前`;
+}
+
+const RUN_TONE = {
+  success: "ok",
+  succeeded: "ok",
+  failed: "bad",
+  error: "bad",
+  waiting: "wait",
+  running: "wait",
+  canceled: "idle",
+  stopped: "idle",
+};
+
+/** 过去 N 天的日刻度。跑道看未来，这一屏看过去，所以轴是反着走的 */
+function dayTicks(start, end) {
+  const ticks = [];
+  const cursor = new Date(start);
+  cursor.setHours(0, 0, 0, 0);
+  while (cursor.getTime() <= end && ticks.length < 40) {
+    if (cursor.getTime() >= start) ticks.push(cursor.getTime());
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return ticks;
+}
+
+/**
+ * 协作视图：一条流程一行，横轴是它最近的执行。
+ *
+ * 和跑道同一套读法——左边是主体，中间是时间，右边是结论。区别只在轴的方向：
+ * 跑道看的是「还剩多少时间」，这一屏看的是「过去这段时间它干了什么」。
+ *
+ * 为什么要单独一屏：条目安静既可能是真没变化，也可能是流程哑了三天没人发现。
+ * 板上那几个视图分不开这两件事，只有把执行摊在时间轴上才分得开。
+ */
+function AgentsView({ board, lanes, days, onPick, navigate, returnTo }) {
+  const now = Date.now();
+  const start = now - days * 24 * 60 * 60 * 1000;
+  const at = (time) => ((time - start) / (now - start)) * 100;
+  const ticks = dayTicks(start, now);
+  const conflicts = new Map((board.conflicts || []).map((item) => [item.id, item.flows]));
+  const rowById = new Map(board.rows.map((row) => [String(row.id || row.title || ""), row]));
+  const claimed = new Set(lanes.flatMap((lane) => lane.owns || []));
+  const orphans = board.rows.filter((row) => !claimed.has(String(row.id || row.title || "")));
+
+  const guides = (
+    <>
+      {ticks.map((tick) => <i key={`g${tick}`} className="af-radar-tick" style={{ left: `${at(tick)}%` }} />)}
+      <i className="af-radar-now" style={{ left: "100%" }} />
+    </>
+  );
+
+  return (
+    <div className="af-radar-runway af-radar-agents">
+      <div className="af-radar-axis">
+        <span className="af-radar-axis-head">编排流程<i>{lanes.length}</i></span>
+        <span className="af-radar-axis-tail">上次</span>
+        <div className="af-radar-track">
+          {ticks.map((tick) => (
+            <i key={`tl${tick}`} className="af-radar-tick" style={{ left: `${at(tick)}%` }}>
+              <b>{new Date(tick).getMonth() + 1}/{new Date(tick).getDate()}</b>
+            </i>
+          ))}
+          <i className="af-radar-now" style={{ left: "100%" }}><b>此刻</b></i>
+        </div>
+      </div>
+
+      {lanes.map((lane) => {
+        const canvas = flowCanvasUrl({ flowId: lane.flowId, ...(lane.flow || {}) }, returnTo);
+        const last = lane.runs.length ? lane.runs[lane.runs.length - 1] : null;
+        const failed = lane.runs.filter((run) => RUN_TONE[run.status] === "bad").length;
+        return (
+          <div key={lane.flowId} className={`af-radar-row af-radar-agent-row${lane.stale ? " af-radar-row--overdue" : ""}`}>
+            <span className="af-radar-label">
+              <span className="af-radar-name">{lane.flowId}</span>
+              <span className="af-radar-badges">
+                <i>{lane.rows} 条</i>
+                {lane.stale ? <i className="af-radar-badge--stale">哑了</i> : null}
+                {failed ? <i className="af-radar-badge--fail">{failed} 次失败</i> : null}
+                {lane.fetchFailures ? <i className="af-radar-badge--stale">{lane.fetchFailures} 条抓取失败</i> : null}
+              </span>
+            </span>
+
+            <span className="af-radar-track">
+              {guides}
+              {/* 每次运行一个点。位置是它开跑的时刻，颜色是结果——
+                  连成一串就能看出节奏，断掉的那段就是它没在干活 */}
+              {lane.runs.map((run) => (
+                <i
+                  key={run.runId}
+                  className={`af-radar-run af-radar-run--${RUN_TONE[run.status] || "idle"}${run.scheduled ? "" : " af-radar-run--manual"}`}
+                  style={{ left: `${at(run.at)}%` }}
+                  title={`${new Date(run.at).toLocaleString()} · ${run.status}${run.scheduled ? " · 定时" : " · 手动"}${run.error ? ` · ${run.error}` : ""}`}
+                />
+              ))}
+              {lane.runs.length ? null : <span className="af-radar-run-empty">这段时间没有运行记录</span>}
+            </span>
+
+            <span className={`af-radar-value af-radar-value--${lane.stale ? "overdue" : "ok"}`}>
+              {sinceText(last?.at)}
+            </span>
+
+            {canvas ? (
+              <button
+                type="button"
+                className="af-radar-agent-canvas"
+                title="打开这条流程的画布"
+                onClick={() => navigate(canvas)}
+              >
+                <span className="material-symbols-outlined">account_tree</span>
+              </button>
+            ) : null}
+          </div>
+        );
+      })}
+
+      {lanes.map((lane) => (
+        (lane.owns || []).some((id) => conflicts.has(id)) ? (
+          <p key={`c${lane.flowId}`} className="af-radar-agent-note af-radar-bad">
+            {lane.flowId} 和别的流程抢这些条目：
+            {(lane.owns || []).filter((id) => conflicts.has(id)).join("、")}
+          </p>
+        ) : null
+      ))}
+
+      {orphans.length ? (
+        <p className="af-radar-agent-note">
+          {/* 没有流程写它们，它们会永远停在写进去的那一刻，而板上看不出来 */}
+          <b>{orphans.length} 条没有流程在写</b>：
+          {orphans.map((row) => (
+            <button type="button" key={row.id || row.title} className="af-radar-link" onClick={() => onPick(row)}>
+              {row.title || row.id}
+            </button>
+          ))}
+          —— 它们不会再更新
+        </p>
+      ) : null}
+
+      {lanes.length ? null : <p className="af-radar-none">还没有流程写过这块板。到「编排」里配一条定时任务。</p>}
     </div>
   );
 }
@@ -719,10 +946,16 @@ export default function RadarPage() {
   const [scope, setScope] = useState(query.get("scope") === "all" ? "all" : "mine");
   const [view, setView] = useState(String(query.get("view") || ""));
   const [months, setMonths] = useState(6);
+  // 分组字段。spec.encode.group 给默认值，人可以就地改而不写回板——
+  // 「我这会儿想换个角度看」不该改掉所有人的板
+  const [group, setGroup] = useState(String(query.get("group") || ""));
   const [picked, setPicked] = useState(null);
   const [showEvents, setShowEvents] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [showFlows, setShowFlows] = useState(false);
+  // 协作视图要的运行台账。只在切到那一屏时才拉——其余视图用不上它
+  const [runLanes, setRunLanes] = useState(null);
+  const [runDays, setRunDays] = useState(14);
   const [showNewBoard, setShowNewBoard] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [archiving, setArchiving] = useState(false);
@@ -817,6 +1050,22 @@ export default function RadarPage() {
     }
   }, [archiving, loadBoards, boards]);
 
+  useEffect(() => {
+    if (view !== "agents" || !active) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/radar/runs?board=${encodeURIComponent(active)}&days=${runDays}`);
+        const body = await res.json().catch(() => ({}));
+        if (!cancelled && res.ok) setRunLanes(Array.isArray(body.lanes) ? body.lanes : []);
+      } catch {
+        // 拉不到运行记录不该把整屏打掉，退回空列表由视图自己说「没有记录」
+        if (!cancelled) setRunLanes([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [view, active, runDays]);
+
   // 抽出来是因为改完状态要就地刷新：不刷新的话人点完看到的还是旧状态，会以为没生效
   const reloadBoard = useCallback(async () => {
     if (!active) { setBoard(null); return; }
@@ -826,7 +1075,11 @@ export default function RadarPage() {
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || "读取板失败");
       setBoard(body);
-      setView((current) => (current && body.spec.views.includes(current) ? current : body.spec.view));
+      // 协作视图不在 spec.views 里——它看的是喂这块板的流程，不是板的形态
+      setView((current) => (
+        current && (current === "agents" || body.spec.views.includes(current)) ? current : body.spec.view
+      ));
+      setGroup((current) => (current || String(body.spec.encode.group || "")));
       try { window.localStorage.setItem("af.radar.board", active); } catch { /* 隐私窗口，不记就是了 */ }
     } catch (e) {
       setError(String(e.message || e));
@@ -873,6 +1126,12 @@ export default function RadarPage() {
   const soleCanvasUrl = boardFlows.length === 1
     ? flowCanvasUrl({ flowId: boardFlows[0].flowId, ...(boardFlows[0].flow || {}) }, radarSelfUrl)
     : "";
+  // 可选的分组字段从**当前这块板的数据**里推，不是写死一张表——
+  // AI 往条目里加了什么维度，这里就能按什么分
+  const groupChoices = useMemo(() => groupableFields(board?.rows || []), [board]);
+  // 换了一块板之后，上一块板的分组字段可能在这块板上根本不存在。不归一的话
+  // 下拉显示「不分组」，跑道上却多出一个「未填」的组，两边对不上
+  const activeGroup = groupChoices.some((item) => item.field === group) ? group : "";
   const totalFailures = boards.reduce((sum, item) => sum + (item.fetchFailures || 0), 0);
   const totalStale = boards.reduce((sum, item) => sum + (item.staleFlows || 0), 0);
 
@@ -920,7 +1179,7 @@ export default function RadarPage() {
                 <code>commit</code> 会继承人工封存的标记、自动记录变更。
               </p>
               <p className="af-settings-lead">
-                想先看看长什么样：<code>node scripts/seed-radar-demo.mjs</code>
+                没开页面也能建：<code>agentflow track create &lt;板&gt; --title=&lt;标题&gt;</code>
               </p>
             </section>
           ) : (
@@ -998,6 +1257,20 @@ export default function RadarPage() {
                         </button>
                       ))}
                     </div>
+                    {view === "agents" ? (
+                      <div className="af-radar-seg">
+                        {[7, 14, 30].map((value) => (
+                          <button
+                            type="button"
+                            key={value}
+                            className={runDays === value ? "af-radar-seg--on" : ""}
+                            onClick={() => setRunDays(value)}
+                          >
+                            {value} 天
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
                     {view === "runway" ? (
                       <div className="af-radar-seg">
                         {HORIZONS.map((value) => (
@@ -1012,11 +1285,23 @@ export default function RadarPage() {
                         ))}
                       </div>
                     ) : null}
+                    {view === "runway" && groupChoices.length ? (
+                      <label className="af-radar-groupby">
+                        <span>分组</span>
+                        <select value={activeGroup} onChange={(event) => setGroup(event.target.value)}>
+                          <option value="">不分组</option>
+                          {groupChoices.map((item) => (
+                            <option key={item.field} value={item.field}>{item.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
 
                     <div className="af-radar-views">
                       <div className="af-radar-seg">
                         {Object.entries(VIEW_META).map(([key, meta]) => {
-                          const available = board.spec.views.includes(key);
+                          // 协作视图看的是「谁在喂这块板」，和 spec 无关——任何板都该能看
+                          const available = key === "agents" || board.spec.views.includes(key);
                           return (
                             <button
                               type="button"
@@ -1121,12 +1406,21 @@ export default function RadarPage() {
                     <p className="af-radar-none">
                       这个视角下没有条目{board.totalRows ? `（这块板一共 ${board.totalRows} 条，切到「全部」看看）` : ""}。
                     </p>
+                  ) : view === "agents" ? (
+                    <AgentsView
+                      board={board}
+                      lanes={runLanes || []}
+                      days={runDays}
+                      onPick={setPicked}
+                      navigate={navigate}
+                      returnTo={radarSelfUrl}
+                    />
                   ) : view === "table" ? (
                     <TableView board={board} encode={encode} onPick={setPicked} />
                   ) : view === "board" ? (
                     <BoardView board={board} encode={encode} onPick={setPicked} />
                   ) : (
-                    <Runway board={board} encode={encode} months={months} onPick={setPicked} />
+                    <Runway board={board} encode={encode} months={months} group={activeGroup} onPick={setPicked} />
                   )}
                 </>
               ) : null}

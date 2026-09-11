@@ -108,7 +108,12 @@ function ContextSection({ section, data }) {
 }
 
 function CodeSection({ section, data }) {
-  const value = data?.[section.field];
+  // tool_nodejs / control_while 真正执行的是 `script`；`body` 只是说明，而且
+  // 「script 存在时 body 被忽略」。代码化流程根本不写 body，只读 body 的话
+  // 卡片会对着一条跑得好好的命令显示「未配置」
+  const value = section.fields
+    ? section.fields.map((field) => data?.[field]).find((item) => String(item || "").trim())
+    : data?.[section.field];
   return (
     <section className="af-node-ui-kit__section af-node-ui-kit__code">
       <SectionHeading label={section.label} />

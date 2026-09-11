@@ -104,6 +104,11 @@ function alertsPath(board) {
   return path.join(boardDir(board), BOARD_ALERTS_FILE);
 }
 
+/** 板目录的绝对路径。待审批之类和分片并列的东西要往这儿写 */
+export function radarBoardDir(board) {
+  return boardDir(board);
+}
+
 /** 列出所有板的 id。告警扫描要遍历它们 */
 export function listRadarBoardIds() {
   try {
@@ -350,6 +355,7 @@ function loadBoard(board, now = Date.now()) {
       // 这一片多久没更新了。整份覆盖的年代看不出这件事——哑掉和「这次没条目」长得一样
       stale: Number.isFinite(updatedAt) ? now - updatedAt > staleAfterMs : true,
       fetchFailures: Number(file.fetchFailures) || 0,
+      writtenBy: String(file.writtenBy || ""),
       rows: Array.isArray(file.rows) ? file.rows : [],
       trains: Array.isArray(file.trains) ? file.trains : [],
       spec: file.spec && typeof file.spec === "object" ? file.spec : null,
@@ -454,8 +460,14 @@ function shardSummary(shard) {
     flow: shard.flow,
     updatedAt: shard.updatedAt ? new Date(shard.updatedAt).toISOString() : "",
     stale: shard.stale,
+    // 这一片预期多久更新一次。「三天没写」对日更是故障，对周更是正常——
+    // 不把它带出来，页面只能拿一个猜的阈值去判断
+    staleAfterMs: shard.staleAfterMs,
     rows: shard.rows.length,
     fetchFailures: shard.fetchFailures,
+    // 它到底写了哪几条。协作视图要靠它看出「谁在管什么」和「谁没人管」
+    owns: shard.rows.map((row) => String(row?.id || row?.title || "")).filter(Boolean),
+    writtenBy: String(shard.writtenBy || ""),
   };
 }
 

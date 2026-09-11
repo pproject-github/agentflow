@@ -56,7 +56,9 @@ ui:
     sections:
       - type: code
         label: 执行脚本
-        field: body
+        # script 是真正执行的那一个；body 只在没有 script 的老流程里当说明用。
+        # 只读 body 的话，代码化流程（从不写 body）会显示「未配置」
+        fields: [script, body]
       - type: binding
         label: 运行上下文
         input: workspaceContext

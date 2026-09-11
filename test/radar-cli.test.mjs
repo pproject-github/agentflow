@@ -351,3 +351,20 @@ test("反查优先用分片里记着的 flowId", async () => {
     assert.equal(index.get("shard-name")[0].board, "compliance");
   });
 });
+
+// 实测新建 Android 政策追踪板时发现的：真实政策条目常常没有截止日期
+test("没有截止日的条目：不算过期，也不按天数告警", async () => {
+  await withTrackHome(async ({ cli, radar }) => {
+    cli.commitTrack({
+      board: "android-policy",
+      flowId: "play-watch",
+      rows: [{ id: "photo-perms", title: "照片与视频权限政策", state: "unknown", due: "" }],
+      actor: "wangfang1",
+    });
+    const [row] = radar.readRadarBoard("android-policy", { scope: "all" }).rows;
+    assert.equal(row.daysLeft, null);
+    // Number(null) 是 0 而 0 是有限数——不显式挡掉就会被当成「剩 0 天」立刻触发 T-7
+    assert.equal(row.overdue, false);
+    assert.equal(row.effectiveReason, "no_due");
+  });
+})

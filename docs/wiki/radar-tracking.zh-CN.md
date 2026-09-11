@@ -152,6 +152,82 @@ group / badges）。加一个展示维度只要改 spec，不用动前端——A
 任何一班和本来就没有车是两件事，页面要能分开讲；截止日晚于所有已知班次时退回截止日本身
 （`beyond_known_trains`），否则会把紧急度夸大好几个月。
 
+## 文件形态：一块板是一个工作目录
+
+追踪项除了活在分片里，还可以是文件：
+
+```
+<board-workspace>/            可以是 git 仓库
+  board.md                    盯什么、边界在哪        ← 人写
+  evidence/                   本轮的现状产物
+  trackers/<id>.md            一条一份
+```
+
+每份 tracker 两层，这是整个形态的关键：
+
+- **frontmatter** 会被机器消费——跑道按 `due` 画、告警按 `state` 触发、协作视图按 `owner` 找人。
+  写坏了是静默故障（`state: "警告"` 会被当成「没什么可报告的」），所以必须过校验。
+- **正文**只给人看：任务怎么拆、调研到哪、还有什么没确认。它没有固定形状，
+  正好是自由文本擅长的，也正好是 agent 和人都能直接改的。
+
+同一个文件里，机器读的部分有契约，人读的部分没有。于是 agent 拿到整个目录当上下文时，
+能自由地写正文，却改不动会影响告警的那几个字段——那几个要过 `track sync`。
+
+```
+agentflow track export --board=X --flow=Y --dir=<trackers>   板 → 文件
+agentflow track sync   --board=X --flow=Y --dir=<trackers>   文件 → 板（同一套校验）
+```
+
+**`export` 必须按片导，不能导板的合并视图。** 两个原因：板是推导结果，`decorateRow` 会把
+`unknown` 归一成 `idle` 给页面用——把推导值写回文件再 sync 回去，`unknown`（没查出来）
+就被悄悄改成了 `idle`（没什么可报告的）；而且板上的条目来自多片，导合并视图会让 sync
+把别的流程的条目写进这一片，就是重复认领。
+
+### 机器写完必须自己提交
+
+`track export` 写完会以 `agentflow` 身份自动 `git commit`。不提交的话，下一个提交的人会
+「认领」所有机器写的行，`git blame` 把它们全算成人改的——门禁当场变成一堵墙。
+
+## 门禁：哪些改动要人点头
+
+规则不是列出来的，是从 `decideRadarAlert` **反推**的：凡是会让一条条目从此不再告警的
+改动都要审批。今天让告警永久闭嘴的只有三种：
+
+| | |
+|---|---|
+| `settled === true` | `radar-alerts.mjs:53` |
+| `state === "ok"` | `radar-alerts.mjs:75` |
+| `due` 变成空 | `radar-alerts.mjs:93`，阈值告警从此不触发 |
+
+加上两种不静音但不可逆/越权的：条目消失、覆盖上次由人改的字段。
+
+**其余一律直接落地**，这一条和门禁本身同等重要。每天一个 diff 全都要批，两周之后就是
+闭眼点，那时候门禁比没有更糟——它制造了「已经审过」的假象。而且待审批意味着板是旧的，
+而发现陈旧正是这套东西存在的意义。
+
+不对称是有意的：**误报只花注意力，漏报会让违规的包发出去。** 所以状态变坏不用批，变好要批。
+
+被拦的**只回退那几个字段**，不是整条不写：否则一条待审批会把同一条目上其它本该落地的
+改动一起卡住。被拦下的「条目消失」会把条目留在板上，否则等审批期间人打开板都找不到它。
+
+### 谁改的，靠 git
+
+`--gate` 时用 `git blame HEAD` 逐行判作者，约定 `agentflow` 是机器、其余是人。
+
+- **必须按行，不能按文件**：一次 `git commit -a` 会把所有文件的所有字段标成人改的。
+- **必须 blame HEAD，不能 blame 工作区**：待判定的改动本身还没提交，对未提交的行
+  git 会把作者填成本机用户名。
+- 拿不到 git 就**降级成不拦**，而不是全拦。
+
+### 审批走现成那套
+
+`control.interrupt` 是既有的审批原语，雷达用 `reason: "radar_gate"` 作为标记，
+落在侧栏「我的审批」里。`track sync --gate --held-out=<file>` 输出人话的 diff 给它当正文。
+
+审批创建时会推企业微信（`bin/lib/approval-notify.mjs`）——在此之前审批只有拉取，
+没人打开页面就没人知道，而挂起期间流程是停着的。通知失败**绝不让审批创建失败**：
+宁可没人收到提醒（页面上还看得见），也不能因为企微不通让整条运行崩掉。
+
 ## 命令
 
 ```
@@ -159,6 +235,10 @@ agentflow track commit --board --flow --rows [--fetch-failures] [--stale-after-m
 agentflow track list                       有哪些板，各自几条危 / 几片哑了
 agentflow track show <板> [--json]         条目、剩余天数、封存 / 过期 / 陈旧标记
 agentflow track events <板> [--limit]      变更流
+agentflow track create <板> [--title=]     建一块空板
+agentflow track archive <板> [--undo]      归档 / 取消归档（不是删除）
+agentflow track export --board --flow --dir=<trackers>   板 → 文件
+agentflow track sync   --board --flow --dir=<trackers> [--gate] [--held-out=]  文件 → 板
 agentflow track rm <板> [--flow=<流程>]    彻底删除
 ```
 
@@ -173,3 +253,6 @@ agentflow track rm <板> [--flow=<流程>]    彻底删除
 - `bin/lib/radar-alert-sweep.mjs` — 收件人解析与投递
 - `bin/lib/radar-planner.mjs` — AI 编排的提示词与计划校验
 - `bin/lib/radar-cli.mjs` — `agentflow track`
+- `bin/lib/radar-docs.mjs` — `trackers/*.md` 的读写（frontmatter / 正文两层）
+- `bin/lib/radar-gate.mjs` — 门禁判定（纯函数，从告警规则反推）
+- `bin/lib/approval-notify.mjs` — 审批的企业微信通知（所有审批共用，不只雷达）
