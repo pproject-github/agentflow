@@ -32347,3 +32347,105 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   .af-radar-pending-row { grid-template-columns: 1fr; }
   .af-radar-pending-act { grid-column: 1; grid-row: auto; }
 }
+
+/* ── 建板面板：一个输入框 + 两次确认 ─────────────────── */
+
+.af-radar-setup {
+  margin: 0 0 20px;
+  padding: 18px 20px 16px;
+  border-radius: 18px;
+  background: var(--af-surface-container-high, #2a2a2a);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--af-primary-container) 26%, transparent);
+}
+
+/* 四步就在眼前，人知道自己在哪一步、还有几步——藏起来的话人不知道点了会发生什么 */
+.af-radar-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  list-style: none;
+  margin: 14px 0 16px;
+  padding: 0;
+  font-size: 0.72rem;
+  color: var(--af-on-surface-variant);
+}
+.af-radar-steps li { display: inline-flex; align-items: center; gap: 6px; opacity: 0.5; }
+.af-radar-steps li.af-radar-step--on { opacity: 1; color: var(--af-on-surface); font-weight: 600; }
+.af-radar-steps i {
+  font-style: normal;
+  width: 17px; height: 17px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%;
+  background: var(--af-surface-bright);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem;
+}
+.af-radar-steps li.af-radar-step--on i { background: var(--af-primary-container); color: #fff; }
+
+.af-radar-setup-ask, .af-radar-setup-body { display: flex; flex-direction: column; gap: 12px; }
+.af-radar-setup-names { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 10px; }
+.af-radar-field textarea {
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--af-surface-container-lowest, #0e0e0e);
+  color: var(--af-on-surface);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+.af-radar-field textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--af-primary-container) 55%, transparent);
+}
+.af-radar-setup-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 2px; }
+.af-radar-setup-hint {
+  margin: 0;
+  font-size: 0.76rem;
+  line-height: 1.7;
+  color: var(--af-on-surface-variant);
+}
+.af-radar-setup-hint b { color: var(--af-on-surface); }
+
+/* 一条一行，勾选框在最左：要不要它是这一步唯一的决定 */
+.af-radar-setup-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--af-surface-container-low, #1c1b1b);
+  cursor: pointer;
+}
+.af-radar-setup-item:hover { background: var(--af-surface-bright); }
+.af-radar-setup-item--off { opacity: 0.42; }
+.af-radar-setup-item input { margin-top: 3px; accent-color: var(--af-primary-container); }
+.af-radar-setup-item > span { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0; }
+.af-radar-setup-item b { font-size: 0.82rem; font-weight: 600; }
+.af-radar-setup-item code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.66rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--af-surface-bright);
+  color: var(--af-on-surface-variant);
+}
+.af-radar-setup-item i,
+.af-radar-setup-item em {
+  font-style: normal;
+  font-size: 0.7rem;
+  color: var(--af-on-surface-variant);
+}
+.af-radar-setup-item .af-radar-muted { opacity: 0.6; }
+.af-radar-plan-warn {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.72rem;
+  color: var(--af-caution, #ffca6a);
+}
+
+@media (max-width: 640px) {
+  .af-radar-setup-names { grid-template-columns: 1fr; }
+}

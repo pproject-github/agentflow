@@ -925,32 +925,112 @@ function EventsDrawer({ events, onClose }) {
  * id 跟着标题自动生成，但改过一次就固定下来。一直跟着标题走的话，改一次标题就把所有
  * 已经配好的流程指向了一块不存在的板。
  */
-function NewBoardBar({ onCancel, onCreated }) {
+/** 从标题推 id。人想的是「Android 政策追踪」，不是 `android-policy` */
+function slugify(text) {
+  return String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+}
+
+/**
+ * 建板：一个输入框说清楚要盯什么，剩下交给规划。
+ *
+ * 四步：说盯什么 → AI 规划 → 确认条目 → review 流程 → 建。
+ *
+ * **中间那两次确认就是审批本身。** 人在这儿一条条看过了条目和流程，建完就不该再进
+ * 审批队列——同样的东西让他批第二遍，只会教会他闭眼点。之后指挥官再改什么才走门禁。
+ *
+ * 不做弹框：人取名字、写 topic 时要照着已有的板看（别撞车、边界别重叠），
+ * 弹框正好把它们盖住。
+ */
+function SetupPanel({ onCancel, onCreated }) {
+  const [step, setStep] = useState("ask");
   const [title, setTitle] = useState("");
   const [id, setId] = useState("");
   const [idTouched, setIdTouched] = useState(false);
-  const [busy, setBusy] = useState(false);
+  /**
+   * 标题全是中文时 slugify 出来是空的——而中文标题正是这里的常态。
+   * 没有兜底的话，面板在第一步就死掉，还只给一句「自己填」。
+   * 生成一次就固定，不跟着每次按键变。
+   */
+  const [fallbackId] = useState(() => `board-${Math.random().toString(36).slice(2, 8)}`);
+  const [topic, setTopic] = useState("");
+  const [log, setLog] = useState([]);
+  const [plan, setPlan] = useState(null);
+  const [dropped, setDropped] = useState(() => new Set());
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const slug = (text) => String(text || "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40);
-  const effectiveId = idTouched ? id : slug(title);
+  const boardId = idTouched ? id.trim() : (slugify(title) || fallbackId);
+  const items = (plan?.items || []).filter((item) => !dropped.has(item.id));
+  const flows = (plan?.flows || []).filter((flow) => !dropped.has(`flow:${flow.flowId}`));
 
-  const submit = async (event) => {
-    event.preventDefault();
+  const toggle = (key) => setDropped((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+
+  /** 规划。流式读：一次规划要跑几十秒，等它跑完再给结果，人只能看着转圈 */
+  const runPlan = async (event) => {
+    event?.preventDefault();
     if (busy) return;
-    const boardId = effectiveId.trim();
     if (!boardId) { setError("给它一个 id —— 标题里没有字母数字时要自己填"); return; }
+    if (!topic.trim()) { setError("说一下这块板要盯什么"); return; }
+    setBusy(true);
+    setError("");
+    setLog([]);
+    setPlan(null);
+    setStep("planning");
+    try {
+      const res = await fetch("/api/radar/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ask: topic.trim() }),
+      });
+      if (!res.ok || !res.body) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "规划失败");
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        // 最后一段可能是半行，留到下一轮
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let event2;
+          try { event2 = JSON.parse(line); } catch { continue; }
+          if (event2.type === "log") setLog((prev) => [...prev.slice(-40), event2.text]);
+          if (event2.type === "error") throw new Error(event2.error);
+          if (event2.type === "plan") { setPlan(event2); setStep("items"); }
+        }
+      }
+    } catch (e) {
+      setError(String(e.message || e));
+      setStep("ask");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const create = async () => {
+    if (busy) return;
     setBusy(true);
     setError("");
     try {
-      const res = await fetch("/api/radar/board", {
+      const res = await fetch("/api/radar/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ board: boardId, title: title.trim() || boardId }),
+        body: JSON.stringify({
+          board: boardId,
+          title: title.trim() || boardId,
+          topic: topic.trim(),
+          plan: { ...plan, items, flows },
+        }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok || body.ok === false) throw new Error(body.error || "建板失败");
@@ -962,34 +1042,125 @@ function NewBoardBar({ onCancel, onCreated }) {
   };
 
   return (
-    <form className="af-radar-newbar" onSubmit={submit}>
-      <label className="af-radar-field">
-        <span>叫什么</span>
-        <input
-          autoFocus
-          value={title}
-          placeholder="Android 政策追踪"
-          onChange={(event) => setTitle(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}
-        />
-      </label>
-      <label className="af-radar-field af-radar-field--mono">
-        <span>id</span>
-        <input
-          value={effectiveId}
-          placeholder="android-policy"
-          onChange={(event) => { setIdTouched(true); setId(event.target.value); }}
-          onKeyDown={(event) => { if (event.key === "Escape") onCancel(); }}
-        />
-      </label>
-      <button type="button" className="af-radar-ghost" onClick={onCancel}>取消</button>
-      <button type="submit" className="af-radar-primary" disabled={busy}>{busy ? "建中…" : "建板"}</button>
-      <p className="af-radar-newbar-hint">
-        {error
-          ? <b className="af-radar-bad">{error}</b>
-          : <>id 会进深链，也是流程里 <code>--board=</code> 用的值。跟着标题自动生成，改过就固定下来 —— 建好之后不再变。</>}
-      </p>
-    </form>
+    <section className="af-radar-setup">
+      <div className="af-radar-arrange-head">
+        <h2>新建雷达</h2>
+        <button type="button" className="af-radar-x" onClick={onCancel} aria-label="关闭">×</button>
+      </div>
+
+      <ol className="af-radar-steps">
+        {[["ask", "说盯什么"], ["planning", "规划"], ["items", "确认条目"], ["flows", "review 流程"]].map(([key, label], index) => (
+          <li key={key} className={step === key ? "af-radar-step--on" : ""}>
+            <i>{index + 1}</i>{label}
+          </li>
+        ))}
+      </ol>
+
+      {step === "ask" || step === "planning" ? (
+        <form className="af-radar-setup-ask" onSubmit={runPlan}>
+          <div className="af-radar-setup-names">
+            <label className="af-radar-field">
+              <span>叫什么</span>
+              <input autoFocus value={title} placeholder="Android 政策追踪" onChange={(e) => setTitle(e.target.value)} />
+            </label>
+            <label className="af-radar-field af-radar-field--mono">
+              <span>id</span>
+              <input value={boardId} placeholder="android-policy" onChange={(e) => { setIdTouched(true); setId(e.target.value); }} />
+              {/* id 会进深链和流程里的 --board=，建好之后不该再改 */}
+              <em>会进深链，也是流程里 <code>--board=</code> 用的值。建好之后不改。</em>
+            </label>
+          </div>
+          <label className="af-radar-field">
+            <span>这块板要盯什么</span>
+            <textarea
+              rows={3}
+              value={topic}
+              placeholder="盯 Google Play 与 Android 平台的强制要求，凡是有截止日、不做会被拒审或下架的都要追。"
+              onChange={(e) => setTopic(e.target.value)}
+            />
+            {/* 这段话会成为 board.md 的正文，agent 每轮先读它——写得含糊，板三个月后就会跑偏 */}
+            <em>这段话会写进 board.md，之后每一轮 agent 都先读它来判断什么该进这块板。</em>
+          </label>
+          {error ? <p className="af-radar-modal-error">{error}</p> : null}
+          <div className="af-radar-setup-foot">
+            <button type="button" className="af-radar-ghost" onClick={onCancel}>取消</button>
+            <button type="submit" className="af-radar-primary" disabled={busy}>
+              {busy ? "规划中…" : "让 AI 规划"}
+            </button>
+          </div>
+          {step === "planning" ? (
+            <div className="af-radar-plan-log">
+              {log.length ? log.map((line, index) => <p key={index}>{line}</p>) : <p>正在读你的描述…</p>}
+            </div>
+          ) : null}
+        </form>
+      ) : null}
+
+      {step === "items" ? (
+        <div className="af-radar-setup-body">
+          {plan?.summary ? <p className="af-radar-plan-summary">{plan.summary}</p> : null}
+          <p className="af-radar-setup-hint">
+            这些是它打算盯的事项。<b>不要的取消勾选</b>；漏了的建完再加。
+            状态一律是「还没扫过」—— 这一刻它还没查过任何东西，写别的都是编的。
+          </p>
+          {(plan?.items || []).map((item) => (
+            <label key={item.id} className={`af-radar-setup-item${dropped.has(item.id) ? " af-radar-setup-item--off" : ""}`}>
+              <input type="checkbox" checked={!dropped.has(item.id)} onChange={() => toggle(item.id)} />
+              <span>
+                <b>{item.title}</b>
+                <code>{item.id}</code>
+                {item.due ? <i>截止 {item.due}</i> : <i className="af-radar-muted">无期限</i>}
+                {item.required ? <em>要求：{item.required}</em> : null}
+                {item.tasks?.length ? <em>{item.tasks.length} 个待办</em> : null}
+                {item.unknowns?.length ? <em className="af-radar-bad">{item.unknowns.length} 处待确认</em> : null}
+              </span>
+            </label>
+          ))}
+          {(plan?.warnings || []).length ? (
+            <ul className="af-radar-plan-warn">{plan.warnings.map((w) => <li key={w}>{w}</li>)}</ul>
+          ) : null}
+          <div className="af-radar-setup-foot">
+            <button type="button" className="af-radar-ghost" onClick={() => setStep("ask")}>改描述重来</button>
+            <button type="button" className="af-radar-primary" disabled={!items.length} onClick={() => setStep("flows")}>
+              下一步：看流程（{items.length} 条事项）
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === "flows" ? (
+        <div className="af-radar-setup-body">
+          <p className="af-radar-setup-hint">
+            这些流程会被建出来，<b>但默认停用</b>。建好之后去定时任务页手动开启 ——
+            建它和让它开始每天调用 AI 是两个决定。
+          </p>
+          {(plan?.flows || []).map((flow) => (
+            <label key={flow.flowId} className={`af-radar-setup-item${dropped.has(`flow:${flow.flowId}`) ? " af-radar-setup-item--off" : ""}`}>
+              <input
+                type="checkbox"
+                checked={!dropped.has(`flow:${flow.flowId}`)}
+                onChange={() => toggle(`flow:${flow.flowId}`)}
+              />
+              <span>
+                <b>{flow.title || flow.flowId}</b>
+                <code>{flow.flowId}</code>
+                <i>{flow.cron || "节奏未定"}</i>
+                <em>认领 {flow.owns?.includes("*") ? "全部条目" : `${flow.owns?.length || 0} 个`}</em>
+                <em>写 {(flow.updates || []).join(" / ") || "state / current / evidence"}</em>
+                {flow.cadenceWhy ? <em className="af-radar-muted">{flow.cadenceWhy}</em> : null}
+              </span>
+            </label>
+          ))}
+          {error ? <p className="af-radar-modal-error">{error}</p> : null}
+          <div className="af-radar-setup-foot">
+            <button type="button" className="af-radar-ghost" onClick={() => setStep("items")}>返回条目</button>
+            <button type="button" className="af-radar-primary" disabled={busy} onClick={create}>
+              {busy ? "建中…" : `建板（${items.length} 条事项 · ${flows.length} 条流程）`}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -1238,7 +1409,7 @@ export default function RadarPage() {
               </p>
               {/* 按钮就地换成建板条，而不是开一层弹框盖住下面的说明 */}
               {showNewBoard ? (
-                <NewBoardBar onCancel={() => setShowNewBoard(false)} onCreated={onBoardCreated} />
+                <SetupPanel onCancel={() => setShowNewBoard(false)} onCreated={onBoardCreated} />
               ) : (
                 <div className="af-radar-empty-actions">
                   <button type="button" className="af-radar-primary" onClick={() => setShowNewBoard(true)}>
@@ -1324,7 +1495,7 @@ export default function RadarPage() {
               ) : null}
 
               {showNewBoard ? (
-                <NewBoardBar onCancel={() => setShowNewBoard(false)} onCreated={onBoardCreated} />
+                <SetupPanel onCancel={() => setShowNewBoard(false)} onCreated={onBoardCreated} />
               ) : null}
 
               {error ? <p className="af-radar-error">{error}</p> : null}
