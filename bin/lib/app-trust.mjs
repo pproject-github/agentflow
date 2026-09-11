@@ -26,6 +26,20 @@ export const APP_TRUST_MAX_SKEW_MS = 5 * 60 * 1000;
 /** nonce 记忆窗口必须大于时钟偏移窗口，否则过期的 nonce 会被重新接受 */
 const NONCE_TTL_MS = APP_TRUST_MAX_SKEW_MS * 2;
 const DEFAULT_SESSION_TTL_MS = 15 * 60 * 1000;
+/**
+ * 单张代理会话的有效期上限。
+ *
+ * 互信本身是长期的，但一张会话不该长到「泄漏了也无所谓」。上限给到一天：对方拿它去跑
+ * 一次长任务够用，真漏了也有个自然终点。填 0 或非法值回落到默认值，而不是变成永久。
+ */
+const MAX_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const MIN_SESSION_TTL_MS = 60 * 1000;
+
+function clampSessionTtl(value, fallback = DEFAULT_SESSION_TTL_MS) {
+  const ttl = Number(value);
+  if (!Number.isFinite(ttl) || ttl <= 0) return fallback;
+  return Math.min(Math.max(ttl, MIN_SESSION_TTL_MS), MAX_SESSION_TTL_MS);
+}
 
 /** 进程内 nonce 记忆。多进程部署要换成共享存储，否则重放只在单进程内被拦住 */
 const seenNonces = new Map();
@@ -83,7 +97,7 @@ export function listAppTrustPeers() {
     name: String(peer?.name || appId),
     scopes: Array.isArray(peer?.scopes) ? peer.scopes.map(String) : [],
     requirePrivilegeBinding: peer?.requirePrivilegeBinding !== false,
-    sessionTtlMs: Number(peer?.sessionTtlMs) || DEFAULT_SESSION_TTL_MS,
+    sessionTtlMs: clampSessionTtl(peer?.sessionTtlMs),
     publicKeyFingerprint: fingerprint(peer?.publicKey || ""),
     createdAt: String(peer?.createdAt || ""),
     updatedAt: String(peer?.updatedAt || ""),
@@ -97,22 +111,30 @@ function fingerprint(publicKeyPem) {
 }
 
 /**
- * 登记对方的公钥。
- * @param {{ appId: string, name?: string, publicKey: string, scopes?: string[],
+ * 登记对方的公钥，或改已登记应用的设置。
+ *
+ * `publicKey` 只有新登记时必填；更新已有应用时省略即沿用原来那把，省略不等于清空。
+ * @param {{ appId: string, name?: string, publicKey?: string, scopes?: string[],
  *           requirePrivilegeBinding?: boolean, sessionTtlMs?: number }} input
  */
 export function upsertAppTrustPeer(input = {}) {
   const appId = String(input.appId || "").trim();
-  const publicKey = String(input.publicKey || "").trim();
   if (!appId || !/^[a-zA-Z0-9._-]{1,64}$/.test(appId)) return { ok: false, error: "appId 不合法" };
-  if (!publicKey.includes("BEGIN PUBLIC KEY")) return { ok: false, error: "publicKey 必须是 SPKI PEM 公钥" };
-  try {
-    crypto.createPublicKey(publicKey);
-  } catch (error) {
-    return { ok: false, error: `公钥解析失败：${(error && error.message) || String(error)}` };
-  }
   const file = readTrustFile();
   const previous = file.peers[appId] || {};
+  // 改有效期或 scope 时不该逼管理员重新贴一遍公钥——列表接口只回指纹，他手上根本没有原文，
+  // 逼着找回来的结果就是没人敢动这些设置
+  const provided = String(input.publicKey || "").trim();
+  const publicKey = provided || String(previous.publicKey || "");
+  if (!publicKey) return { ok: false, error: "新登记应用必须提供 publicKey" };
+  if (provided) {
+    if (!provided.includes("BEGIN PUBLIC KEY")) return { ok: false, error: "publicKey 必须是 SPKI PEM 公钥" };
+    try {
+      crypto.createPublicKey(provided);
+    } catch (error) {
+      return { ok: false, error: `公钥解析失败：${(error && error.message) || String(error)}` };
+    }
+  }
   const now = new Date().toISOString();
   file.peers[appId] = {
     ...previous,
@@ -122,7 +144,7 @@ export function upsertAppTrustPeer(input = {}) {
     requirePrivilegeBinding: input.requirePrivilegeBinding === undefined
       ? previous.requirePrivilegeBinding !== false
       : input.requirePrivilegeBinding !== false,
-    sessionTtlMs: Number(input.sessionTtlMs) || Number(previous.sessionTtlMs) || DEFAULT_SESSION_TTL_MS,
+    sessionTtlMs: clampSessionTtl(input.sessionTtlMs, clampSessionTtl(previous.sessionTtlMs)),
     createdAt: String(previous.createdAt || now),
     updatedAt: now,
   };
@@ -224,7 +246,7 @@ export function verifyAppRequest({ method, requestPath, body = "", headers = {},
       name: String(peer.name || appId),
       scopes: Array.isArray(peer.scopes) ? peer.scopes.map(String) : [],
       requirePrivilegeBinding: peer.requirePrivilegeBinding !== false,
-      sessionTtlMs: Number(peer.sessionTtlMs) || DEFAULT_SESSION_TTL_MS,
+      sessionTtlMs: clampSessionTtl(peer.sessionTtlMs),
     },
   };
 }
