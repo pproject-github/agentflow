@@ -11,8 +11,14 @@
  * - 一直坏着，每天最多再补一条（提醒它还没好，但不刷屏）；
  * - 恢复时发一条，这条比失败通知更重要——它让人知道问题结束了，不用去猜。
  *
- * 收件人是这条定时的 owner，取他绑定的企业微信 userid（见 wecom-directory.mjs）。没绑定
- * 的人退回运维群 webhook；两者都没有就跳过，绝不把失败通知本身变成一次失败。
+ * 收件人是这条定时的 owner，取他绑定的企业微信 userid（见 wecom-directory.mjs）。owner 没
+ * 绑定时依次退回：管理员指定的兜底账号 → 运维群 webhook → 跳过。
+ *
+ * 兜底账号配的是 AgentFlow 用户名（在管理后台的环境变量页填 `AGENTFLOW_SCHEDULE_ALERT_FALLBACK_USER`），
+ * 不是企微 id——填用户名才能复用已经建好的绑定表，而且换人时不用去查工号。发给兜底账号
+ * 的消息会写明"原负责人是谁、他为什么没收到"，否则收件人无从判断这条跟自己什么关系。
+ *
+ * 任何一环出问题都不影响运行本身：通知只是观测手段。
  */
 import { readWecomBinding } from "./wecom-directory.mjs";
 import { readAuthUsers } from "./auth.mjs";
@@ -70,7 +76,7 @@ export function decideScheduleAlert(alertState = {}, status, now = Date.now()) {
   return { kind: null, reason: `ignored_status:${status}` };
 }
 
-function buildMarkdown({ kind, entry, error, reason, link, username }) {
+function buildMarkdown({ kind, entry, error, reason, link, username, forwardedFrom }) {
   const label = String(entry?.label || entry?.flowId || "定时任务");
   const where = `${entry?.flowId || "-"} · ${entry?.scheduleNodeId || "-"}`;
   const cron = `${entry?.cron || "-"}（${entry?.timezone || "Asia/Shanghai"}）`;
@@ -85,6 +91,7 @@ function buildMarkdown({ kind, entry, error, reason, link, username }) {
     : [
       `**定时任务失败：${label}**`,
       `> 负责人：${username || "-"}`,
+      ...(forwardedFrom ? [`> 转发原因：${forwardedFrom}`] : []),
       `> 流程：${where}`,
       `> 计划：${cron}`,
       ...(reason === "still_failing" ? ["> 状态：持续失败中（每天提醒一次）"] : []),
@@ -126,6 +133,14 @@ export async function notifyScheduleOutcome(input = {}) {
   const users = (deps.readAuthUsers || readAuthUsers)();
   const username = String(users?.[userId]?.username || userId);
   const groupWebhook = String(env?.AGENTFLOW_SCHEDULE_ALERT_WEBHOOK || "").trim();
+  const fallbackUserId = String(env?.AGENTFLOW_SCHEDULE_ALERT_FALLBACK_USER || "").trim();
+  // owner 自己没绑定时，转给管理员指定的账号——这条链存在的意义就是"没人绑定也别丢通知"
+  const fallbackBinding = !binding?.wecomUserId && fallbackUserId && fallbackUserId !== userId
+    ? (deps.readWecomBinding || readWecomBinding)(fallbackUserId)
+    : null;
+  const forwardedFrom = fallbackBinding?.wecomUserId
+    ? `${username || userId || "未知负责人"} 没有绑定企业微信，转发给你`
+    : "";
 
   const markdown = buildMarkdown({
     kind: decision.kind,
@@ -134,6 +149,7 @@ export async function notifyScheduleOutcome(input = {}) {
     reason: decision.reason,
     link: scheduleLink(entry, publicBaseUrl),
     username,
+    forwardedFrom,
   });
 
   // 通知状态无论发没发成功都要推进：否则一条投递不出去的通知会每次运行都重试，
@@ -149,6 +165,18 @@ export async function notifyScheduleOutcome(input = {}) {
     if (binding?.wecomUserId) {
       await (deps.sendAppMarkdown || sendWecomAppMarkdown)({ toUser: binding.wecomUserId, markdown }, env);
       return { sent: true, via: "app", toUser: binding.wecomUserId, kind: decision.kind, reason: decision.reason, alert };
+    }
+    if (fallbackBinding?.wecomUserId) {
+      await (deps.sendAppMarkdown || sendWecomAppMarkdown)({ toUser: fallbackBinding.wecomUserId, markdown }, env);
+      return {
+        sent: true,
+        via: "fallback-user",
+        toUser: fallbackBinding.wecomUserId,
+        fallbackUserId,
+        kind: decision.kind,
+        reason: decision.reason,
+        alert,
+      };
     }
     if (groupWebhook) {
       await (deps.sendGroupMarkdown || sendWecomGroupMarkdown)({ webhookUrl: groupWebhook, markdown }, env);

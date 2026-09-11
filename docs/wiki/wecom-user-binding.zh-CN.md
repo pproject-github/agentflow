@@ -98,13 +98,26 @@ Privilege 按内网用户名查，查询名是 `casUsername` 优先、没有才�
 
 ### 收件人
 
-owner 绑定的企业微信 userid → 没绑定则退回 `AGENTFLOW_SCHEDULE_ALERT_WEBHOOK` 配置的运维
-群 → 两者都没有就跳过（并记一行日志说明是谁没绑）。**没人可通知时不推进状态**，等这个人
-绑定之后，下一次失败会从头提醒一次。
+依次尝试，第一个能投递的就用：
 
-### 开关
+1. **这条定时的 owner** —— 他绑定的企业微信 userid；
+2. **兜底账号** —— `AGENTFLOW_SCHEDULE_ALERT_FALLBACK_USER` 指定的 AgentFlow 用户名
+   （不是企微 id：填用户名才能复用绑定表，换人时也不用去查工号）。转发出去的消息会写明
+   「原负责人是谁、他为什么没收到」，否则收件人无从判断这条跟自己什么关系；
+3. **运维群** —— `AGENTFLOW_SCHEDULE_ALERT_WEBHOOK` 配置的群机器人；
+4. 都没有就跳过，并记一行日志说明是谁没绑。
 
-`AGENTFLOW_SCHEDULE_ALERTS=off` 全局关闭，默认开启。回跳链接取
-`AGENTFLOW_PUBLIC_BASE_URL`，没配就不带链接。
+**没人可通知时不推进通知状态**，等这个人绑定之后，下一次失败会从头提醒一次。
+
+### 在哪配
+
+这几个都是全局环境变量，管理员在 **设置 → 环境变量** 页直接填即可，不用改配置文件：
+
+| 键 | 作用 |
+| --- | --- |
+| `AGENTFLOW_SCHEDULE_ALERT_FALLBACK_USER` | 兜底收件人的 AgentFlow 用户名 |
+| `AGENTFLOW_SCHEDULE_ALERT_WEBHOOK` | 运维群机器人 webhook（可选） |
+| `AGENTFLOW_PUBLIC_BASE_URL` | 通知里回跳链接的站点地址，没配就不带链接 |
+| `AGENTFLOW_SCHEDULE_ALERTS` | 填 `off` 全局关闭，默认开启 |
 
 通知链路不会影响运行本身：发送异常一律吞掉只记日志。

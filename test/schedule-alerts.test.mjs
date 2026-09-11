@@ -93,6 +93,43 @@ test("失败通知私聊负责人，正文带流程、计划、错误首行和�
   assert.ok(result.alert.lastFailureAlertAt > 0);
 });
 
+test("owner 没绑定时转给管理员指定的兜底账号，正文写明转发原因", async () => {
+  const sent = [];
+  const result = await notifyScheduleOutcome({
+    entry: entryFixture(),
+    status: "failed",
+    error: "boom",
+    deps: {
+      ...depsFixture(sent, { env: { AGENTFLOW_SCHEDULE_ALERT_FALLBACK_USER: "wangfang1" } }),
+      // hesiqi 是 owner 但查不到绑定；wangfang1 是兜底账号
+      readWecomBinding: (userId) => (userId === "wangfang1" ? { wecomUserId: "00320", source: "privilege" } : null),
+      readAuthUsers: () => ({ hesiqi: { username: "hesiqi" }, wangfang1: { username: "wangfang1" } }),
+    },
+  });
+  // owner 自己绑了就直接发给他，不该绕到兜底账号
+  assert.equal(result.sent, true);
+  assert.equal(result.via, "app");
+  assert.doesNotMatch(sent[0].markdown, /转发给你/);
+
+  const forwarded = [];
+  const toFallback = await notifyScheduleOutcome({
+    entry: entryFixture({ userId: "hesiqi", key: "hesiqi:user:Likee_inapp_feedback_summary:daily", flowId: "Likee_inapp_feedback_summary" }),
+    status: "failed",
+    error: "send wecom app markdown failed: user & party & tag all invalid",
+    deps: {
+      ...depsFixture(forwarded, { env: { AGENTFLOW_SCHEDULE_ALERT_FALLBACK_USER: "wangfang1" } }),
+      readWecomBinding: (userId) => (userId === "wangfang1" ? { wecomUserId: "00320", source: "privilege" } : null),
+      readAuthUsers: () => ({ hesiqi: { username: "hesiqi" }, wangfang1: { username: "wangfang1" } }),
+    },
+  });
+  assert.equal(toFallback.sent, true);
+  assert.equal(toFallback.via, "fallback-user");
+  assert.equal(toFallback.toUser, "00320");
+  // 收件人要能看出这条跟自己什么关系
+  assert.match(forwarded[0].markdown, /hesiqi 没有绑定企业微信，转发给你/);
+  assert.match(forwarded[0].markdown, /Likee_inapp_feedback_summary/);
+});
+
 test("没绑定企微时退回运维群；两者都没有就跳过，而且不推进状态", async () => {
   const sentGroup = [];
   const viaGroup = await notifyScheduleOutcome({
