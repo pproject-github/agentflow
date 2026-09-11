@@ -43,6 +43,7 @@ import { computeNextRunAt } from "./schedule-config.mjs";
 import { listTeams } from "./teams.mjs";
 import { readMergedEnvObject, runtimeEnvForUser } from "./user-env.mjs";
 import { sendWecomAppMarkdown, sendWecomGroupMarkdown } from "./wecom.mjs";
+import { notifyScheduleOutcome } from "./schedule-alerts.mjs";
 import { getWorkspaceCollaborationByFlow, getWorkspaceCollaborationForProject, listWorkspaceCollaborationsForUser, workspaceCollaborationAccess, workspaceCollaborationSummary } from "./workspace-collaboration.mjs";
 import { FLOW_SOURCE_FILENAME, WORKSPACE_GRAPH_FILENAME, WorkspaceFlowParseError, readWorkspaceGraphFiles, readWorkspaceRunFingerprints, writeWorkspaceGraphFiles } from "./workspace-flow-store.mjs";
 import { workspaceDesignRevision } from "./workspace-graph-merge.mjs";
@@ -8693,6 +8694,30 @@ export function reassignWorkspaceScheduleOwner({ sourceUserId, targetUserId, tar
   return { changed: projected.length };
 }
 
+/**
+ * 把一次定时运行的结果告诉负责人。
+ *
+ * 刻意做成"发不出去也不影响运行"：通知只是观测手段，不能反过来把调度拖垮，所以这里
+ * 吞掉所有异常，只留日志；发送结果里的通知状态回写登记表，降噪靠的就是它。
+ */
+async function announceScheduleOutcome(entry, status, error) {
+  try {
+    const result = await notifyScheduleOutcome({ entry, status, error });
+    if (result.alert && result.alert !== entry?.alert) {
+      updateWorkspaceScheduleEntry(entry.key, { alert: result.alert });
+    }
+    if (result.sent) {
+      log.info(`[schedule-alert] ${result.kind} ${entry.flowId}/${entry.scheduleNodeId} -> ${result.via}${result.toUser ? `:${result.toUser}` : ""}`);
+    } else if (result.reason === "send_failed") {
+      log.warn(`[schedule-alert] 投递失败 ${entry.flowId}/${entry.scheduleNodeId}：${result.error}`);
+    } else if (result.reason === "no_recipient") {
+      log.warn(`[schedule-alert] ${entry.flowId}/${entry.scheduleNodeId} 失败了但没人可通知：${entry.userId} 未绑定企微，也没配 AGENTFLOW_SCHEDULE_ALERT_WEBHOOK`);
+    }
+  } catch (e) {
+    log.warn(`[schedule-alert] 通知异常：${(e && e.message) || String(e)}`);
+  }
+}
+
 export async function runWorkspaceScheduledEntry(root, entry) {
   const userCtx = { userId: String(entry.userId || "") };
   const scopeKey = workspaceRunKey(userCtx, entry.flowSource || "user", entry.flowId || "");
@@ -8929,12 +8954,13 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       releaseId: runEntry.releaseId,
       designRevision: runEntry.designRevision,
     });
-    updateWorkspaceScheduleEntry(entry.key, {
+    const successEntry = updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt: computeNext(config),
       lastFinishedAt: endedAt,
       lastStatus: "success",
       lastError: "",
     });
+    void announceScheduleOutcome(successEntry || entry, "success", "");
   } catch (e) {
     const endedAt = Date.now();
     const error = (e && e.message) || String(e);
@@ -8952,7 +8978,7 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       designRevision: runEntry.designRevision,
       error: stopped ? "" : error,
     });
-    updateWorkspaceScheduleEntry(entry.key, {
+    const failedEntry = updateWorkspaceScheduleEntry(entry.key, {
       nextRunAt: computeNext(config),
       lastFinishedAt: endedAt,
       lastStatus: finalStatus,
@@ -8960,6 +8986,7 @@ export async function runWorkspaceScheduledEntry(root, entry) {
       ...(stopped ? {} : { lastErrorAt: endedAt }),
     });
     if (!stopped) log.info(`[workspace-scheduler] failed ${entry.flowId}/${targetRunNodeId}: ${error}`);
+    void announceScheduleOutcome(failedEntry || entry, finalStatus, stopped ? "" : error);
   } finally {
     runControl.finish(controller.signal.aborted ? "stopped" : "finished");
     if (activeWorkspaceRuns.get(runKey) === runEntry) activeWorkspaceRuns.delete(runKey);
@@ -8982,12 +9009,13 @@ function finishWorkspaceDeferredRun(entry, status, patch = {}) {
     error: String(patch.error || ""),
   });
   if (entry.scheduleKey) {
-    updateWorkspaceScheduleEntry(entry.scheduleKey, {
+    const scheduleEntry = updateWorkspaceScheduleEntry(entry.scheduleKey, {
       lastFinishedAt: endedAt,
       lastStatus: status,
       lastError: String(patch.error || ""),
       ...(patch.error ? { lastErrorAt: endedAt } : {}),
     });
+    if (scheduleEntry) void announceScheduleOutcome(scheduleEntry, status, String(patch.error || ""));
   }
 }
 
