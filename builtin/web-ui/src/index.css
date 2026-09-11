@@ -32273,3 +32273,77 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 /* 协作行右边多一个画布按钮，「上次」得给它让位，否则两个叠在一起 */
 .af-radar-agent-row .af-radar-value { right: 46px; }
 .af-radar-agents .af-radar-track { inset: 0 124px 0 250px; }
+
+/* ── 待审批 ─────────────────────────────────────────── */
+
+/* 待审批和「几条没完成」是两件事，颜色也要分开——混在一起人分不清该干嘛 */
+.af-radar-badge--gate {
+  background: color-mix(in srgb, var(--af-primary-container) 30%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+}
+
+.af-radar-pending {
+  margin: 0 0 18px;
+  padding: 14px 18px 10px;
+  border-radius: 16px;
+  background: var(--af-surface-container-low, #1c1b1b);
+  box-shadow: inset 3px 0 0 var(--af-primary-container);
+}
+.af-radar-pending > header { display: flex; align-items: center; gap: 12px; }
+.af-radar-pending > header > .material-symbols-outlined { font-size: 20px; color: var(--af-primary); }
+.af-radar-pending h4 {
+  margin: 0;
+  font-family: var(--af-headline);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+.af-radar-pending h4 + p {
+  margin: 2px 0 0;
+  font-size: 0.72rem;
+  color: var(--af-on-surface-variant);
+}
+
+.af-radar-pending-flow { margin-top: 12px; }
+.af-radar-pending-from {
+  display: block;
+  font-size: 0.66rem;
+  letter-spacing: 0.05em;
+  color: var(--af-on-surface-variant);
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+.af-radar-pending-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 14px;
+  align-items: center;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  border-radius: 12px;
+  background: var(--af-surface-container-high, #2a2a2a);
+}
+.af-radar-pending-what { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; font-size: 0.78rem; }
+.af-radar-pending-what code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.68rem;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--af-surface-bright);
+  color: var(--af-on-surface-variant);
+}
+.af-radar-pending-what i { font-style: normal; color: var(--af-on-surface-variant); font-size: 0.74rem; }
+/* 「为什么拦它」和改动同宽摆一起：只说「有待确认」的话，人只会点通过 */
+.af-radar-pending-why {
+  grid-column: 1;
+  font-size: 0.7rem;
+  color: var(--af-caution, #ffca6a);
+  opacity: 0.9;
+}
+.af-radar-pending-act { grid-column: 2; grid-row: 1 / span 2; display: flex; gap: 6px; }
+.af-radar-pending-act .af-radar-primary,
+.af-radar-pending-act .af-radar-ghost { padding: 6px 14px; font-size: 12px; }
+
+@media (max-width: 640px) {
+  .af-radar-pending-row { grid-template-columns: 1fr; }
+  .af-radar-pending-act { grid-column: 1; grid-row: auto; }
+}

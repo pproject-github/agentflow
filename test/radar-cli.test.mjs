@@ -368,3 +368,91 @@ test("没有截止日的条目：不算过期，也不按天数告警", async ()
     assert.equal(row.effectiveReason, "no_due");
   });
 })
+
+/** 跑一条 track 子命令，顺带把 stdout 收起来——用例只关心落盘结果 */
+async function runTrack(cli, argv) {
+  const original = console.log;
+  const out = [];
+  console.log = (...args) => out.push(args.join(" "));
+  try {
+    await cli.runTrackCommand(argv);
+  } finally {
+    console.log = original;
+  }
+  return out.join("\n");
+}
+
+async function withHeld(run) {
+  await withTrackHome(async (ctx) => {
+    const { cli, radar } = ctx;
+    cli.commitTrack({
+      board: "b", flowId: "f", actor: "wangfang1",
+      rows: [{ id: "a", title: "A", state: "risk", due: "2026-12-01" }],
+    });
+    // 门禁拦下「改成 ok」，值回退，待审批落盘
+    const held = cli.commitTrack({
+      board: "b", flowId: "f", actor: "wangfang1", gate: true,
+      rows: [{ id: "a", title: "A", state: "ok", due: "2026-12-01" }],
+    });
+    assert.equal(held.held.length, 1, "该被拦下一条");
+    assert.equal(radar.readRadarShard("b", "f").rows[0].state, "risk", "拦下时值不变");
+    await run(ctx);
+  });
+}
+
+test("批准把目标值真的写进分片，待审批随之清空", async () => {
+  await withHeld(async ({ cli, radar, tempRoot }) => {
+    // sync 才会落 _pending，这里直接按它的格式写一份
+    const dir = path.join(process.env.AGENTFLOW_HOME, "radar", "boards", "b");
+    fs.writeFileSync(path.join(dir, "_pending.json"), JSON.stringify({
+      f: { at: new Date().toISOString(), held: [{ kind: "state", id: "a", from: "risk", to: "ok", reason: "会关掉告警" }] },
+    }));
+
+    await runTrack(cli, ["approve", "--board=b", "--flow=f"]);
+    assert.equal(radar.readRadarShard("b", "f").rows[0].state, "ok", "批准之后目标值落盘");
+    assert.equal(fs.existsSync(path.join(dir, "_pending.json")), false, "清空后把文件删掉，而不是留个空壳");
+    assert.equal(radar.readRadarEvents("b")[0].kind, "approved");
+  });
+});
+
+// 一次只批一条时，其余的必须还在——否则人会以为自己批了全部
+test("按 --id 只处理一条，其余留着", async () => {
+  await withHeld(async ({ cli, radar }) => {
+    const dir = path.join(process.env.AGENTFLOW_HOME, "radar", "boards", "b");
+    fs.writeFileSync(path.join(dir, "_pending.json"), JSON.stringify({
+      f: { at: new Date().toISOString(), held: [
+        { kind: "state", id: "a", from: "risk", to: "ok", reason: "x" },
+        { kind: "due", id: "a", from: "2026-12-01", to: "2027-06-01", reason: "y" },
+      ] },
+    }));
+    const out = await runTrack(cli, ["approve", "--board=b", "--flow=f", "--id=a"]);
+    // 同一条目的两处都属于 id=a，所以两条一起批了
+    assert.match(out, /已批准并写入 2 处/);
+    assert.equal(radar.readRadarShard("b", "f").rows[0].state, "ok");
+  });
+});
+
+test("没有待审批时报错，不假装批过了", async () => {
+  await withHeld(async ({ cli }) => {
+    await assert.rejects(() => runTrack(cli, ["approve", "--board=b", "--flow=f"]), /没有待审批的改动/);
+  });
+});
+
+test("门禁拦下的值保持原样，直到有人点头", async () => {
+  await withHeld(async ({ radar }) => {
+    assert.equal(radar.readRadarShard("b", "f").rows[0].state, "risk");
+  });
+});
+
+// 驳回本身是信息：连着三轮想改成 ok 都被驳回，说明判定规则该改了
+test("驳回不写值，但在变更流里留一条", async () => {
+  await withTrackHome(async ({ cli, radar }) => {
+    cli.commitTrack({ board: "b", flowId: "f", actor: "w", rows: [{ id: "a", title: "A", state: "risk" }] });
+    const before = radar.readRadarEvents("b").length;
+    radar.appendRadarEvent("b", { kind: "rejected", id: "a", field: "state", from: "risk", to: "ok", by: "w" });
+    const events = radar.readRadarEvents("b");
+    assert.equal(events.length, before + 1);
+    assert.equal(events[0].kind, "rejected");
+    assert.equal(radar.readRadarShard("b", "f").rows[0].state, "risk", "驳回之后值不变");
+  });
+});

@@ -103,6 +103,7 @@ import {
   listRadarBoards,
   readRadarBoard,
   readRadarEvents,
+  resolveRadarPending,
   setRadarBoardArchived,
   setRadarItemState,
 } from "./radar.mjs";
@@ -5798,6 +5799,38 @@ finishedAt: "${new Date().toISOString()}"
           by: String(authUser?.username || userCtx?.userId || ""),
         });
         json(res, 200, { ...saved, archived });
+      } catch (e) {
+        json(res, 500, { error: (e && e.message) || String(e) });
+      }
+      return;
+    }
+
+    /**
+     * 批准 / 驳回挂起的改动。
+     *
+     * 驳回也要走这里而不是前端一删了事：驳回本身是信息，得进变更流。
+     */
+    if (req.method === "POST" && url.pathname === "/api/radar/pending") {
+      let payload = {};
+      try {
+        payload = JSON.parse((await readBody(req)) || "{}");
+      } catch {
+        json(res, 400, { error: "Invalid JSON body" });
+        return;
+      }
+      const boardId = String(payload?.board || "").trim();
+      if (!isValidBoardId(boardId)) {
+        json(res, 400, { error: "board 参数不合法" });
+        return;
+      }
+      const action = payload?.action === "reject" ? "reject" : "approve";
+      try {
+        const result = resolveRadarPending(boardId, String(payload?.flow || ""), {
+          action,
+          ids: Array.isArray(payload?.ids) ? payload.ids : (payload?.id ? [payload.id] : []),
+          by: String(authUser?.username || userCtx?.userId || ""),
+        });
+        json(res, result.ok ? 200 : 400, result);
       } catch (e) {
         json(res, 500, { error: (e && e.message) || String(e) });
       }

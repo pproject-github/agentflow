@@ -228,6 +228,34 @@ agentflow track sync   --board=X --flow=Y --dir=<trackers>   文件 → 板（�
 没人打开页面就没人知道，而挂起期间流程是停着的。通知失败**绝不让审批创建失败**：
 宁可没人收到提醒（页面上还看得见），也不能因为企微不通让整条运行崩掉。
 
+### 处理挂起的改动
+
+待审批存在 `radar/boards/<板>/_pending.json`，和分片并列——它是**板的状态**，不是某次运行的
+副产品。放运行记录里的话，运行一轮转就没了，而「这条还等着人点头」得一直看得见。
+
+页面上待审批面板摆在板顶上，不塞抽屉：这几条改动**正在被压着不写**，板上相应字段显示的是
+旧值。藏起来的话人看到的是一块「正常」的板，而真相在一个没人点开的角落等着。
+每条改动旁边写着**为什么拦它**——只说「有待确认」的话，人只会点通过。
+
+```
+agentflow track pending <板>                      看有哪些等确认
+agentflow track approve --board --flow [--id=]    批准并写入
+agentflow track reject  --board --flow [--id=]    驳回（不写，但记一条事件）
+```
+
+**驳回必须留痕，不是为了审计**：agent 连着三轮想把同一条改成 ok 都被驳回，说明它的判定
+规则该改了，而不是让它每轮再试一次。静默丢弃会把这个信号一起丢掉。
+
+读待审批时会丢掉**已经不成立**的（目标值和现值已经一样）。门禁是逐条流程选择开不开的，
+同一条目被另一条没开门禁的流程写成了目标值，这条待审批就成了幻影——留着的话人会去批
+一件已经发生的事，而「批准」在变更流里又记一条，把真正那次改动淹掉。
+
+### 分片名可以和流程不同名
+
+一条流程写的分片可以另取名字（比如 `android-policy-ws` 写 `android-policy-watch` 这一片）。
+不记下来的话，协作视图和定时归属都会按分片名去找流程，找不到就显示「从没跑过」。
+所以 `sync` / `commit` 要带 `--flow-ref=<跑它的流程 id>`。
+
 ## 命令
 
 ```
@@ -239,6 +267,7 @@ agentflow track create <板> [--title=]     建一块空板
 agentflow track archive <板> [--undo]      归档 / 取消归档（不是删除）
 agentflow track export --board --flow --dir=<trackers>   板 → 文件
 agentflow track sync   --board --flow --dir=<trackers> [--gate] [--held-out=]  文件 → 板
+agentflow track pending/approve/reject     处理挂起的改动
 agentflow track rm <板> [--flow=<流程>]    彻底删除
 ```
 

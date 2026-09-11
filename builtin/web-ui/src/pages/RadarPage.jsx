@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRoute } from "../routeContext.jsx";
 import LoadingState from "../components/LoadingState.jsx";
 
@@ -548,6 +548,63 @@ function dayTicks(start, end) {
  * 为什么要单独一屏：条目安静既可能是真没变化，也可能是流程哑了三天没人发现。
  * 板上那几个视图分不开这两件事，只有把执行摊在时间轴上才分得开。
  */
+/**
+ * 待审批。
+ *
+ * 摆在板顶上而不是塞进抽屉：这几条改动**正在被压着不写**，板上相应字段显示的是旧值。
+ * 藏起来的话，人看到的是一块"正常"的板，而真相在一个没人点开的角落里等着。
+ */
+function PendingPanel({ board, pending, onResolve, busy }) {
+  const entries = Object.entries(pending || {});
+  if (!entries.length) return null;
+  const total = entries.reduce((sum, [, entry]) => sum + (entry.held?.length || 0), 0);
+  return (
+    <section className="af-radar-pending">
+      <header>
+        <span className="material-symbols-outlined">gavel</span>
+        <div>
+          <h4>{total} 处改动等确认</h4>
+          <p>确认之前，板上这几个字段仍然是旧值；同一条目上其它改动已经落地。</p>
+        </div>
+      </header>
+      {entries.map(([flowId, entry]) => (
+        <div key={flowId} className="af-radar-pending-flow">
+          <span className="af-radar-pending-from">来自 {flowId}</span>
+          {(entry.held || []).map((item) => (
+            <div key={`${item.id}:${item.kind}`} className="af-radar-pending-row">
+              <span className="af-radar-pending-what">
+                <b>{item.id}</b>
+                <code>{item.kind}</code>
+                <i>{String(item.from ?? "空") || "空"} → {String(item.to ?? "空") || "空"}</i>
+              </span>
+              {/* 「为什么拦它」要和改动摆在一起。只说「有待确认」，人只会点通过 */}
+              <span className="af-radar-pending-why">{item.reason}</span>
+              <span className="af-radar-pending-act">
+                <button
+                  type="button"
+                  className="af-radar-ghost"
+                  disabled={busy}
+                  onClick={() => onResolve("reject", flowId, item.id)}
+                >
+                  驳回
+                </button>
+                <button
+                  type="button"
+                  className="af-radar-primary"
+                  disabled={busy}
+                  onClick={() => onResolve("approve", flowId, item.id)}
+                >
+                  批准
+                </button>
+              </span>
+            </div>
+          ))}
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function AgentsView({ board, lanes, days, onPick, navigate, returnTo }) {
   const now = Date.now();
   const start = now - days * 24 * 60 * 60 * 1000;
@@ -959,6 +1016,9 @@ export default function RadarPage() {
   const [showNewBoard, setShowNewBoard] = useState(false);
   const [confirmArchive, setConfirmArchive] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  // resolvePending 定义在 reloadBoard 之前，用 ref 绕开顺序依赖而不是把两者揉成一个
+  const reloadBoardRef = useRef(null);
   // 刚归档掉的那块，用来在顶上留一条撤销。可逆的动作，撤销比确认值钱——
   // 确认框只在动手前拦一次，人很快学会闭眼点；撤销在真的点错之后还在
   const [justArchived, setJustArchived] = useState(null);
@@ -1066,6 +1126,26 @@ export default function RadarPage() {
     return () => { cancelled = true; };
   }, [view, active, runDays]);
 
+  /** 批准就写入，驳回不写但记事件——两者都要刷新板，不然人点完看到的还是旧的 */
+  const resolvePending = useCallback(async (action, flow, id) => {
+    if (resolving) return;
+    setResolving(true);
+    try {
+      const res = await fetch("/api/radar/pending", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ board: active, flow, id, action }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body.ok === false) throw new Error(body.error || "处理失败");
+      await reloadBoardRef.current?.();
+    } catch (e) {
+      setError(String(e.message || e));
+    } finally {
+      setResolving(false);
+    }
+  }, [active, resolving]);
+
   // 抽出来是因为改完状态要就地刷新：不刷新的话人点完看到的还是旧状态，会以为没生效
   const reloadBoard = useCallback(async () => {
     if (!active) { setBoard(null); return; }
@@ -1086,6 +1166,7 @@ export default function RadarPage() {
       setBoard(null);
     }
   }, [active, scope]);
+  reloadBoardRef.current = reloadBoard;
 
   useEffect(() => {
     let cancelled = false;
@@ -1196,6 +1277,12 @@ export default function RadarPage() {
                     {item.counts.pending ? (
                       <span className={`af-radar-badge af-radar-badge--${item.worst}`}>{item.counts.pending}</span>
                     ) : null}
+                    {/* 待审批单独一个角标：它和「几条没完成」是两件事，混在一起人分不清该干嘛 */}
+                    {item.pendingCount ? (
+                      <span className="af-radar-badge af-radar-badge--gate" title={`${item.pendingCount} 处改动等确认`}>
+                        {item.pendingCount}
+                      </span>
+                    ) : null}
                   </button>
                 ))}
                 <button
@@ -1241,6 +1328,15 @@ export default function RadarPage() {
               ) : null}
 
               {error ? <p className="af-radar-error">{error}</p> : null}
+
+              {board?.pending ? (
+                <PendingPanel
+                  board={board}
+                  pending={board.pending}
+                  busy={resolving}
+                  onResolve={resolvePending}
+                />
+              ) : null}
 
               {board ? (
                 <>

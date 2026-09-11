@@ -34,6 +34,8 @@ import {
   listRadarBoardIds,
   listRadarBoards,
   radarBoardDir,
+  readRadarPending,
+  resolveRadarPending,
   readRadarBoard,
   readRadarEvents,
   readRadarShard,
@@ -149,9 +151,7 @@ function writePending(board, flowId, held = []) {
     const dir = path.join(radarBoardDir(board));
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, "_pending.json");
-    const prev = (() => {
-      try { return JSON.parse(fs.readFileSync(file, "utf-8")); } catch { return {}; }
-    })();
+    const prev = readRadarPending(board);
     prev[flowId] = { at: new Date().toISOString(), held };
     fs.writeFileSync(file, `${JSON.stringify(prev, null, 2)}\n`, "utf-8");
   } catch (e) {
@@ -432,10 +432,14 @@ export async function runTrackCommand(argv = []) {
       "  commit --board=<板> --flow=<流程> --rows=<json文件>   写一片（流程里用）",
       "         [--fetch-failures=N] [--stale-after-ms=N] [--force]",
       "  create <板> [--title=<标题>]                          建一块空板",
-      "  sync --board --flow --dir=<trackers 目录>             从 trackers/*.md 同步（agent 改文件，这里校验）",
+      "  sync --board --flow --dir=<trackers 目录> [--gate]    从 trackers/*.md 同步（agent 改文件，这里校验）",
+      "       [--flow-ref=<跑它的流程 id>]                      分片名和流程不同名时要带上",
       "  export --board --flow --dir=<trackers 目录>          把一条流程那一片导成 trackers/*.md",
       "  list [--archived]                                    列出所有板",
       "  archive <板> [--undo]                                归档 / 取消归档（不是删除）",
+      "  pending <板>                                         看有哪些改动等确认",
+      "  approve --board --flow [--id=<条目>]                  批准并写入",
+      "  reject  --board --flow [--id=<条目>]                  驳回（不写，但记一条事件）",
       "  show <板> [--json]                                   看一块板的条目",
       "  events <板> [--limit=N]                              看变更流",
       "  rm <板> [--flow=<流程>]                              删一块板，或只删一片",
@@ -456,6 +460,9 @@ export async function runTrackCommand(argv = []) {
       force: flags.force === true || flags.force === "true",
       fetchFailures: flags["fetch-failures"] ?? flags.fetchFailures ?? 0,
       staleAfterMs: flags["stale-after-ms"] ?? flags.staleAfterMs ?? 0,
+      flow: String(flags["flow-ref"] || "").trim()
+        ? { flowId: String(flags["flow-ref"]).trim(), flowSource: String(flags["flow-source"] || "user") }
+        : null,
     });
     if (result.salvaged) {
       console.log(`抓取失败，保留上一次的 ${result.rows} 条：${board}/${flowId}`);
@@ -519,6 +526,11 @@ export async function runTrackCommand(argv = []) {
       staleAfterMs: flags["stale-after-ms"] ?? 0,
       gate: flags.gate === true || flags.gate === "true",
       humanFields: humanEditedFields(dir),
+      // 分片名可以和跑它的那条流程不同名。不记下来的话，协作视图和定时归属
+      // 都会按分片名去找流程，找不到就显示「从没跑过」
+      flow: String(flags["flow-ref"] || "").trim()
+        ? { flowId: String(flags["flow-ref"]).trim(), flowSource: String(flags["flow-source"] || "user") }
+        : null,
     });
     const changed = result.events.length ? `，${result.events.length} 处落地` : "，无变更";
     console.log(`已同步 ${board}/${flowId}：${result.rows} 条${changed}`);
@@ -568,6 +580,49 @@ export async function runTrackCommand(argv = []) {
       console.log(`已导出 ${written} 条到 ${dir}（来自 ${board}/${flowId}），并以 agentflow 身份提交`);
     } else {
       console.log(`已导出 ${written} 条到 ${dir}（来自 ${board}/${flowId}）`);
+    }
+    return 0;
+  }
+
+  /**
+   * 处理挂起的改动。
+   *
+   * 批准 = 把待审批里的目标值真的写进分片；驳回 = 不写，但**记一条事件**。
+   * 驳回本身是信息：agent 连着三轮想把同一条改成 ok 都被驳回，说明它的判定规则该改了，
+   * 而不是让它每轮再试一次。静默丢弃会把这个信号一起丢掉。
+   */
+  if (action === "approve" || action === "reject") {
+    const board = String(flags.board || "");
+    const flowId = String(flags.flow || flags.flowId || "");
+    if (!isValidBoardId(board)) throw fail(`board 不合法：${board}`);
+    if (!flowId) throw fail(`${action} 需要 --flow`);
+    const result = resolveRadarPending(board, flowId, {
+      action,
+      ids: String(flags.id || "").trim() ? [String(flags.id).trim()] : [],
+      by: String(process.env.AGENTFLOW_USER_ID || flags.by || "").trim(),
+    });
+    if (!result.ok) throw fail(result.error || "处理失败");
+    console.log(`${action === "approve" ? "已批准并写入" : "已驳回（未写入）"} ${result.resolved.length} 处：`);
+    for (const item of result.resolved) {
+      console.log(`  ${item.id} ${item.kind} ${item.from ?? ""} → ${item.to ?? ""}`);
+    }
+    if (result.remaining) console.log(`还剩 ${result.remaining} 处待处理`);
+    return 0;
+  }
+
+  /** 看有哪些待审批 */
+  if (action === "pending") {
+    const board = String(positional[1] || flags.board || "");
+    if (!isValidBoardId(board)) throw fail(`board 不合法：${board}`);
+    const pending = readRadarPending(board);
+    const flows = Object.keys(pending);
+    if (!flows.length) { console.log("没有待审批的改动。"); return 0; }
+    for (const flowId of flows) {
+      console.log(`${flowId}（${String(pending[flowId].at || "").slice(0, 19)}）`);
+      for (const item of pending[flowId].held || []) {
+        console.log(`  ${String(item.kind).padEnd(8)} ${item.id}  ${item.from ?? ""} → ${item.to ?? ""}`);
+        console.log(`           ${item.reason}`);
+      }
     }
     return 0;
   }

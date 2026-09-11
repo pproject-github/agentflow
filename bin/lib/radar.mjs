@@ -48,6 +48,7 @@ const BOARD_OVERRIDES_FILE = "_overrides.json";
  * 和覆盖层一样**不进流程分片**——它要活过流程的整片覆盖，否则每天重跑一次就等于把
  * 「今天已经提醒过了」忘掉，降噪当场失效。
  */
+const BOARD_PENDING_FILE = "_pending.json";
 const BOARD_ALERTS_FILE = "_alerts.json";
 
 function radarRoot() {
@@ -514,6 +515,9 @@ export function listRadarBoards({
       staleFlows: loaded.shards.filter((shard) => shard.stale).length,
       conflicts: loaded.conflicts.length,
       counts,
+      // 列表也要知道有没有待审批——切板之前就该看见，而不是点进去才发现
+      pendingCount: Object.values(readRadarPending(board))
+        .reduce((sum, entry) => sum + (Array.isArray(entry?.held) ? entry.held.length : 0), 0),
       worst: RADAR_STATES.find((state) => counts[state] > 0) || "ok",
       soonestDays: soonest ? soonest.daysLeft : null,
     });
@@ -596,6 +600,8 @@ export function readRadarBoard(board, { scope = "mine", username = "", userId = 
       .map((train) => ({ version: String(train?.version || ""), cutoff: String(train?.cutoff || "") }))
       .filter((train) => Number.isFinite(toTime(train.cutoff))),
     rows: visible,
+    // 待审批要跟着板一起回：它是板的状态，页面上得有个角标，而不是等人想起来敲 CLI
+    pending: readRadarPending(board),
     counts: boardCounts(visible),
     spareFields: spareFields(visible, spec.encode),
     totalRows: decorated.length,
@@ -774,6 +780,103 @@ export function rmRadarBoard(board) {
   } catch (e) {
     return { ok: false, error: (e && e.message) || String(e) };
   }
+}
+
+/**
+ * 待审批的改动。和分片并列存在板目录里——它是**板的状态**，不是某次运行的副产品。
+ *
+ * 放运行记录里的话，运行一轮转就没了，而「这条改动还等着人点头」得一直看得见。
+ */
+export function readRadarPending(board) {
+  if (!isValidBoardId(board)) return {};
+  const raw = readJsonFile(path.join(boardDir(board), BOARD_PENDING_FILE)) || {};
+  /**
+   * 丢掉已经不成立的：目标值和现在的值已经一样了。
+   *
+   * 会发生是因为门禁是逐条流程选择开不开的——同一个条目被另一条没开门禁的流程写成了
+   * 目标值，这条待审批就成了幻影。留着的话人会去批一件已经发生的事，
+   * 而「批准」在变更流里又记一条，把真正的那次改动淹掉。
+   */
+  const out = {};
+  for (const [flowId, entry] of Object.entries(raw)) {
+    const shard = readRadarShard(board, flowId);
+    const byId = new Map((shard?.rows || []).map((row) => [String(row?.id || ""), row]));
+    const held = (Array.isArray(entry?.held) ? entry.held : []).filter((item) => {
+      const row = byId.get(String(item?.id || ""));
+      if (!row) return item?.kind === "dropped" ? false : true;
+      return String(row[item.kind] ?? "") !== String(item.to ?? "");
+    });
+    if (held.length) out[flowId] = { ...entry, held };
+  }
+  return out;
+}
+
+export function writeRadarPending(board, value = {}) {
+  if (!isValidBoardId(board)) return { ok: false, error: "board id 不合法" };
+  const file = path.join(boardDir(board), BOARD_PENDING_FILE);
+  // 清空时把文件删掉，而不是留一个 `{}` 的空壳——目录里少一个文件比多一个空文件好读
+  if (!Object.keys(value).length) {
+    try { fs.rmSync(file, { force: true }); } catch { /* 本来就没有 */ }
+    return { ok: true };
+  }
+  fs.mkdirSync(boardDir(board), { recursive: true });
+  writeJsonAtomic(file, value);
+  return { ok: true };
+}
+
+/**
+ * 批准或驳回挂起的改动。
+ *
+ * 批准 = 把目标值真的写进分片；驳回 = 不写。两者都往变更流记一条。
+ *
+ * 驳回必须留痕，而且不是为了审计：**agent 连着三轮想把同一条改成 ok 都被驳回，
+ * 说明它的判定规则该改了**，而不是让它每轮再试一次。静默丢弃会把这个信号一起丢掉。
+ */
+export function resolveRadarPending(board, flowId, { action = "approve", ids = [], by = "" } = {}) {
+  if (!isValidBoardId(board)) return { ok: false, error: "board id 不合法" };
+  if (!isValidShardId(flowId)) return { ok: false, error: "flowId 不合法" };
+  const pending = readRadarPending(board);
+  const entry = pending[flowId];
+  if (!entry || !Array.isArray(entry.held) || !entry.held.length) {
+    return { ok: false, error: `${board}/${flowId} 没有待审批的改动` };
+  }
+  const wanted = new Set((Array.isArray(ids) ? ids : [ids]).map(String).filter(Boolean));
+  const picked = wanted.size ? entry.held.filter((item) => wanted.has(String(item.id))) : entry.held;
+  if (!picked.length) return { ok: false, error: "待审批里没有指定的条目" };
+  const rest = entry.held.filter((item) => !picked.includes(item));
+
+  if (action === "approve") {
+    const shard = readRadarShard(board, flowId);
+    if (!shard) return { ok: false, error: `没有这一片：${board}/${flowId}` };
+    const rows = (shard.rows || []).map((row) => ({ ...row }));
+    const byId = new Map(rows.map((row) => [String(row.id || ""), row]));
+    for (const item of picked) {
+      const id = String(item.id || "");
+      if (item.kind === "dropped") { byId.delete(id); continue; }
+      const row = byId.get(id);
+      if (row) row[item.kind] = item.to;
+    }
+    const written = writeRadarShard(board, flowId, {
+      ...shard,
+      rows: rows.filter((row) => byId.has(String(row.id || ""))),
+      updatedAt: new Date().toISOString(),
+      writtenBy: shard.writtenBy || by,
+    });
+    if (!written.ok) return written;
+  }
+
+  for (const item of picked) {
+    appendRadarEvent(board, {
+      kind: action === "approve" ? "approved" : "rejected",
+      id: item.id, field: item.kind, from: item.from, to: item.to,
+      why: item.reason, by: by || "unknown", flowId,
+    });
+  }
+
+  if (rest.length) pending[flowId] = { ...entry, held: rest };
+  else delete pending[flowId];
+  writeRadarPending(board, pending);
+  return { ok: true, action, resolved: picked, remaining: rest.length };
 }
 
 /** 往变更流追加一条 */
