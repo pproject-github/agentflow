@@ -174,6 +174,20 @@ test("投递失败不抛异常，但状态照样推进，免得每次运行都�
   assert.equal(result.alert.lastAlertStatus, "failed");
 });
 
+// 配置的位置和读取的位置必须一致：文档让人在管理后台填，代码却只读 process.env 的话，
+// 页面上填了也不生效，而且没有任何报错——只是通知里悄悄少了链接。
+test("回跳链接认管理后台里配的站点地址", async () => {
+  const sent = [];
+  const result = await notifyScheduleOutcome({
+    entry: entryFixture(),
+    status: "failed",
+    error: "boom",
+    deps: depsFixture(sent, { env: { AGENTFLOW_PUBLIC_BASE_URL: "http://ai.mengma.bigo.inner/" } }),
+  });
+  assert.equal(result.sent, true);
+  assert.match(sent[0].markdown, /http:\/\/ai\.mengma\.bigo\.inner\/workspace\?flowId=daily_task/);
+});
+
 test("全局开关关掉后一条都不发", async () => {
   const sent = [];
   const result = await notifyScheduleOutcome({

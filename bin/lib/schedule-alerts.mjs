@@ -118,11 +118,20 @@ export async function notifyScheduleOutcome(input = {}) {
     status,
     error = "",
     now = Date.now(),
-    publicBaseUrl = process.env.AGENTFLOW_PUBLIC_BASE_URL || process.env.AGENTFLOW_SHARE_BASE_URL || "",
     deps = {},
   } = input;
 
   const env = (deps.readGlobalEnv || readGlobalEnvObject)();
+  // 站点地址优先认管理后台里配的那份：文档让人在「设置 → 环境变量」填，如果这里只读
+  // process.env，页面上填了也不生效——配置的位置和读取的位置必须是同一个
+  const publicBaseUrl = String(
+    input.publicBaseUrl
+    || env?.AGENTFLOW_PUBLIC_BASE_URL
+    || env?.AGENTFLOW_SHARE_BASE_URL
+    || process.env.AGENTFLOW_PUBLIC_BASE_URL
+    || process.env.AGENTFLOW_SHARE_BASE_URL
+    || ""
+  ).trim();
   const enabled = String(env?.AGENTFLOW_SCHEDULE_ALERTS ?? "").trim().toLowerCase() !== "off";
   const decision = decideScheduleAlert(entry?.alert, status, now);
   if (!enabled) return { sent: false, reason: "disabled", alert: entry?.alert };
