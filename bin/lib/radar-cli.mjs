@@ -22,8 +22,12 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
+import { createEmptyFlow, resolveFlowDirForWrite } from "./flow-write.mjs";
 import { readTrackerDocs, writeTrackerDoc } from "./radar-docs.mjs";
 import { applyGate } from "./radar-gate.mjs";
+import { writeWorkspaceGraph } from "./workspace-server.mjs";
+import { materializeFlow, planToPending } from "./radar-plan-apply.mjs";
+import { normalizeRadarPlan, parseRadarPlan } from "./radar-planner.mjs";
 import {
   RADAR_STATES,
   appendRadarEvent,
@@ -34,7 +38,9 @@ import {
   listRadarBoardIds,
   listRadarBoards,
   radarBoardDir,
+  PENDING_PLAN_KEY,
   readRadarPending,
+  writeRadarPending,
   resolveRadarPending,
   readRadarBoard,
   readRadarEvents,
@@ -440,6 +446,7 @@ export async function runTrackCommand(argv = []) {
       "  pending <板>                                         看有哪些改动等确认",
       "  approve --board --flow [--id=<条目>]                  批准并写入",
       "  reject  --board --flow [--id=<条目>]                  驳回（不写，但记一条事件）",
+      "  plan apply --board --plan=<plan.md> --workspace=<板目录>  把指挥官的计划提案成待审批",
       "  show <板> [--json]                                   看一块板的条目",
       "  events <板> [--limit=N]                              看变更流",
       "  rm <板> [--flow=<流程>]                              删一块板，或只删一片",
@@ -591,6 +598,43 @@ export async function runTrackCommand(argv = []) {
    * 驳回本身是信息：agent 连着三轮想把同一条改成 ok 都被驳回，说明它的判定规则该改了，
    * 而不是让它每轮再试一次。静默丢弃会把这个信号一起丢掉。
    */
+  /**
+   * 把指挥官的计划提案成待审批。
+   *
+   * 不直接建流程：一条每小时跑的 agent 流程是在烧钱，而且它认领了条目就会开始覆盖
+   * 别人写的值。更要紧的是**图仍然是授权边界**——agent 提议图，人批准图，图约束执行。
+   */
+  if (action === "plan") {
+    const sub = String(positional[1] || "").trim();
+    if (sub !== "apply") throw fail("只支持 `track plan apply`");
+    const board = String(flags.board || "");
+    const planPath = String(flags.plan || "");
+    const workspacePath = String(flags.workspace || flags.dir || "");
+    if (!isValidBoardId(board)) throw fail(`board 不合法：${board}`);
+    if (!planPath || !workspacePath) throw fail("plan apply 需要 --board、--plan、--workspace");
+
+    let text = "";
+    try { text = fs.readFileSync(planPath, "utf-8"); }
+    catch (e) { throw fail(`读不到计划文件 ${planPath}：${(e && e.message) || e}`); }
+    const parsed = parseRadarPlan(text);
+    if (!parsed.ok) throw fail(`计划不是合法 JSON：${parsed.error}`);
+
+    const loaded = readRadarBoard(board, { scope: "all" });
+    const normalized = normalizeRadarPlan(parsed.plan, loaded);
+    for (const warning of normalized.warnings || []) console.log(`  ⚠ ${warning}`);
+
+    const held = planToPending(normalized, { board, workspacePath });
+    if (!held.length) { console.log("计划里没有要建或要改的流程。"); return 0; }
+
+    const pending = readRadarPending(board);
+    const key = PENDING_PLAN_KEY;
+    pending[key] = { at: new Date().toISOString(), held: [...(pending[key]?.held || []), ...held] };
+    writeRadarPending(board, pending);
+    console.log(`${held.length} 条流程提案等确认：`);
+    for (const item of held) console.log(`  ${item.id}\n    ${item.reason}`);
+    return 0;
+  }
+
   if (action === "approve" || action === "reject") {
     const board = String(flags.board || "");
     const flowId = String(flags.flow || flags.flowId || "");
@@ -602,6 +646,20 @@ export async function runTrackCommand(argv = []) {
       by: String(process.env.AGENTFLOW_USER_ID || flags.by || "").trim(),
     });
     if (!result.ok) throw fail(result.error || "处理失败");
+    for (const item of result.flowProposals || []) {
+      if (action !== "approve") { console.log(`  已驳回流程提案 ${item.id}`); continue; }
+      const out = materializeFlow(
+        { ...item.flowSpec, action: item.action },
+        {
+          workspaceRoot: process.cwd(),
+          userId: String(process.env.AGENTFLOW_USER_ID || ""),
+          createEmptyFlow, writeWorkspaceGraph, resolveFlowDirForWrite,
+        },
+      );
+      console.log(out.ok
+        ? `  已建流程 ${out.flowId}（默认停用，去定时任务页开启）`
+        : `  流程 ${item.id} 没建成：${out.error}`);
+    }
     console.log(`${action === "approve" ? "已批准并写入" : "已驳回（未写入）"} ${result.resolved.length} 处：`);
     for (const item of result.resolved) {
       console.log(`  ${item.id} ${item.kind} ${item.from ?? ""} → ${item.to ?? ""}`);

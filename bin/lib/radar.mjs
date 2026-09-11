@@ -49,6 +49,8 @@ const BOARD_OVERRIDES_FILE = "_overrides.json";
  * 「今天已经提醒过了」忘掉，降噪当场失效。
  */
 const BOARD_PENDING_FILE = "_pending.json";
+/** 流程提案挂在这个键下，它不是分片 */
+export const PENDING_PLAN_KEY = "_plan";
 const BOARD_ALERTS_FILE = "_alerts.json";
 
 function radarRoot() {
@@ -799,9 +801,11 @@ export function readRadarPending(board) {
    */
   const out = {};
   for (const [flowId, entry] of Object.entries(raw)) {
-    const shard = readRadarShard(board, flowId);
+    const shard = flowId === PENDING_PLAN_KEY ? null : readRadarShard(board, flowId);
     const byId = new Map((shard?.rows || []).map((row) => [String(row?.id || ""), row]));
     const held = (Array.isArray(entry?.held) ? entry.held : []).filter((item) => {
+      // 建流程的提案没有「目标值已等于现值」这回事，一直留着直到有人处理
+      if (item?.kind === "flow") return true;
       const row = byId.get(String(item?.id || ""));
       if (!row) return item?.kind === "dropped" ? false : true;
       return String(row[item.kind] ?? "") !== String(item.to ?? "");
@@ -834,7 +838,9 @@ export function writeRadarPending(board, value = {}) {
  */
 export function resolveRadarPending(board, flowId, { action = "approve", ids = [], by = "" } = {}) {
   if (!isValidBoardId(board)) return { ok: false, error: "board id 不合法" };
-  if (!isValidShardId(flowId)) return { ok: false, error: "flowId 不合法" };
+  // `_plan` 是流程提案的篮子，不是分片——它不碰任何分片文件，所以不按分片名校验。
+  // 和 `_board.json` / `_alerts.json` 同一套约定：下划线开头的是板级的东西
+  if (flowId !== PENDING_PLAN_KEY && !isValidShardId(flowId)) return { ok: false, error: "flowId 不合法" };
   const pending = readRadarPending(board);
   const entry = pending[flowId];
   if (!entry || !Array.isArray(entry.held) || !entry.held.length) {
@@ -845,12 +851,16 @@ export function resolveRadarPending(board, flowId, { action = "approve", ids = [
   if (!picked.length) return { ok: false, error: "待审批里没有指定的条目" };
   const rest = entry.held.filter((item) => !picked.includes(item));
 
-  if (action === "approve") {
+  // 建流程的提案不动分片，交给调用方去落地——store 层不该知道怎么写流程文件
+  const flowProposals = picked.filter((item) => item.kind === "flow");
+  const fieldChanges = picked.filter((item) => item.kind !== "flow");
+
+  if (action === "approve" && fieldChanges.length) {
     const shard = readRadarShard(board, flowId);
     if (!shard) return { ok: false, error: `没有这一片：${board}/${flowId}` };
     const rows = (shard.rows || []).map((row) => ({ ...row }));
     const byId = new Map(rows.map((row) => [String(row.id || ""), row]));
-    for (const item of picked) {
+    for (const item of fieldChanges) {
       const id = String(item.id || "");
       if (item.kind === "dropped") { byId.delete(id); continue; }
       const row = byId.get(id);
@@ -876,7 +886,8 @@ export function resolveRadarPending(board, flowId, { action = "approve", ids = [
   if (rest.length) pending[flowId] = { ...entry, held: rest };
   else delete pending[flowId];
   writeRadarPending(board, pending);
-  return { ok: true, action, resolved: picked, remaining: rest.length };
+  // flowProposals 交回给调用方：它拿着 workspaceRoot 和用户上下文，store 层没有
+  return { ok: true, action, resolved: picked, flowProposals, remaining: rest.length };
 }
 
 /** 往变更流追加一条 */

@@ -256,6 +256,54 @@ agentflow track reject  --board --flow [--id=]    驳回（不写，但记一条
 不记下来的话，协作视图和定时归属都会按分片名去找流程，找不到就显示「从没跑过」。
 所以 `sync` / `commit` 要带 `--flow-ref=<跑它的流程 id>`。
 
+## 指挥官：给一个 topic，它自己排监控
+
+指挥官就是板 workspace 里的**另一条定时流程**，和监控流程同构，只是任务不同：
+
+```
+定时唤醒 → cd 进板目录 → 读 board.md + trackers/ + 运行记录
+        → 该加追踪项就加文件；该调监控就写 runtime/plan.md
+        → track sync --gate        条目变更走门禁
+        → track plan apply         流程变更提案成待审批
+```
+
+不用发明「常驻 agent」这一层——定时唤醒本来就是 `workspace.scheduledRun` 干的事。
+
+### 建流程一律审批，没有例外
+
+按「错了代价多大」排，建流程是最贵的一档：一条每小时跑的 agent 流程在**烧钱**，
+而且它一旦认领了条目就会开始覆盖别人写的值。
+
+但更要紧的是边界：**图仍然是授权边界**。agent 提议图、人批准图、图约束执行。
+让 agent 直接建流程的话，「监控型不能写发现型的字段」就只剩提示词里的一句建议。
+
+```
+agentflow track plan apply --board=X --plan=runtime/plan.md --workspace=<板目录>
+```
+
+提案落进 `_pending.json` 的 `_plan` 篮子（它不是分片，所以不按分片名校验），
+审批正文说清楚**批了会发生什么**：
+
+```
+新建监控流程 android-repo-scan，按 0 9 * * * 跑，认领 3 个条目，
+写 state/current/evidence，建好后默认停用，要你在定时任务页上手动开启
+```
+
+**建出来默认 `enabled: false`。** 批准建它是一回事，让它开始每天烧 token 是另一回事；
+混成一个决定的话，批准一份计划就等于同时批了往后每天的开销。
+
+### 授权范围落进提示词
+
+生成的流程把 `owns` / `updates` 写进 agent 的提示词：
+
+```
+你负责这些追踪项：play-target-api-36、android16-edge-to-edge、play-16kb-page-size
+你只更新这几个字段：state / current / evidence。别的字段归别人管，不要动。
+```
+
+光靠图的连线约束不住——agent 拿到的是整个目录，什么都能改，得明确告诉它哪些不归它管。
+生成的 `sync` 节点一定带 `--gate`，否则它写什么都直接落地。
+
 ## 命令
 
 ```
@@ -268,6 +316,7 @@ agentflow track archive <板> [--undo]      归档 / 取消归档（不是删除
 agentflow track export --board --flow --dir=<trackers>   板 → 文件
 agentflow track sync   --board --flow --dir=<trackers> [--gate] [--held-out=]  文件 → 板
 agentflow track pending/approve/reject     处理挂起的改动
+agentflow track plan apply --board --plan --workspace   计划 → 待审批的流程提案
 agentflow track rm <板> [--flow=<流程>]    彻底删除
 ```
 
@@ -284,4 +333,5 @@ agentflow track rm <板> [--flow=<流程>]    彻底删除
 - `bin/lib/radar-cli.mjs` — `agentflow track`
 - `bin/lib/radar-docs.mjs` — `trackers/*.md` 的读写（frontmatter / 正文两层）
 - `bin/lib/radar-gate.mjs` — 门禁判定（纯函数，从告警规则反推）
+- `bin/lib/radar-plan-apply.mjs` — 计划 → 流程提案 → 真流程
 - `bin/lib/approval-notify.mjs` — 审批的企业微信通知（所有审批共用，不只雷达）
