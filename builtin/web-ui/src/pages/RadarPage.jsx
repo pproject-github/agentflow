@@ -291,7 +291,36 @@ function useVocab() {
     tags: spec?.tags || [],
   };
 }
-const KIND_LABEL = { moved: "改期", worse: "变坏", better: "变好", new: "新增" };
+/**
+ * 变更流里的 kind 怎么念。
+ *
+ * 之前这里写的是 `moved / worse / better / new`——和 `diffRows()` 真正产出的
+ * `added / state / due / current / dropped` **一个都对不上**，于是变更抽屉里
+ * 直接显示原始英文。这张表现在是唯一的一份，抽屉和单条目的经过共用。
+ */
+const EVENT_LABEL = {
+  added: "进入",
+  state: "状态",
+  current: "结论",
+  due: "期限",
+  dropped: "不再产出",
+  approved: "已批准",
+  rejected: "已驳回",
+  board_created: "建板",
+  // 人工覆盖层写的：字段名即 kind，所以人手改状态照样落在「只看状态」那一档里
+  owner: "负责人",
+  settled: "封存",
+  archived: "归档",
+  title: "标题",
+  tags: "标签",
+  startAt: "开始",
+  endAt: "完成",
+};
+/** 事件的语气：决定那一列的颜色。人做的决定和流程查出来的结果不是一回事 */
+const EVENT_TONE = {
+  added: "add", dropped: "drop", state: "state",
+  approved: "man", rejected: "man",
+};
 
 /** 通道可以写成 "field" 或 { field, ... }，两种都要认 */
 function channelField(channel) {
@@ -1050,9 +1079,7 @@ function Runway({ board, encode, year, group, primaryOnly = false, onPick, tagFi
 }
 
 /** 简报里一条变化怎么念。`state` 是状态变了，`current` 是结论变了，其余是进出板 */
-const EVENT_VERB = {
-  state: "状态", current: "结论", moved: "改期", dropped: "不再产出", added: "新增", approved: "已批准",
-};
+
 
 /**
  * 状态页：这块板的主形态。
@@ -1322,7 +1349,7 @@ function StatusView({ board, events, group, onPick, onTag, tagFilter = "" }) {
             <span className={`af-radar-dfrom af-radar-dfrom--${event.to || ""}`}>
               {event.kind === "state"
                 ? `${vocab.state(event.from)} → ${vocab.state(event.to)}`
-                : EVENT_VERB[event.kind] || event.kind}
+                : EVENT_LABEL[event.kind] || event.kind}
             </span>
             <span className="af-radar-dtitle">{String(event.title || event.id || "")}</span>
             {event.kind === "current" && event.to ? <span className="af-radar-dwhy">{event.to}</span> : null}
@@ -2259,6 +2286,10 @@ function RowDrawer({ row, board, onClose, onChanged, onAskAi, standalone = false
         </section>
 
         <section className="af-radar-modal-col">
+        {/* 结论说的是「现在怎么样」，经过说的是「怎么走到这儿的」。
+            两者挨着放：单看现状答不出「这是刚变坏的，还是烂了三个月了」 */}
+        <Timeline board={board?.board || ""} id={String(row?.id || "")} folded={!standalone} />
+
         {/* 结论和依据是这一条最该被读的两段，本来沉在最底下那堆原始字段里，
             和 overdue/settled/docLines 一个待遇。板自己配了 detail.sections 的就听板的 */}
         {verdictFields.length ? (
@@ -2311,6 +2342,184 @@ function RowDrawer({ row, board, onClose, onChanged, onAskAi, standalone = false
   );
 }
 
+/** 同一天的多条并在一个日期下。`at` 坏掉的归到「时间不详」，不要整段塌掉 */
+function byDay(events = []) {
+  const out = [];
+  for (const event of events) {
+    const time = toTime(event?.at);
+    const day = Number.isFinite(time) && time ? formatDay(event.at) : "时间不详";
+    const last = out[out.length - 1];
+    if (last && last.day === day) last.rows.push(event);
+    else out.push({ day, rows: [event] });
+  }
+  return out;
+}
+
+/** 状态胶囊。空值念「无」——「从空变成 warn」和「从 ok 变成 warn」不是一回事 */
+function StatePill({ value, vocab }) {
+  const state = String(value || "").trim();
+  return <i className={`af-radar-tpill af-radar-tpill--${state || "none"}`}>{state ? vocab.state(state) : "无"}</i>;
+}
+
+/**
+ * 一条事件的正文。抽屉和单条目的经过共用——两份实现迟早会分叉，
+ * 而它们说的是同一件事。
+ */
+function EventBody({ event, vocab }) {
+  const kind = String(event?.kind || "");
+  const from = String(event?.from ?? "");
+  const to = String(event?.to ?? "");
+  if (kind === "state") {
+    return (
+      <span className="af-radar-tsw">
+        <StatePill value={from} vocab={vocab} />
+        <i className="af-radar-tarrow">→</i>
+        <StatePill value={to} vocab={vocab} />
+      </span>
+    );
+  }
+  if (kind === "due") {
+    return (
+      <span className="af-radar-tsw">
+        <i className="af-radar-tpill af-radar-tpill--none">{from ? formatDay(from) : "无期限"}</i>
+        <i className="af-radar-tarrow">→</i>
+        <i className="af-radar-tpill af-radar-tpill--none">{to ? formatDay(to) : "无期限"}</i>
+      </span>
+    );
+  }
+  if (kind === "added") {
+    return (
+      <>
+        <span>{String(event?.title || event?.id || "")}</span>
+        {event?.state ? <StatePill value={event.state} vocab={vocab} /> : null}
+      </>
+    );
+  }
+  if (kind === "dropped") return <span>{String(event?.title || event?.id || "")}</span>;
+  if (kind === "approved" || kind === "rejected") {
+    return (
+      <span className="af-radar-tsw">
+        <i className="af-radar-tfield">{vocab.field(String(event?.field || ""))}</i>
+        <StatePill value={from} vocab={vocab} />
+        <i className="af-radar-tarrow">→</i>
+        <StatePill value={to} vocab={vocab} />
+      </span>
+    );
+  }
+  // 人工改的文本字段：新旧都短，直接并排给出来比「新值 + 下面一行旧值」好读
+  if (["owner", "title", "settled", "archived", "tags"].includes(kind)) {
+    return (
+      <span className="af-radar-tsw">
+        <i className="af-radar-tpill af-radar-tpill--none">{from || "空"}</i>
+        <i className="af-radar-tarrow">→</i>
+        <i className="af-radar-tpill af-radar-tpill--none">{to || "空"}</i>
+      </span>
+    );
+  }
+  // current 之类：新值是正文，旧值压一档放在下面（见 Timeline 里的 from 行）
+  return <span>{to || String(event?.title || "")}</span>;
+}
+
+/**
+ * 一条追踪项的经过。
+ *
+ * 事件不是流程上报的，是 `diffRows()` 对比前后两份分片**推导**出来的——
+ * 所以同一份结果跑十次只会产生一次记录，流程崩了重跑也不会多出一段时间线。
+ * 这一点决定了这里能直接把它当「这件事的经过」读，而不是「流程跑过几次」。
+ *
+ * 弹框里只给最近几条，独立页全展开：轮询型的板一个月能攒上百条。
+ */
+function Timeline({ board, id, folded = true }) {
+  const vocab = useVocab();
+  const [events, setEvents] = useState(null);
+  const [error, setError] = useState("");
+  const [all, setAll] = useState(!folded);
+  const [only, setOnly] = useState("");
+
+  useEffect(() => {
+    if (!board || !id) return undefined;
+    let alive = true;
+    setEvents(null);
+    setError("");
+    fetch(`/api/radar/events?board=${encodeURIComponent(board)}&id=${encodeURIComponent(id)}`)
+      .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
+      .then((data) => { if (alive) setEvents(Array.isArray(data?.events) ? data.events : []); })
+      .catch(() => { if (alive) setError("读不到这一条的经过"); });
+    return () => { alive = false; };
+  }, [board, id]);
+
+  if (error) return <><h4>经过</h4><p className="af-radar-none">{error}</p></>;
+  if (!events) return <><h4>经过</h4><LoadingState variant="compact" label="读经过" /></>;
+  if (!events.length) {
+    return (
+      <>
+        <h4>经过</h4>
+        <p className="af-radar-none">还没有变化记录。这一条进来之后就没动过。</p>
+      </>
+    );
+  }
+
+  const picked = only === "state" ? events.filter((event) => event.kind === "state")
+    : only === "current" ? events.filter((event) => event.kind === "current")
+      : events;
+  const shown = all ? picked : picked.slice(0, 5);
+  let lastStamp = "";
+
+  return (
+    <>
+      <div className="af-radar-thd">
+        <h4>经过</h4>
+        <div className="af-radar-seg af-radar-seg--tiny">
+          {[["", "全部"], ["state", "只看状态"], ["current", "只看结论"]].map(([key, label]) => (
+            <button
+              type="button"
+              key={key || "all"}
+              className={only === key ? "af-radar-seg--on" : ""}
+              onClick={() => setOnly(key)}
+            >{label}</button>
+          ))}
+        </div>
+      </div>
+      {!picked.length ? <p className="af-radar-none">这一类还没有记录。</p> : null}
+      {byDay(shown).map((group) => (
+        <Fragment key={group.day}>
+          <div className="af-radar-tday">{group.day}</div>
+          {group.rows.map((event, index) => {
+            const stamp = String(event.at || "").slice(0, 16);
+            // 同一时刻的多条只在第一条打时间：一次运行里状态和结论一起变，
+            // 逐条重复时间戳会读成「发生了两次」
+            const repeat = stamp && stamp === lastStamp;
+            lastStamp = stamp;
+            const tone = EVENT_TONE[event.kind] || "cur";
+            // by 是流程时不显示——那是常态，显示只是噪音。是人名才挂出来
+            const who = String(event.by || "").trim();
+            const human = who && who !== "flow" && who !== String(event.flowId || "");
+            return (
+              <div className={`af-radar-tev${human ? " af-radar-tev--man" : ""}`} key={`${event.at}-${index}`}>
+                <span className="af-radar-tat">{repeat ? "" : String(event.at || "").slice(11, 16)}</span>
+                <span className={`af-radar-tkind af-radar-tkind--${human ? "man" : tone}`}>
+                  {human ? "人工改" : EVENT_LABEL[event.kind] || event.kind}
+                </span>
+                <span className="af-radar-tmsg"><EventBody event={event} vocab={vocab} /></span>
+                {event.kind === "current" && event.from
+                  ? <span className="af-radar-tfrom">↑ 从「{String(event.from)}」</span>
+                  : null}
+                {event.why ? <span className="af-radar-tfrom">{String(event.why)}</span> : null}
+                {human ? <span className="af-radar-tby">{who}</span> : null}
+              </div>
+            );
+          })}
+        </Fragment>
+      ))}
+      {!all && picked.length > shown.length ? (
+        <button type="button" className="af-radar-link" onClick={() => setAll(true)}>
+          看全部（{picked.length} 条）
+        </button>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * 变更流走侧边抽屉，不占主屏。
  *
@@ -2332,7 +2541,7 @@ function EventsDrawer({ events, onClose }) {
               <li key={`${event.at}-${index}`}>
                 <div className="af-radar-event-top">
                   <span className={`af-radar-kind af-radar-kind--${event.kind || "new"}`}>
-                    {KIND_LABEL[event.kind] || event.kind || "变更"}
+                    {EVENT_LABEL[event.kind] || event.kind || "变更"}
                   </span>
                   <time>{new Date(event.at).toLocaleString()}</time>
                 </div>

@@ -389,6 +389,70 @@ function rollupFacets(rows = [], shards = []) {
   return rows;
 }
 
+/** 大组顺着 parent 链往下淌。环由 seen 挡住——父子成环时不该死循环 */
+function inheritTheme(rows = []) {
+  const byId = new Map(rows.map((row) => [String(row?.id || ""), row]));
+  /*
+   * 先把「谁自己申明了大组」快照下来，再开始往下填。
+   *
+   * 边走边读当前值的话，第三层会从**刚被填上**的第二层继承，themeFrom 指向中间那条
+   * 而不是真正申明它的那条——而且指向谁取决于遍历顺序。快照一次，结果就是确定的。
+   */
+  const declared = new Map();
+  for (const row of rows) {
+    const theme = String(row?.theme || "").trim();
+    if (theme) declared.set(String(row?.id || ""), theme);
+  }
+  for (const row of rows) {
+    const id = String(row?.id || "");
+    if (declared.has(id)) continue;
+    const seen = new Set([id]);
+    let cursor = byId.get(String(row?.parent || "").trim());
+    while (cursor && !seen.has(String(cursor.id || ""))) {
+      const up = String(cursor.id || "");
+      seen.add(up);
+      if (declared.has(up)) { row.theme = declared.get(up); row.themeFrom = up; break; }
+      cursor = byId.get(String(cursor.parent || "").trim());
+    }
+  }
+  return rows;
+}
+
+/**
+ * 词典违规：这一批行有没有说板不认识的话。
+ *
+ * 和 `ownsViolations` 一个性质——挡的不是「判断错了」（那是门禁的活），
+ * 挡的是**说了板词典里没有的词**。拼错的标签静默留下的话，词典就只是一句建议，
+ * 而「标签只能从 vocab 里挑」这句提示词永远不会真的失败一次。
+ *
+ * 只在板真的申明过词典时才校验：空词典意味着这块板还没定过规矩，不是「什么都不许写」。
+ */
+export function vocabViolations(rows = [], spec = {}) {
+  const themes = new Set(normalizeThemes(spec?.themes).map((item) => item.key));
+  const tags = new Set(Array.isArray(spec?.tags) ? spec.tags.map((tag) => String(tag).trim()) : []);
+  const out = [];
+  for (const row of rows) {
+    const id = String(row?.id || "").trim();
+    if (!id) continue;
+    const theme = String(row?.theme || "").trim();
+    const parent = String(row?.parent || "").trim();
+    // 大组只写在树顶。子行的归属顺着 parent 推得出来，写第二份就是给自己留一个会漂的副本
+    if (theme && parent) {
+      out.push(`${id}：子行不要写 theme（它从 ${parent} 继承），大组只写在最上面那一条`);
+    } else if (theme && themes.size && !themes.has(theme)) {
+      out.push(`${id}：theme「${theme}」不在板的大组里（${[...themes].join(" / ")}）`);
+    }
+    if (!tags.size) continue;
+    for (const tag of normalizeTags(row?.tags)) {
+      if (tags.has(tag)) continue;
+      out.push(themes.has(tag)
+        ? `${id}：标签「${tag}」是大组，不是标签——归属靠 parent 继承，不要当标签重复一遍`
+        : `${id}：标签「${tag}」不在板的标签词典里（${[...tags].join(" / ")}）`);
+    }
+  }
+  return out;
+}
+
 /**
  * tag 归一成数组。
  *
@@ -569,9 +633,23 @@ function defaultSpec(spec = {}) {
      */
     states: labelMap(spec.states),
     themes: normalizeThemes(spec.themes),
-    tags: Array.isArray(spec.tags)
-      ? [...new Set(spec.tags.map((tag) => String(tag ?? "").trim()).filter(Boolean))]
-      : [],
+    /**
+     * 标签词典 = 申明的标签 **减去** 所有大组 key。两套词典按定义不相交。
+     *
+     * 大组回答「这条属于哪儿」：单值、有中文 label、是页面上的分区。
+     * 标签回答「这件事要动哪儿」：多值、扁平、用来筛。两者正交——
+     * 一条 aep 的政策底下完全可能有个 native 的活。
+     *
+     * 同一个串同时出现在两套词典里，流程就没有任何依据判断该写进 `theme` 还是
+     * `tags`，于是两个都写：每个子行把父行的大组又抄了一遍。抄出来的那份
+     * 既冗余（顺着 parent 就能推），又会漂（政策改挂大组时它开始撒谎，没人发现）。
+     */
+    tags: (() => {
+      const themeKeys = new Set(normalizeThemes(spec.themes).map((item) => item.key));
+      const raw = Array.isArray(spec.tags) ? spec.tags : [];
+      return [...new Set(raw.map((tag) => String(tag ?? "").trim()).filter(Boolean))]
+        .filter((tag) => !themeKeys.has(tag));
+    })(),
     fields: labelMap(spec.fields),
     encode: {
       lane: encode.lane || "title",
@@ -731,6 +809,15 @@ function loadBoard(board, now = Date.now()) {
    */
   rollupFacets([...byId.values()], shards);
 
+  /**
+   * 大组往下继承。状态往上卷，大组往下淌——同一棵树上两个方向的推导。
+   *
+   * 大组只写在树顶那一条（政策）上。子行不写、也不准写：写了就是把可推导的东西
+   * 又存了一份，政策改挂大组的那天这份副本开始撒谎。跑道按大组分组时要用到每一行的
+   * 归属，所以在这里补齐——是**算出来的读模型**，不是存下来的。
+   */
+  inheritTheme([...byId.values()]);
+
   return {
     board,
     title: String(meta.title || board),
@@ -846,6 +933,38 @@ export function setRadarItemOverride(board, itemId, {
 
   fs.mkdirSync(boardDir(board), { recursive: true });
   writeJsonAtomic(overridesPath(board), next);
+
+  /**
+   * 人改的也进变更流。
+   *
+   * 这一层原来完全不记账：人在页面上把一条从「未开始」点成「进行中」，覆盖层变了、
+   * 板上也变了，但变更流里一个字都没有——三周后回头看只看得到流程查出来的结果，
+   * 看不到中间有人替它做过决定。而那恰恰是最该先认出来的一类。
+   *
+   * 记在这里而不是 HTTP 路由里：CLI 改的、脚本改的走的是同一个函数，
+   * 记在路由上只盖得住页面那一条路。
+   */
+  const actor = String(by || "").trim();
+  for (const field of ["state", "owner", "settled", "archived", "title", ...HUMAN_DATE_FIELDS]) {
+    const before = previous[field];
+    const after = merged[field];
+    if (String(before ?? "") === String(after ?? "")) continue;
+    appendRadarEvent(board, {
+      kind: field,
+      id,
+      from: before === undefined ? "" : String(before),
+      to: after === undefined ? "" : String(after),
+      by: actor || "unknown",
+      ...(note === undefined ? {} : { why: String(note ?? "") }),
+    });
+  }
+  // 标签是集合，逐个比对没意义——变没变看整体
+  const tagsBefore = normalizeTags(previous.tags).join(" ");
+  const tagsAfter = normalizeTags(merged.tags).join(" ");
+  if (tagsBefore !== tagsAfter) {
+    appendRadarEvent(board, { kind: "tags", id, from: tagsBefore, to: tagsAfter, by: actor || "unknown" });
+  }
+
   return { ok: true, board, itemId: id, override: next[id] || null };
 }
 
@@ -1047,8 +1166,16 @@ export function readRadarBoard(board, {
   };
 }
 
-/** 变更流。文件不存在就是「还没有变更」，不是错误 */
-export function readRadarEvents(board, { limit = EVENTS_DEFAULT_LIMIT } = {}) {
+/**
+ * 变更流，从新到旧。文件不存在就是「还没有变更」，不是错误。
+ *
+ * `id` 给的话只回这一条的经过。**过滤发生在截断之前**——原来的写法是先
+ * `slice(-limit)` 再解析，套上 id 过滤就会变成「在最近 400 行里找这一条」：
+ * 一条安静的条目（三个月没动过）会因为最近 400 行里没有它而显示「没有经过」，
+ * 而它明明有。所以这里从尾部往回走，够数了才停，`limit` 的语义是
+ * 「这个 id 返回多少条」而不是「读多少行」。
+ */
+export function readRadarEvents(board, { limit = EVENTS_DEFAULT_LIMIT, id = "" } = {}) {
   if (!isValidBoardId(board)) return [];
   let text = "";
   try {
@@ -1057,16 +1184,22 @@ export function readRadarEvents(board, { limit = EVENTS_DEFAULT_LIMIT } = {}) {
     return [];
   }
   const lines = text.split(/\r?\n/).filter(Boolean);
+  const cap = Math.max(1, Number(limit) || EVENTS_DEFAULT_LIMIT);
+  const wanted = String(id || "").trim();
   const out = [];
-  for (const line of lines.slice(-Math.max(1, Number(limit) || EVENTS_DEFAULT_LIMIT))) {
+  for (let i = lines.length - 1; i >= 0 && out.length < cap; i -= 1) {
+    let parsed = null;
     try {
-      const parsed = JSON.parse(line);
-      if (parsed && typeof parsed === "object") out.push(parsed);
+      parsed = JSON.parse(lines[i]);
     } catch {
       // 单行坏掉不该让整条变更流消失
+      continue;
     }
+    if (!parsed || typeof parsed !== "object") continue;
+    if (wanted && String(parsed.id || "") !== wanted) continue;
+    out.push(parsed);
   }
-  return out.reverse();
+  return out;
 }
 
 /**
@@ -1153,7 +1286,14 @@ export function writeRadarBoardMeta(board, meta = {}) {
     title: String(meta.title || board),
     icon: String(meta.icon || "radar"),
     ...(Array.isArray(meta.trains) ? { trains: meta.trains } : {}),
-    ...(meta.spec && typeof meta.spec === "object" ? { spec: meta.spec } : {}),
+    /**
+     * 存进去的就是归一之后的 spec。
+     *
+     * 只在读的时候归一的话，`_board.json` 里会一直躺着一份「大组同时也是标签」的
+     * 词典——页面显示的和文件里写的不是同一份。下次谁手改这个文件、或者 Hub 导出这块板，
+     * 拿到的还是那份自相矛盾的。归一要发生在**写**这一侧。
+     */
+    ...(meta.spec && typeof meta.spec === "object" ? { spec: defaultSpec(meta.spec) } : {}),
     // 归档不是删除：板和它的分片、变更流都留着，只是不再出现在列表里。
     // 真删掉的话，一块攒了半年状态的板一次误点就没了
     ...(meta.archived === true ? { archived: true } : {}),

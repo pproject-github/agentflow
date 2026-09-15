@@ -38,6 +38,7 @@ import {
   listRadarBoardIds,
   listRadarBoards,
   ownsViolations,
+  vocabViolations,
   radarBoardDir,
   radarPlanFile,
   PENDING_PLAN_KEY,
@@ -348,6 +349,26 @@ export function commitTrack({
       `别的条目由别的流程认领——写进来就是重复认领，板上会开始自相矛盾。`,
     );
   }
+  /**
+   * 词典契约：这一批行只能说板认识的话。
+   *
+   * 和 owns 挡的东西不同——owns 挡越权（写了别人的 id），这一层挡**说错词**：
+   * 把大组当标签又抄一遍、或者随手造一个词典里没有的标签。两者都不会让行看起来有问题，
+   * 都得等人肉眼发现。板已经申明过词典的前提下，让它运行时真的失败一次，
+   * 「标签只能从 vocab 里挑」这句提示词才是个契约而不是一句祝愿。
+   */
+  // 读的是归一之后的 spec：标签词典已经减掉大组 key，校验和页面看到的是同一份
+  const boardSpec = readRadarBoard(board)?.spec || null;
+  if (boardSpec) {
+    const offences = vocabViolations(rows, boardSpec);
+    if (offences.length) {
+      throw fail(
+        `${offences.length} 处不在板的词典里，整次没写：\n  - ${offences.join("\n  - ")}\n` +
+        `词典在 _board.json 的 spec 里，流程该用 radar.readSpec 读它，不要在提示词里另抄一份。`,
+      );
+    }
+  }
+
   const owner = String(previous?.writtenBy || "").trim();
   const me = String(actor || "").trim();
   // 两边都知道是谁、而且不是同一个人，才算冲突。手工跑 CLI 时没有 AGENTFLOW_USER_ID，

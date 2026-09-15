@@ -6074,6 +6074,27 @@ finishedAt: "${new Date().toISOString()}"
           return;
         }
         /**
+         * 一条追踪项自己的经过。
+         *
+         * 不跟着板一起回：一块板上百条，全带上等于每次刷板都把整条变更流搬一遍，
+         * 而人一次只看一条。点开详情时才拉。
+         */
+        if (url.pathname === "/api/radar/events") {
+          const board = String(url.searchParams.get("board") || "");
+          if (!isValidBoardId(board)) {
+            json(res, 400, { error: "board 参数不合法" });
+            return;
+          }
+          const itemId = String(url.searchParams.get("id") || "").trim();
+          if (!itemId) {
+            json(res, 400, { error: "缺 id：这个接口回的是某一条的经过，不是整块板的" });
+            return;
+          }
+          const limit = Math.max(1, Math.min(500, Number(url.searchParams.get("limit")) || 200));
+          json(res, 200, { board, id: itemId, events: readRadarEvents(board, { id: itemId, limit }) });
+          return;
+        }
+        /**
          * 喂这块板的每条流程，最近跑了哪几次。
          *
          * 和板上的条目状态是两码事：条目安静既可能是真没变化，也可能是流程哑了。
