@@ -1,0 +1,30 @@
+builtin/web-ui/dist/index.html
+  s_ad13d23010ed00::t_60c45c8647407d 33
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_ad13d23010ed00::t_7898c776dcecce 16485,16497
+test/web-ui-react-global.test.mjs
+  s_ad13d23010ed00::t_3d9916a97334e3 1-34
+builtin/web-ui/dist/assets/index-i6DBhNfD.js
+  s_ad13d23010ed00::t_60c45c8647407d 211,291
+builtin/web-ui/dist/assets/WorkflowAssistantThread-CYahiaNi.js
+  s_ad13d23010ed00::t_60c45c8647407d 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d7fa5ca12792011cd6c6c4bce28684393dd7f097",
+  "prompts": {},
+  "logical_commit_id": "d7fa5ca12792011cd6c6c4bce28684393dd7f097",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 12210,
+      "total_deletions": 565
+    }
+  }
+}

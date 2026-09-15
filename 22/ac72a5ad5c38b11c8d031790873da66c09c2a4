@@ -1,0 +1,101 @@
+bin/lib/release-runtime.mjs
+  s_c491bf42c7dfb1::t_c270d28b6307af 685,691,694,697,865-880
+  s_0dc6e255aa11c3::t_1ec4366eb23106 897-908,913-914,916
+  s_0dc6e255aa11c3::t_159061b59a48bb 881-896
+  s_0dc6e255aa11c3::t_22ebb7f13bdfe6 100-114
+  s_0dc6e255aa11c3::t_4e946e1d9521c2 699,729-731,809-811,826,855-857
+  s_0dc6e255aa11c3::t_df7fe4e829a304 909-912,915
+builtin/web-ui/src/lib/releaseNodeCatalog.js
+  s_0dc6e255aa11c3::t_00adfaa3eb0f63 11-15
+  s_0dc6e255aa11c3::t_4f7c553c8ef228 248,258-260,316-318,329,353-355
+  s_c491bf42c7dfb1::t_ec185a7ba18c5c 236,242,244,246,367
+test/release-runtime-history.test.mjs
+  s_c491bf42c7dfb1::t_ada801c9097b04 1-9
+builtin/web-ui/src/lib/releaseWorkflowStateMachine.js
+  s_c491bf42c7dfb1::t_efb4a36b4fb927 183-184,228,230-231,234-248
+  s_0dc6e255aa11c3::t_aaecb527de76e4 69-73,144-151,185
+test/release-runtime-api.test.mjs
+  s_0dc6e255aa11c3::t_800c208f276a15 71-78
+  s_0dc6e255aa11c3::t_94eaea645c4c65 55-56
+  s_0dc6e255aa11c3::t_9f50492f1f4436 57-59,70
+  s_0dc6e255aa11c3::t_731e097aadf841 81-123
+  s_c491bf42c7dfb1::t_e9ff4f2e23012d 49,51-54,79-80
+  s_0dc6e255aa11c3::t_ef7062db9f3f89 50,60-69
+test/release-workflow-state-machine.test.mjs
+  s_c491bf42c7dfb1::t_1eff017b08b914 57-71
+  s_0dc6e255aa11c3::t_94eaea645c4c65 72-86
+test/agentflow-release-assistant-contract.test.mjs
+  s_0dc6e255aa11c3::t_d62dafbc45c5fc 10
+  s_0dc6e255aa11c3::t_b631b9ee7b38ea 1-9,11-13
+test/release-deployment-config.test.mjs
+  s_c491bf42c7dfb1::t_a1c9f93cf3157d 107-112
+  s_c491bf42c7dfb1::t_6b2b742b2b179f 89-106
+bin/lib/workspace-server.mjs
+  s_c491bf42c7dfb1::t_a360336a451d89 4531-4540,4542-4544
+shared/release-deployment-config.js
+  s_c491bf42c7dfb1::t_110e1c563a9c91 88
+  s_c491bf42c7dfb1::t_502b2ca9c97b50 385-386,415-422
+skills/agentflow-cli/SKILL.md
+  s_0dc6e255aa11c3::t_c551e444d68174 463-474,495-496,501,503
+shared/release-workflow-config.js
+  s_c491bf42c7dfb1::t_2aeb008f07daf0 159,161-164
+bin/lib/workspace-routes.mjs
+  s_0dc6e255aa11c3::t_93a0f51eb24156 1487-1488,1498-1504,1507,1529,1548,1561
+  s_0dc6e255aa11c3::t_ff86e8752fbad9 1565,1580,1584,1599,1615-1616,1631,1655,1659
+  s_0dc6e255aa11c3::t_78d373e27b5230 83
+  s_0dc6e255aa11c3::t_309fae086502b9 1668,1692-1693,1708,1713,1737-1738,1752,1774-1775,1796,1816-1817,1831,1848-1849,1873
+  s_0dc6e255aa11c3::t_1ec4366eb23106 1263,1268
+  s_0dc6e255aa11c3::t_0d72ee5b418dfb 1483-1484
+  s_c491bf42c7dfb1::t_eb642f2107c0a9 1402-1403
+test/release-runtime-catalog.test.mjs
+  s_c491bf42c7dfb1::t_7d826f88162788 58
+  s_c491bf42c7dfb1::t_e9ff4f2e23012d 48,51-54,59-62,72-73
+  s_0dc6e255aa11c3::t_12c1b557f2cabe 49-50,55-57,63-71
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_c491bf42c7dfb1::t_efb4a36b4fb927 688
+  s_0dc6e255aa11c3::t_dc5e63f6162e79 689
+  s_0dc6e255aa11c3::t_38443d4171566d 12,596,600-602,618-626
+  s_0dc6e255aa11c3::t_e88bb5dcefb1b1 87,136,176-177
+  s_0dc6e255aa11c3::t_15c6af8f8529ea 895-901,931-934,939
+  s_0dc6e255aa11c3::t_3b468b8fd2e745 695
+  s_0dc6e255aa11c3::t_4899567e4f9659 1080-1082
+  s_0dc6e255aa11c3::t_729f178fc0cbda 690
+builtin/web-ui/src/lib/releaseWorkflowModel.js
+  s_0dc6e255aa11c3::t_3b468b8fd2e745 401-407,409
+  s_0dc6e255aa11c3::t_3daa3c780e372f 218-268,399
+  s_0dc6e255aa11c3::t_28ddbe70bd5f64 400
+test/release-workflow-model.test.mjs
+  s_0dc6e255aa11c3::t_1886ea2ff2a45d 21,494-519
+  s_0dc6e255aa11c3::t_4a87dd373e7d1e 22,520-536,545
+  s_0dc6e255aa11c3::t_9239ed827f2747 546-576
+  s_0dc6e255aa11c3::t_05a69ce300a308 537
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "22ac72a5ad5c38b11c8d031790873da66c09c2a4",
+  "prompts": {},
+  "logical_commit_id": "e75ee005285f720e35e0e1bbe68c0a93cea372d0",
+  "sessions": {
+    "s_0dc6e255aa11c3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07f3b-081e-70d3-a285-dce1ee981095",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 1404,
+      "total_deletions": 1022
+    },
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 12122,
+      "total_deletions": 1707
+    }
+  }
+}

@@ -1,0 +1,22 @@
+docs/superpowers/specs/2026-08-28-release-runtime-design.md
+  s_c491bf42c7dfb1::t_c12bf32ed04bbf 1-110
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8667d87c94d90fc1a76c0c08d665bd47861d4cdb",
+  "prompts": {},
+  "logical_commit_id": "8667d87c94d90fc1a76c0c08d665bd47861d4cdb",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 10137,
+      "total_deletions": 1495
+    }
+  }
+}

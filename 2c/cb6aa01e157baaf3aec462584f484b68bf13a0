@@ -1,0 +1,40 @@
+builtin/web-ui/dist/assets/index-C6Q2321S.js
+  s_ad13d23010ed00::t_16c50b51253d05 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195-196,199-206,210-215,219,221,224,268-269,273,279-280,282-283,287-288,290-291,293,297,305,307,311,319,321-323,325-329,333-336,339,341,348,362,373-374,377,395,404,458,537,561,605,624,636,651,662,694,707,758,773,784,800,814,822,831,835,861
+bin/lib/auth.mjs
+  s_ad13d23010ed00::t_cf9bdd606ffb86 546-574,582-583,587-589
+builtin/web-ui/dist/index.html
+  s_ad13d23010ed00::t_16c50b51253d05 33
+builtin/web-ui/dist/assets/WorkflowAssistantThread-B8E1b7I7.js
+  s_ad13d23010ed00::t_16c50b51253d05 1
+builtin/web-ui/src/RunningIndicator.jsx
+  s_ad13d23010ed00::t_7b29d019bd826a 7-10,14-19,160,163-167
+test/running-indicator-coordination.test.mjs
+  s_ad13d23010ed00::t_5ab207fbf4751d 54
+  s_ad13d23010ed00::t_287ddebe3dd30a 49-53,55-73
+test/session-sliding-expiry.test.mjs
+  s_ad13d23010ed00::t_82e6b4fb6831c7 20-31,71,76,85,91,96,98,102,111-113,118-119
+  s_ad13d23010ed00::t_0569ead53a749f 1-19,32-42,61-65,68-70,72-75,77-81,84,86-90,92-95,99-101,103-106,110,114-117,120-121
+  s_ad13d23010ed00::t_53fe6e47aa3ce2 46-59,66-67,97,107-109
+  s_ad13d23010ed00::t_4f549da310fe10 43-45,60,82-83
+docs/wiki/agentflow-skills-platform-integration.zh-CN.md
+  s_ad13d23010ed00::t_86844441db2cce 81-100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2ccb6aa01e157baaf3aec462584f484b68bf13a0",
+  "prompts": {},
+  "logical_commit_id": "2ccb6aa01e157baaf3aec462584f484b68bf13a0",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 8243,
+      "total_deletions": 525
+    }
+  }
+}

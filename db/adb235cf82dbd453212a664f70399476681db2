@@ -1,0 +1,26 @@
+bin/lib/workspace-routes.mjs
+  s_ad13d23010ed00::t_df53d9654772bb 1115-1122
+  s_ad13d23010ed00::t_507fca2e77cc39 232-233
+  s_ad13d23010ed00::t_24db9943462af0 2466,2533
+test/marketplace-index-cache.test.mjs
+  s_ad13d23010ed00::t_7fb018d6bb2dfc 1-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "dbadb235cf82dbd453212a664f70399476681db2",
+  "prompts": {},
+  "logical_commit_id": "dbadb235cf82dbd453212a664f70399476681db2",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": null,
+      "total_additions": 114,
+      "total_deletions": 7
+    }
+  }
+}

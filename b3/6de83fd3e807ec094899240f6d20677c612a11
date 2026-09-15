@@ -1,0 +1,43 @@
+test/release-workflow-panel-contract.test.mjs
+  s_c491bf42c7dfb1::t_65965b178e8b6c 70-86
+builtin/web-ui/src/components/ReleaseNodeInspector.jsx
+  s_c491bf42c7dfb1::t_129a0350b7d7a6 3,25-26,88
+  s_c491bf42c7dfb1::t_648d7daa7293bc 22,29-30
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_c491bf42c7dfb1::t_b9db57730d4924 214-235,525,554
+  s_c491bf42c7dfb1::t_ea3d4d27e3aea8 3,65-67,106-108,258-260,551-553,555,580,623,625
+builtin/web-ui/src/lib/releaseWorkflowModel.js
+  s_c491bf42c7dfb1::t_7b5f4919254272 218-220
+  s_c491bf42c7dfb1::t_6d768a3a1ba0ba 17-56
+test/release-workflow-state-machine.test.mjs
+  s_c491bf42c7dfb1::t_a0444378ae1100 306
+  s_c491bf42c7dfb1::t_d65fa2bdff7fdc 256-305,307-321
+builtin/web-ui/src/lib/releaseWorkflowStateMachine.js
+  s_c491bf42c7dfb1::t_5093b8912563f2 7-8,87-95,97-104,106,110-116,118-122
+  s_c491bf42c7dfb1::t_274c826bc00b95 117,147,194-205
+  s_c491bf42c7dfb1::t_0444498cb88069 96
+builtin/web-ui/src/index.css
+  s_c491bf42c7dfb1::t_ebc93b55c0609d 135
+  s_c491bf42c7dfb1::t_6f71b8a27cec9d 29996-29998
+test/release-workflow-model.test.mjs
+  s_c491bf42c7dfb1::t_7f93c9a76a0f39 13-14,277-311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b36de83fd3e807ec094899240f6d20677c612a11",
+  "prompts": {},
+  "logical_commit_id": "b36de83fd3e807ec094899240f6d20677c612a11",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 26837,
+      "total_deletions": 3114
+    }
+  }
+}

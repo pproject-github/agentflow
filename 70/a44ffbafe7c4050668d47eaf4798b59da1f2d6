@@ -1,0 +1,42 @@
+bin/lib/admin-release-projects.mjs
+  s_65c049f229c758::t_bae92d817fcb19 1-118
+bin/lib/ui-server.mjs
+  s_65c049f229c758::t_a7ade1aaee347d 109,2271-2278,2948-2974
+bin/lib/workspace-routes.mjs
+  s_65c049f229c758::t_7d78b3aa862a21 83-84,1175,1181,1190,1233
+builtin/web-ui/dist/assets/WorkflowAssistantThread-DsiVkVyb.js
+  s_65c049f229c758::t_1516515ee13e7d 1
+builtin/web-ui/dist/assets/index-Cr3NMNUF.js
+  s_65c049f229c758::t_62280ae8b4fc8f 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,201-204,210-212,214,219-223,225-227,230-237,241-246,250,252,255,299-300,304,308,310-314,318-319,321-323,325,329,337,339,343,351-364,367-369,376,390,401-402,405,423,432,468,486,513,549,565,589,633,652,664,679,690,722,735,755,786,801,812,828,842,850,859,863,889
+builtin/web-ui/dist/index.html
+  s_65c049f229c758::t_1d63c81c3e1523 33
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_65c049f229c758::t_f1defa053704f8 298-306,472-544,645,674,1678-1816
+docs/release-online-deployment.md
+  s_65c049f229c758::t_c2e5b6ea8790cb 12,52,54-67
+docs/release-projects.example.json
+  s_65c049f229c758::t_c68cda36bac428 7-10,16-19
+shared/release-deployment-config.js
+  s_65c049f229c758::t_d934580c9f5b47 234-356,360-361,363,365-366,368,370,372-373,376-390,426-427
+test/admin-release-projects.test.mjs
+  s_65c049f229c758::t_13da60011a60b3 1-94
+test/release-deployment-config.test.mjs
+  s_65c049f229c758::t_54ad2a40bccf2c 72-102
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "70a44ffbafe7c4050668d47eaf4798b59da1f2d6",
+  "prompts": {},
+  "logical_commit_id": "70a44ffbafe7c4050668d47eaf4798b59da1f2d6",
+  "sessions": {
+    "s_65c049f229c758": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "554e7a30-87d9-42dd-8249-9e863b0a1b8d",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    }
+  }
+}

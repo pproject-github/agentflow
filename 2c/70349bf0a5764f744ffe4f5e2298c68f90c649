@@ -1,0 +1,30 @@
+bin/lib/workspace-graph-edge-rules.mjs
+  s_ad13d23010ed00::t_1d9ded32885c80 85-119
+bin/lib/workspace-routes.mjs
+  s_ad13d23010ed00::t_28b0a6df02a975 80,3573-3586
+test/workspace-graph-edge-rules.test.mjs
+  s_ad13d23010ed00::t_11d4682dcee156 5,91-130
+docs/wiki/flow-dsl.en.md
+  s_ad13d23010ed00::t_cfa9a457edae32 173-182
+docs/wiki/flow-dsl.zh-CN.md
+  s_ad13d23010ed00::t_adbe436345e076 152-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2c70349bf0a5764f744ffe4f5e2298c68f90c649",
+  "prompts": {},
+  "logical_commit_id": "2c70349bf0a5764f744ffe4f5e2298c68f90c649",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 7109,
+      "total_deletions": 478
+    }
+  }
+}

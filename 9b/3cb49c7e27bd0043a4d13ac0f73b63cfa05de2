@@ -1,0 +1,38 @@
+bin/lib/release-runtime-executor.mjs
+  s_fb1f118e3bc599::t_264e0a10d16b23 338,341-343,347-349,351,354-356,360-371
+builtin/web-ui/dist/assets/WorkflowAssistantThread-CkhkAyMJ.js
+  s_fb1f118e3bc599::t_4d8d29a15b6968 1
+builtin/web-ui/dist/assets/index-mu7bD0lY.js
+  s_fb1f118e3bc599::t_ff8b167b6fdceb 38,40,42,44,65-67,230,242,246,300,304,310-311,319-323,353,355,366-367,863
+builtin/web-ui/dist/index.html
+  s_fb1f118e3bc599::t_ca9b7a0ce6b413 33
+builtin/web-ui/src/lib/releaseWorkflowModel.js
+  s_fb1f118e3bc599::t_11cc9db42b8b84 45-47
+docs/release-local-processes.md
+  s_fb1f118e3bc599::t_706e4648c1705f 40,48,50,69,76,78
+scripts/release-flow-smoke-test.mjs
+  s_fb1f118e3bc599::t_e1933f62953547 92-96
+shared/release-workflow-config.js
+  s_fb1f118e3bc599::t_1d52cb90f61fdd 58-62,110,115,128,133
+test/release-runtime-executor.test.mjs
+  s_fb1f118e3bc599::t_115d06edc3e67c 247-249,271,280-285
+test/release-workflow-config.test.mjs
+  s_fb1f118e3bc599::t_22421f7cde5b48 50,59-61,99,103,110-112,215,220,230-235
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9b3cb49c7e27bd0043a4d13ac0f73b63cfa05de2",
+  "prompts": {},
+  "logical_commit_id": "9b3cb49c7e27bd0043a4d13ac0f73b63cfa05de2",
+  "sessions": {
+    "s_fb1f118e3bc599": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "defa4443-f97e-4f03-b976-254a442f509a",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+test/release-workflow-config.test.mjs
+  s_c491bf42c7dfb1::t_417e98372c32ec 8-10,108-182
+  s_c491bf42c7dfb1::t_e6b06f31efde94 106-107
+shared/release-workflow-config.js
+  s_c491bf42c7dfb1::t_5b0fde86bc0273 371
+  s_c491bf42c7dfb1::t_783a1919a15593 163
+  s_c491bf42c7dfb1::t_bdf40f34b1ef18 331-333
+  s_c491bf42c7dfb1::t_bdd98cb4ed73d6 77-146,169,171,183,190,206-218,223-224,241-245,250-271,275-277
+  s_c491bf42c7dfb1::t_c9df0ef44beaed 222,239-240,372
+  s_c491bf42c7dfb1::t_c632fe96e5533f 246-249,272-274
+  s_c491bf42c7dfb1::t_1d68b1c25aa098 335-336,364,373-423
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8cdedef1bceb43f81879e6e149bc89055034677d",
+  "prompts": {},
+  "logical_commit_id": "d7f9aeb1da5b872ee07a1de2ca2c5fe9894f17a4",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 25023,
+      "total_deletions": 3016
+    }
+  }
+}

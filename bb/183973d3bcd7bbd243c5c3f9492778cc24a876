@@ -1,0 +1,34 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Bi5QfmBt.js
+  s_ad13d23010ed00::t_34f0acc091efa9 1
+builtin/web-ui/dist/assets/index-DR4KnS9o.js
+  s_ad13d23010ed00::t_5e25f1fd9fce80 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69,73,75,79,93,195,197,201-204,210-211,214,225-227,230-237,241-246,250,252,255,299-300,302,304,306,308,310-311,313-314,318-319,321-322,324,328,336,338,342,350,352-354,356-360,363-367,370,372,379,393,404-405,408,426,568,636,655,667,682,693,725,738,789,804,815,831,845,853,862,866,892
+builtin/web-ui/dist/assets/index-IlaOz6V0.css
+  s_ad13d23010ed00::t_2f56f781097e90 1
+builtin/web-ui/dist/index.html
+  s_ad13d23010ed00::t_03b5263682fc40 33-34
+package-lock.json
+  s_ad13d23010ed00::t_dba32a1cab237c 3,9
+package.json
+  s_ad13d23010ed00::t_1597db349a9c45 3
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_ad13d23010ed00::t_5c0c16614dd915 1
+skills/agentflow-cli/runtime/package.json
+  s_ad13d23010ed00::t_85394527851cc2 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "bb183973d3bcd7bbd243c5c3f9492778cc24a876",
+  "prompts": {},
+  "logical_commit_id": "bb183973d3bcd7bbd243c5c3f9492778cc24a876",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

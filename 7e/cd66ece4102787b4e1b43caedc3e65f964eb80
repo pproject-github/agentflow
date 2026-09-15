@@ -1,0 +1,32 @@
+builtin/web-ui/dist/assets/index-CJzjd6gg.css
+  s_ad13d23010ed00::t_95dfa94763aadb 1
+builtin/web-ui/dist/assets/index-BVDxiS7v.js
+  s_ad13d23010ed00::t_95dfa94763aadb 211
+builtin/web-ui/src/index.css
+  s_ad13d23010ed00::t_24c7cd48da65b3 227-229,239,259,266
+builtin/web-ui/dist/index.html
+  s_ad13d23010ed00::t_95dfa94763aadb 33-34
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Dq8S-Aao.js
+  s_ad13d23010ed00::t_95dfa94763aadb 1
+test/approvals-page-layout.test.mjs
+  s_ad13d23010ed00::t_ca7db82dbd5284 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7ecd66ece4102787b4e1b43caedc3e65f964eb80",
+  "prompts": {},
+  "logical_commit_id": "7ecd66ece4102787b4e1b43caedc3e65f964eb80",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 10227,
+      "total_deletions": 555
+    }
+  }
+}

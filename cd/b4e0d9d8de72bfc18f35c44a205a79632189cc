@@ -1,0 +1,30 @@
+builtin/web-ui/src/lib/releaseWorkflowStateMachine.js
+  s_c491bf42c7dfb1::t_0d80d5db680fc3 38,47,55,58,74-76
+test/release-workflow-config.test.mjs
+  s_c491bf42c7dfb1::t_15bd7ded881706 50-69
+test/release-runtime-catalog.test.mjs
+  s_c491bf42c7dfb1::t_ef7c4ace8c2f55 161
+shared/release-workflow-config.js
+  s_c491bf42c7dfb1::t_4239ad9782f462 191,193
+test/release-workflow-state-machine.test.mjs
+  s_c491bf42c7dfb1::t_10c1033c227e3e 140-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cdb4e0d9d8de72bfc18f35c44a205a79632189cc",
+  "prompts": {},
+  "logical_commit_id": "cdb4e0d9d8de72bfc18f35c44a205a79632189cc",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 22328,
+      "total_deletions": 2756
+    }
+  }
+}

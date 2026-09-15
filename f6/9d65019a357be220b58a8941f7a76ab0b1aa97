@@ -1,0 +1,20 @@
+bin/lib/workspace-server.mjs
+  s_d2145b29050f4e::t_9ed547fe7237b4 6284-6292,6294-6297,6300,6307,6312,6387,6434,6441,6460,6470,6499,6517,6562,6575,6594,6613,6620,6627,6644,6661,6894,6896,6903,6918,6926,6938,6958,7014,7033,7097,7104,7174,7235,7269,7304,7331,7392,7456,7707-7710
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f69d65019a357be220b58a8941f7a76ab0b1aa97",
+  "prompts": {},
+  "logical_commit_id": "f69d65019a357be220b58a8941f7a76ab0b1aa97",
+  "sessions": {
+    "s_d2145b29050f4e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf8e5552-f425-42d9-92fb-f8aa86f8b722",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

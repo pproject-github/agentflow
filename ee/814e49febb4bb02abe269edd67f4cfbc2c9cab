@@ -1,0 +1,24 @@
+docs/superpowers/specs/2026-09-13-release-operator-rotation-design.md
+  s_0dc6e255aa11c3::t_96b2fdb6ad7337 17
+bin/lib/ui-server.mjs
+  s_0dc6e255aa11c3::t_c8669e9269dc57 179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ee814e49febb4bb02abe269edd67f4cfbc2c9cab",
+  "prompts": {},
+  "logical_commit_id": "ee814e49febb4bb02abe269edd67f4cfbc2c9cab",
+  "sessions": {
+    "s_0dc6e255aa11c3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07f3b-081e-70d3-a285-dce1ee981095",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 3772,
+      "total_deletions": 224
+    }
+  }
+}

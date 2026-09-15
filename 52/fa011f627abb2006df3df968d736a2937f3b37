@@ -1,0 +1,48 @@
+test/display-share-link-url.test.mjs
+  s_3529fc13afd3a0::t_7d38c03c893d1d 1-25,39-109,132-133
+  s_3529fc13afd3a0::t_7c8a8858ba9042 26-38,110-131
+bin/lib/ui-server.mjs
+  s_3529fc13afd3a0::t_11eae26f7f965d 2748-2749,2762-2763,2766,2790-2792,2796-2811
+  s_3529fc13afd3a0::t_3a9935a2d94e35 2750-2761
+  s_3529fc13afd3a0::t_2d9221ec4cd419 2793-2795
+  s_3529fc13afd3a0::t_fcd3298a94c85d 185
+  s_3529fc13afd3a0::t_b3ddad1cb994bd 213,1635-1692,1694-1696,1700-1721
+  s_3529fc13afd3a0::t_3633d52b19636b 1693,1697-1699
+  s_3529fc13afd3a0::t_65b26a166a5c82 1722
+skills/agentflow-flow-dsl/references/node-calls.md
+  s_3529fc13afd3a0::t_03d23b1100be95 37
+builtin/nodes/tool_display_share_link.md
+  s_3529fc13afd3a0::t_03d23b1100be95 50-53,61,64,72-77
+skills/agentflow-node-reference/references/builtin-nodes.md
+  s_3529fc13afd3a0::t_03d23b1100be95 125
+bin/lib/workspace-run-logs.mjs
+  s_3529fc13afd3a0::t_7d6698c1f346a0 167-191
+test/review-link-diagnosis.test.mjs
+  s_3529fc13afd3a0::t_d2db6c035be169 1-11,13-86,96-104
+  s_3529fc13afd3a0::t_34c79fd36d7aac 12,87-95
+bin/lib/workspace-interrupt.mjs
+  s_3529fc13afd3a0::t_0e767ee24c4a92 26-36,39-52
+docs/wiki/workspace-interrupt-resume-design.zh-CN.md
+  s_3529fc13afd3a0::t_139225b4ddcb2e 177-204
+bin/lib/workspace-server.mjs
+  s_3529fc13afd3a0::t_b3f6e18b3c85b3 50,52,1529,1546-1549,1560-1648,7352,7355-7360,7364
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "52fa011f627abb2006df3df968d736a2937f3b37",
+  "prompts": {},
+  "logical_commit_id": "52fa011f627abb2006df3df968d736a2937f3b37",
+  "sessions": {
+    "s_3529fc13afd3a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "128d6bdd-65e3-4efd-8de9-0d08e0f5eabf",
+        "model": "claude-opus-5"
+      },
+      "human_author": null,
+      "total_additions": 463,
+      "total_deletions": 17
+    }
+  }
+}

@@ -1,0 +1,27 @@
+bin/lib/workspace-server.mjs
+  s_ad13d23010ed00::t_a39d7c04482f9d 2851-2852,2854-2860,2863,2874-2875,2878,2881
+  s_ad13d23010ed00::t_9ff5cc63cf5dc2 2902-2903,2911-2912
+  s_ad13d23010ed00::t_d7ecd6a8d618d7 2904-2910
+  s_ad13d23010ed00::t_7324ab3ac7f46a 2832-2846
+test/workspace-output-materialization.test.mjs
+  s_ad13d23010ed00::t_8493d46fe59be3 253-304
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0f5deab847e1560ac3d231ddb8b1ae03fad45df4",
+  "prompts": {},
+  "logical_commit_id": "0f5deab847e1560ac3d231ddb8b1ae03fad45df4",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": null,
+      "total_additions": 365,
+      "total_deletions": 56
+    }
+  }
+}

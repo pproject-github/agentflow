@@ -1,0 +1,27 @@
+test/workspace-flow-scope-truth.test.mjs
+  s_ad13d23010ed00::t_54b3b7a9f75dac 1-42,44-68
+  s_ad13d23010ed00::t_1f906d99a1c04f 43
+bin/lib/workspace-tree.mjs
+  s_ad13d23010ed00::t_08cee1161db8a5 228-229,251-254,258,274
+bin/lib/workspace-server.mjs
+  s_ad13d23010ed00::t_b31feb3940a973 38,1999,2004-2006,8102-8122,8143-8151,8153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "38a04e2dc943bcda9702edd68eef7198505b4676",
+  "prompts": {},
+  "logical_commit_id": "38a04e2dc943bcda9702edd68eef7198505b4676",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": null,
+      "total_additions": 77,
+      "total_deletions": 4
+    }
+  }
+}

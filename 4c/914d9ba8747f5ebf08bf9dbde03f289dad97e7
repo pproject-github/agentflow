@@ -1,0 +1,28 @@
+bin/lib/auth.mjs
+  s_ad13d23010ed00::t_060ada47c5a309 6,858-888,891,893-895
+test/cas-user-id-mapping.test.mjs
+  s_ad13d23010ed00::t_c71c5de4634325 98-99
+  s_ad13d23010ed00::t_c45a444ffef87d 1-97,100-106
+bin/lib/paths.mjs
+  s_ad13d23010ed00::t_cfa1c377936a02 4,150-176,180-185
+  s_ad13d23010ed00::t_0f82745d25b4f5 177-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4c914d9ba8747f5ebf08bf9dbde03f289dad97e7",
+  "prompts": {},
+  "logical_commit_id": "4c914d9ba8747f5ebf08bf9dbde03f289dad97e7",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 11308,
+      "total_deletions": 562
+    }
+  }
+}

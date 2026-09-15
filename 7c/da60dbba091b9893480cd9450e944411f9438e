@@ -1,0 +1,98 @@
+builtin/web-ui/src/lib/releaseNodeCatalog.js
+  s_c491bf42c7dfb1::t_9803f12832cf44 311,337
+  s_c491bf42c7dfb1::t_0a495f61ffddc9 237-238
+  s_c491bf42c7dfb1::t_77a20eb53bb94e 209-215,230-231
+  s_c491bf42c7dfb1::t_3119c2c39c8e67 11-31,33-34,254-256
+  s_c491bf42c7dfb1::t_d5a99940c08789 32
+  s_c491bf42c7dfb1::t_e420ec1d95055d 274
+  s_c491bf42c7dfb1::t_dce64fcba7cad1 277-290
+bin/lib/release-runtime-executor.mjs
+  s_c491bf42c7dfb1::t_aac7d78e84e2fa 79
+  s_c491bf42c7dfb1::t_0afe8f5609b0d7 81,91-96
+  s_3d3b0fff602cca::t_8908e00a78a1c6 313
+  s_c491bf42c7dfb1::t_15f19bacddfd26 21-39,41,43-52,54-67
+  s_c491bf42c7dfb1::t_d6ef306b37653a 329
+  s_c491bf42c7dfb1::t_5318ea858d1401 258
+  s_c491bf42c7dfb1::t_8b5e2b6982124d 348,352
+  s_c491bf42c7dfb1::t_8efc0b3d225b02 259
+  s_c491bf42c7dfb1::t_f8fe37c2a585b8 53
+  s_c491bf42c7dfb1::t_87a26554cd79d3 136-137,141-147,149-158,161,166,175-180,212,233,249
+  s_c491bf42c7dfb1::t_c23ef96c42b4c1 372
+  s_c491bf42c7dfb1::t_86af70d4f3cfbb 40,42
+  s_c491bf42c7dfb1::t_9f3dbcbfdd6e37 148
+  s_c491bf42c7dfb1::t_d0b8c9b721968f 130,260-263,265-298
+  s_c491bf42c7dfb1::t_900ff27aa33519 264
+bin/lib/release-runtime.mjs
+  s_c491bf42c7dfb1::t_c9aa30701b569a 102,110
+  s_c491bf42c7dfb1::t_9dd686d7e60c9b 202-208,213,223-228
+  s_c491bf42c7dfb1::t_8dc8f14ce39c8b 269-288,290,322-324
+  s_c491bf42c7dfb1::t_23f43556064165 541-578
+  s_c491bf42c7dfb1::t_12ec8151088a0b 537
+  s_c491bf42c7dfb1::t_aa21d2c5b29f2f 603,634
+  s_c491bf42c7dfb1::t_8aed46daf94364 93-101,103-109,111-169
+  s_3d3b0fff602cca::t_fef6b27a4dc26e 31,405,445,464-481
+  s_c491bf42c7dfb1::t_696dfc87891232 462
+  s_3d3b0fff602cca::t_3ddf0c22ec434d 267
+  s_c491bf42c7dfb1::t_aab8c70df47647 463
+  s_3d3b0fff602cca::t_d928b4c9fe428c 268
+bin/lib/workspace-routes.mjs
+  s_c491bf42c7dfb1::t_c252f3d1cf5f23 1451-1456,1458
+  s_c491bf42c7dfb1::t_24b12fc811380b 1465-1468
+  s_c491bf42c7dfb1::t_8bc242d7c0db4d 1482,1505
+  s_c491bf42c7dfb1::t_9771785d73c5a4 1321-1322
+  s_c491bf42c7dfb1::t_a995a909f22df5 1343-1347,1354-1366
+  s_c491bf42c7dfb1::t_71521aa3197188 1519,1549
+  s_c491bf42c7dfb1::t_f22114f8a46749 1556-1557,1559-1591
+  s_c491bf42c7dfb1::t_afeb4f9e30928e 1384
+  s_c491bf42c7dfb1::t_4e639a99457d9d 1341-1342
+  s_c491bf42c7dfb1::t_4a26bdd31d478d 1234,1518,1542
+  s_c491bf42c7dfb1::t_f367849b23380b 1348-1353,1501
+  s_c491bf42c7dfb1::t_638411629afacb 79,1208-1212
+  s_c491bf42c7dfb1::t_4126eaa417bf00 1295
+builtin/web-ui/src/lib/releaseWorkflowStateMachine.js
+  s_3d3b0fff602cca::t_9b5c18d30cf408 159,172-173,199
+  s_3d3b0fff602cca::t_5511745da6c155 68-90,283-284,299,307,327
+  s_c491bf42c7dfb1::t_5fc09eca403d84 168,170
+  s_c491bf42c7dfb1::t_e6230a2ecdb4e5 107
+  s_c491bf42c7dfb1::t_420f1649ff1e30 319,324-326,332-334
+  s_c491bf42c7dfb1::t_b338d38d6cdaca 343-360
+  s_c491bf42c7dfb1::t_971faf36c68ab4 114,135
+  s_c491bf42c7dfb1::t_2ca51c65c780c7 133
+shared/release-workflow-config.js
+  s_c491bf42c7dfb1::t_0a8d2f6da72ffd 47,49-50
+  s_c491bf42c7dfb1::t_036c6623d0cf72 41
+  s_c491bf42c7dfb1::t_bdd98cb4ed73d6 57
+  s_c491bf42c7dfb1::t_7d35a843c6f8c4 60-64,69-70
+  s_c491bf42c7dfb1::t_c9df0ef44beaed 66,88
+  s_c491bf42c7dfb1::t_e6230a2ecdb4e5 123,125,128-133
+  s_c491bf42c7dfb1::t_c42fcedcb3ad40 4,6-7,10-12,14,16-23,26-28,31-40,42,45-46,48,51-56,59,67-68,71-87,90-91,93-97,99,101-104,106-109,111-115,121,124,138-141,145-149,151-160,165-167,169-173,175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7cda60dbba091b9893480cd9450e944411f9438e",
+  "prompts": {},
+  "logical_commit_id": "d5c982190a0890ac3f72f3b058eec0486b612e3a",
+  "sessions": {
+    "s_3d3b0fff602cca": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fffd7-fa6c-7572-bc05-6bbf52feb6a6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 564,
+      "total_deletions": 76
+    },
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 36381,
+      "total_deletions": 4714
+    }
+  }
+}

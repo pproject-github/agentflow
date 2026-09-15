@@ -1,0 +1,29 @@
+test/release-runtime-executor.test.mjs
+  s_c491bf42c7dfb1::t_4022013c84e679 16-17
+test/release-runtime-api.test.mjs
+  s_c491bf42c7dfb1::t_c9b0777e103a15 73-76
+bin/lib/workspace-routes.mjs
+  s_c491bf42c7dfb1::t_fe7311205455f6 1248,1262,1279,1296,1318
+  s_c491bf42c7dfb1::t_91ccf5cdb6ad39 1286
+bin/lib/release-runtime-executor.mjs
+  s_c491bf42c7dfb1::t_5a975457a98afa 20,26,31,52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1c5648aeaecdd6bb6933ace7500d2dc329f8517f",
+  "prompts": {},
+  "logical_commit_id": "1c5648aeaecdd6bb6933ace7500d2dc329f8517f",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 12280,
+      "total_deletions": 1559
+    }
+  }
+}

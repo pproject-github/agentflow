@@ -1,0 +1,27 @@
+test/cursor-composer-fallback.test.mjs
+  s_1d5621ba93ee29::t_bcad69c1b1cb2f 347-354,356-363,410-412
+  s_1d5621ba93ee29::t_92d3f814526530 355
+bin/lib/agent-runners.mjs
+  s_1d5621ba93ee29::t_b463ae99b44fc1 164,647,650-653,849-858
+  s_1d5621ba93ee29::t_92d3f814526530 166
+  s_1d5621ba93ee29::t_204c58896cb583 142-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "aea019fa4cee76687bd3f2da10d01f2f75db3b79",
+  "prompts": {},
+  "logical_commit_id": "aea019fa4cee76687bd3f2da10d01f2f75db3b79",
+  "sessions": {
+    "s_1d5621ba93ee29": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0611d-7a76-74e3-b81d-183b0ce62f6d",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 14351,
+      "total_deletions": 375
+    }
+  }
+}

@@ -1,0 +1,24 @@
+bin/lib/workspace-flow-store.mjs
+  s_ad13d23010ed00::t_5d74948c5ffb46 116-144,147-154,157,159
+test/workspace-flow-store.test.mjs
+  s_ad13d23010ed00::t_ce5e5b81788cd1 303-336
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e828ca9913e1610ec0f1cadd96129c9624e6de71",
+  "prompts": {},
+  "logical_commit_id": "e828ca9913e1610ec0f1cadd96129c9624e6de71",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 2826,
+      "total_deletions": 179
+    }
+  }
+}

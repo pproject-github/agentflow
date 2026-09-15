@@ -1,0 +1,30 @@
+bin/lib/workspace-routes.mjs
+  s_fb1f118e3bc599::t_35f8e1a25cd555 1260-1268,1366-1369,1380-1394,1501-1504,1605,1682,1727,1764,1806,1838
+shared/release-deployment-config.js
+  s_fb1f118e3bc599::t_72c299a281bc85 225-226,230-231,234
+skills/agentflow-cli/SKILL.md
+  s_fb1f118e3bc599::t_a189ec5db10171 3,455-492,501,511
+skills/agentflow-cli/scripts/agentflow-cli.mjs
+  s_fb1f118e3bc599::t_0439aacad3d7bc 108-114,803-842,1627-1708
+test/release-deployment-config.test.mjs
+  s_fb1f118e3bc599::t_0942bef05d1bca 109,132-138
+test/release-operator-acl.test.mjs
+  s_fb1f118e3bc599::t_d5a27aa306fe35 72-78,96-101
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2f7350c7500f2f7621940cc9bfabefc713e4f934",
+  "prompts": {},
+  "logical_commit_id": "2f7350c7500f2f7621940cc9bfabefc713e4f934",
+  "sessions": {
+    "s_fb1f118e3bc599": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "defa4443-f97e-4f03-b976-254a442f509a",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    }
+  }
+}

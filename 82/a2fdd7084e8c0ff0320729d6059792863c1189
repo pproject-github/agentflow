@@ -1,0 +1,52 @@
+test/workspace-flow-store.test.mjs
+  s_ad13d23010ed00::t_5df0962865be2d 14-21,132,209,234,251,274
+bin/lib/node-package-manifest.mjs
+  s_ad13d23010ed00::t_b67d58ef423ce0 107-120
+docs/wiki/flow-dsl.zh-CN.md
+  s_ad13d23010ed00::t_89ddca99f2fd34 142-161
+bin/lib/flow-dsl/ir.mjs
+  s_ad13d23010ed00::t_815ef8de4fa366 263
+docs/wiki/flow-dsl.en.md
+  s_ad13d23010ed00::t_ef96c715d23a89 159-186
+bin/lib/flow-dsl/layout.mjs
+  s_ad13d23010ed00::t_815ef8de4fa366 84-87
+bin/lib/workspace-slot-reconcile.mjs
+  s_ad13d23010ed00::t_b9042a3b0d1884 1-56,64-107
+  s_ad13d23010ed00::t_a72db71d6bdebf 57-63
+bin/lib/flow-dsl/packages.mjs
+  s_ad13d23010ed00::t_31290cbaa00b63 17
+  s_ad13d23010ed00::t_b67d58ef423ce0 164-165,195-196
+bin/lib/workspace-flow-store.mjs
+  s_ad13d23010ed00::t_34b4e0c11b0173 383-387
+  s_ad13d23010ed00::t_33598e0a2f0b04 30
+  s_ad13d23010ed00::t_03de1b183c7d67 31,269,280,288,294
+  s_ad13d23010ed00::t_76cce1544a1021 247-258
+  s_ad13d23010ed00::t_79e5c51e6c0ac3 420-423,439-440,458
+bin/lib/flow-dsl/codegen.mjs
+  s_ad13d23010ed00::t_b19f6ae43fe182 332-335
+bin/lib/workspace-routes.mjs
+  s_ad13d23010ed00::t_7eea5faeecee33 3392-3393
+test/workspace-slot-reconcile.test.mjs
+  s_ad13d23010ed00::t_1323cd726c7714 1-148
+bin/lib/workspace-server.mjs
+  s_ad13d23010ed00::t_2ed358f51222bb 1025-1031,1767-1771
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "82a2fdd7084e8c0ff0320729d6059792863c1189",
+  "prompts": {},
+  "logical_commit_id": "82a2fdd7084e8c0ff0320729d6059792863c1189",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 2719,
+      "total_deletions": 137
+    }
+  }
+}

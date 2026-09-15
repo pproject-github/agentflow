@@ -1,0 +1,20 @@
+docs/wiki/agentflow-skills-platform-integration.zh-CN.md
+  s_d2145b29050f4e::t_642e41340e1f27 22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9da92afa1aaaea95c39167a0075705041da6d701",
+  "prompts": {},
+  "logical_commit_id": "9da92afa1aaaea95c39167a0075705041da6d701",
+  "sessions": {
+    "s_d2145b29050f4e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cf8e5552-f425-42d9-92fb-f8aa86f8b722",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+test/release-runtime-executor.test.mjs
+  s_c491bf42c7dfb1::t_35d1b5bb52efa4 1-18
+  s_c491bf42c7dfb1::t_a0bb520dceef30 19-31
+bin/lib/release-runtime-executor.mjs
+  s_c491bf42c7dfb1::t_a5abf30c073de5 21-27,29-30
+  s_c491bf42c7dfb1::t_e20bf75468037f 1-20,28,31-85
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6dfc169530e2096ddf6d427f068322c2864c37c7",
+  "prompts": {},
+  "logical_commit_id": "6dfc169530e2096ddf6d427f068322c2864c37c7",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 10633,
+      "total_deletions": 1505
+    }
+  }
+}

@@ -1,0 +1,20 @@
+builtin/web-ui/package-lock.json
+  s_3529fc13afd3a0::t_8455d97a68f21a 3884-3885
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "294d5264d31349a5a2a446d9d700017a05c699cf",
+  "prompts": {},
+  "logical_commit_id": "294d5264d31349a5a2a446d9d700017a05c699cf",
+  "sessions": {
+    "s_3529fc13afd3a0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "128d6bdd-65e3-4efd-8de9-0d08e0f5eabf",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

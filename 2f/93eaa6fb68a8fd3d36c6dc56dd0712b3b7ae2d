@@ -1,0 +1,32 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BJJf57Cb.js
+  s_ad13d23010ed00::t_70ba9d537de94a 1
+builtin/web-ui/dist/assets/index-BuyZpCUH.js
+  s_ad13d23010ed00::t_0a18c2950e4a7c 242,892
+builtin/web-ui/dist/index.html
+  s_ad13d23010ed00::t_401a6f25bb1a78 33
+package-lock.json
+  s_ad13d23010ed00::t_30f8c5a04f2a3b 3,9
+package.json
+  s_ad13d23010ed00::t_66e2e758639dc9 3
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_ad13d23010ed00::t_20b15717fef013 1
+skills/agentflow-cli/runtime/package.json
+  s_ad13d23010ed00::t_4769ff3a494b5a 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2f93eaa6fb68a8fd3d36c6dc56dd0712b3b7ae2d",
+  "prompts": {},
+  "logical_commit_id": "2f93eaa6fb68a8fd3d36c6dc56dd0712b3b7ae2d",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

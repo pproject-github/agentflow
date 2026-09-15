@@ -1,0 +1,21 @@
+skills/agentflow-cli/SKILL.md
+  s_bb33e4058403f5::t_30d61ce28a0b82 484-486
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "954fe17724e9d4cca33e46166ee97db6b715fb08",
+  "prompts": {},
+  "logical_commit_id": "954fe17724e9d4cca33e46166ee97db6b715fb08",
+  "sessions": {
+    "s_bb33e4058403f5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f74eaf260ffe2JDrSNMmkZnC5C",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 3
+    }
+  }
+}

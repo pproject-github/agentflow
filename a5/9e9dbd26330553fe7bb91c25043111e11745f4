@@ -1,0 +1,80 @@
+bin/lib/node-package-bootstrap.mjs
+  s_84d4b9dd02cd4b::t_46173082011822 78-82,84-87,90-95,100,110-111
+  s_84d4b9dd02cd4b::t_9f92818e39fd3e 83
+  s_84d4b9dd02cd4b::t_87a9d646137e94 14
+  s_84d4b9dd02cd4b::t_583483c09eab96 19,76-77,88-89,96-99,101-109,112-113
+  s_84d4b9dd02cd4b::t_55bd2851584eaa 15
+  s_84d4b9dd02cd4b::t_7b3352ecaad502 73-74
+bin/lib/schedule-alerts.mjs
+  s_84d4b9dd02cd4b::t_6510e881383d41 49-54,105
+bin/lib/workspace-routes.mjs
+  s_84d4b9dd02cd4b::t_a5e75777d8b3e1 77,676,693
+bin/lib/flow-dsl/parser.mjs
+  s_84d4b9dd02cd4b::t_5ec885a143904e 36
+test/schedule-target-url.test.mjs
+  s_84d4b9dd02cd4b::t_b216e524e7a9ce 5,45-58
+test/workspace-run-artifacts.test.mjs
+  s_84d4b9dd02cd4b::t_e0c58c472ee14a 44-47,54-62
+  s_84d4b9dd02cd4b::t_63ff7d066f8fc3 43,63-81,86-107,125-131
+  s_84d4b9dd02cd4b::t_5097c1f3a9967e 30-38
+  s_84d4b9dd02cd4b::t_92daf8e7f5f4d3 108-111
+  s_84d4b9dd02cd4b::t_e05162ff0c54e8 28
+  s_84d4b9dd02cd4b::t_0ec31b0b33f79b 82-85,112-124
+  s_84d4b9dd02cd4b::t_40114f8d8de5ed 48-53
+  s_84d4b9dd02cd4b::t_91849c90c20ce5 1-27,29,39-42
+builtin/web-ui/dist/assets/index-DDMjWhh8.js
+  s_84d4b9dd02cd4b::t_f22988318b0175 1,9,25,33,37-38,40-44,52,60,65-67,69,73,79,93,195,199-200,202,204-206,210-215,269,271,273,279-280,282-283,287-288,290-291,293,305,307,319,321-323,325,328-329,332-334,337,339,346,360,371-372,393,535,603,622,634,649,660,692,705,756,771,782,798,812,820,829,833,859
+builtin/web-ui/dist/index.html
+  s_84d4b9dd02cd4b::t_f22988318b0175 33
+test/schedule-alerts.test.mjs
+  s_84d4b9dd02cd4b::t_ef71e5fb838dab 15,91-92,190
+builtin/web-ui/src/pages/SchedulesPage.jsx
+  s_84d4b9dd02cd4b::t_b216e524e7a9ce 3,74-75
+  s_84d4b9dd02cd4b::t_b525d7dea268c2 41,71-73,76-77
+bin/lib/workspace-run-artifacts.mjs
+  s_84d4b9dd02cd4b::t_196c6bac6a253d 1-4,6-13,22-45,54-83,99-104,111-112,114-125,130-139,141,143-144,148-154,158-164
+  s_84d4b9dd02cd4b::t_7eb483f20a2983 5,14-21,46-47
+  s_84d4b9dd02cd4b::t_fb5a48f904ce0f 105-110,155-157
+  s_84d4b9dd02cd4b::t_5097c1f3a9967e 113,126-129,145-147
+  s_84d4b9dd02cd4b::t_4174d33b66afdb 140
+  s_84d4b9dd02cd4b::t_f829c8824e46ea 48-53
+  s_84d4b9dd02cd4b::t_e05162ff0c54e8 84-98,142
+CLAUDE.md
+  s_84d4b9dd02cd4b::t_5aaca242c01fb0 98-99
+  s_84d4b9dd02cd4b::t_46173082011822 101-103
+  s_84d4b9dd02cd4b::t_1cd7676becca37 104-106
+  s_84d4b9dd02cd4b::t_87a9d646137e94 97,100,107
+builtin/web-ui/src/scheduleNavigation.js
+  s_84d4b9dd02cd4b::t_b216e524e7a9ce 40-58
+test/node-package-runtime.test.mjs
+  s_84d4b9dd02cd4b::t_46173082011822 212,215,220,236,246,249
+  s_84d4b9dd02cd4b::t_0917c8d87257a5 224-226,247
+  s_84d4b9dd02cd4b::t_659ad071c8a732 213-214,216-219,221-223,227-235,237-245,248,250-254
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Cf-k9gdv.js
+  s_84d4b9dd02cd4b::t_f22988318b0175 1
+docs/superpowers/specs/2026-09-15-scheduled-run-failure-recovery-design.md
+  s_84d4b9dd02cd4b::t_96cb1bc1362d22 21,23,26-27,31-32,61-64
+  s_84d4b9dd02cd4b::t_5507a21ccc229d 1-11,14-20,22,24-25,28-30,33-60
+  s_84d4b9dd02cd4b::t_361663cb8a9bc8 12-13
+bin/lib/workspace-server.mjs
+  s_84d4b9dd02cd4b::t_b89b8593381fe0 52,305-318,4032,4045,4726,5467,5470-5474,5494,5504,5752,5784,5908-5913,5986,6054,6333-6339,6372-6373,6447-6454,6459,6496,6685,6803,7035,7062,7085,7121-7124,7682,7702-7705,7778,7855,7959-7962
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a59e9dbd26330553fe7bb91c25043111e11745f4",
+  "prompts": {},
+  "logical_commit_id": "a59e9dbd26330553fe7bb91c25043111e11745f4",
+  "sessions": {
+    "s_84d4b9dd02cd4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09fbb-7ab7-7a70-8455-012774ee785d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 1862,
+      "total_deletions": 91
+    }
+  }
+}

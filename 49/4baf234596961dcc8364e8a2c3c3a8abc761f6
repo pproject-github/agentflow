@@ -1,0 +1,24 @@
+builtin/web-ui/src/index.css
+  s_c491bf42c7dfb1::t_b8de6a776c5a3e 29604-29966
+.superpowers/sdd/2026-08-27-workspace-release-tab/task-4-report.md
+  s_c491bf42c7dfb1::t_07ce77f174c60f 1-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "494baf234596961dcc8364e8a2c3c3a8abc761f6",
+  "prompts": {},
+  "logical_commit_id": "494baf234596961dcc8364e8a2c3c3a8abc761f6",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 3300,
+      "total_deletions": 1083
+    }
+  }
+}

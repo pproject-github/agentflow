@@ -1,0 +1,36 @@
+builtin/web-ui/src/components/ReleaseNodeInspector.jsx
+  s_c491bf42c7dfb1::t_37da6c8a71fc0f 1-100
+builtin/web-ui/src/index.css
+  s_c491bf42c7dfb1::t_8ef6de7b05d1e7 127-136
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_c491bf42c7dfb1::t_46ff6b763730d6 328-348,350-357,370-371
+  s_c491bf42c7dfb1::t_59890f3c1bc33d 531-540
+  s_c491bf42c7dfb1::t_94719007aa377c 4,232-233,242,284-305
+  s_c491bf42c7dfb1::t_5c7db611f86214 50-55,80-85
+  s_c491bf42c7dfb1::t_5b4940bea4e8bd 349
+  s_c491bf42c7dfb1::t_8c9089c1fd14d2 463-487
+  s_c491bf42c7dfb1::t_0e950835c5a03e 504,519
+  s_c491bf42c7dfb1::t_913542acf21c9a 306
+  s_c491bf42c7dfb1::t_7584cfe94af210 462
+test/release-node-inspector-contract.test.mjs
+  s_c491bf42c7dfb1::t_4aa142f292e0f6 1-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "9a05b4c3c925551b4b5b9ad32fa5e050d4d80a28",
+  "prompts": {},
+  "logical_commit_id": "9a05b4c3c925551b4b5b9ad32fa5e050d4d80a28",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 11201,
+      "total_deletions": 1517
+    }
+  }
+}

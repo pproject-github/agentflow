@@ -1,0 +1,38 @@
+bin/lib/workspace-routes.mjs
+  s_ad13d23010ed00::t_d174b42b1803be 85-86
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_ad13d23010ed00::t_b9c6a598e59bec 2209-2211
+builtin/web-ui/src/index.css
+  s_ad13d23010ed00::t_fef9bd87a0f6ac 13187-13188,13236,13310
+builtin/web-ui/dist/index.html
+  s_ad13d23010ed00::t_2965a3b62f7ea8 33-34
+builtin/web-ui/dist/assets/index-BReAfRv4.css
+  s_ad13d23010ed00::t_2965a3b62f7ea8 1
+builtin/web-ui/src/NodePropertiesPanel.jsx
+  s_ad13d23010ed00::t_1cb76b74cfe8b5 413-416,419-420
+builtin/web-ui/dist/assets/index-DQsKBBFQ.js
+  s_ad13d23010ed00::t_2965a3b62f7ea8 1,9,17,25,33-35,37-38,40-44,52,60,65-67,69,71-73,75-79,81,83-86,88-91,93,95,106,137,174,178-180,195-196,199-206,208,210-215,219-221,224,268-269,273,276-283,287-288,290-291,293,297,305,307,319,321-323,325-329,332-334,337-339,346,360,371-372,375,393,438,483,519,535,603,622,634,649,660,692,705,725,756,771,782,798,812,820,829,833,859
+test/workspace-canvas-affordances.test.mjs
+  s_ad13d23010ed00::t_60e868d826d597 1-39
+builtin/web-ui/dist/assets/WorkflowAssistantThread-B24E2j6n.js
+  s_ad13d23010ed00::t_2965a3b62f7ea8 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "38db2f1569762d10339bb215162cb45895093766",
+  "prompts": {},
+  "logical_commit_id": "38db2f1569762d10339bb215162cb45895093766",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 9325,
+      "total_deletions": 549
+    }
+  }
+}

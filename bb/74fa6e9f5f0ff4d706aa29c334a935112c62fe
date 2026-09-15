@@ -1,0 +1,43 @@
+builtin/web-ui/src/index.css
+  s_d2b977c6069372::t_ba23b4786c7583 29900
+  s_d2b977c6069372::t_f2facbc340047c 29898,29909
+  s_d2b977c6069372::t_2cc767ba836e1f 29906
+  s_d2b977c6069372::t_9e71f32cc1ec88 29907-29908
+  s_d2b977c6069372::t_21b113e419b753 29895-29897,29899,29905
+  s_d2b977c6069372::t_441580bc6359ab 29910-29915
+builtin/web-ui/src/pages/ReleasesPage.jsx
+  s_d2b977c6069372::t_73bca30012da91 99-101,105-108
+  s_d2b977c6069372::t_e9457e631700e1 1,3,46-47,49,51-57,59-61,63-64,91,98,109-110,113,137-138,249
+  s_d2b977c6069372::t_6f197fa0d21793 62
+  s_d2b977c6069372::t_7ac876f26df77d 58
+bin/lib/ui-server.mjs
+  s_d2b977c6069372::t_e1c84efbe6579b 2928-2929,3001-3003,3018-3019,3034
+  s_d2b977c6069372::t_6f197fa0d21793 159
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_d2b977c6069372::t_f2facbc340047c 12
+builtin/web-ui/src/App.jsx
+  s_d2b977c6069372::t_f2facbc340047c 21
+bin/lib/release-registry.mjs
+  s_d2b977c6069372::t_6f197fa0d21793 8,14-19,44-45,51-57
+  s_d2b977c6069372::t_0a3de80fd087f1 32,34,49
+  s_d2b977c6069372::t_e1c84efbe6579b 1-7,9-13,20-31,33,35-43,46-48,50,58-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "bb74fa6e9f5f0ff4d706aa29c334a935112c62fe",
+  "prompts": {},
+  "logical_commit_id": "fe8a2af41f4fb76af6018c187b852d323c00a0a3",
+  "sessions": {
+    "s_d2b977c6069372": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0463d-3bb2-79a2-868c-173321770d2b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": null,
+      "total_additions": 8224,
+      "total_deletions": 79
+    }
+  }
+}

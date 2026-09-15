@@ -1,0 +1,52 @@
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_8b8169e06594ea::t_4661ab4b4534d4 709,712-713,715-724
+bin/lib/release-runtime-executor.mjs
+  s_65c049f229c758::t_345bb4f2cf3d85 294,300-301,303-321,326,332,336,368
+builtin/web-ui/dist/assets/WorkflowAssistantThread-DgG1NY56.js
+  s_65c049f229c758::t_7ae25d5df160ab 1
+builtin/web-ui/dist/assets/index-D6WmfSQW.js
+  s_65c049f229c758::t_d94355cdedd202 17,33,37-38,40,42,44,65-67,69,203-205,207-208,210-211,214,220,222,225,227,230-231,234,242,304,310,319-323,351-352,356,361-362,368,858,888
+builtin/web-ui/dist/index.html
+  s_65c049f229c758::t_eac97e2dd1ef79 33
+builtin/web-ui/src/lib/releaseWorkflowModel.js
+  s_65c049f229c758::t_ecc8da9b4457d7 44
+docs/release-local-processes.md
+  s_65c049f229c758::t_36690f87329e21 23-24,35-42,45,47-57,59,61-62,64-70,73,75-80,82,87-88
+shared/release-workflow-config.js
+  s_65c049f229c758::t_2f9103ea17471c 10-13,41,43,56-58,60,63-65,67,86-91,103-138
+test/release-runtime-catalog.test.mjs
+  s_65c049f229c758::t_e50ff8001ed849 275-279,284-299
+test/release-runtime-executor.test.mjs
+  s_65c049f229c758::t_1dee5b5fb010a2 250,254,270,314-319
+test/release-workflow-config.test.mjs
+  s_65c049f229c758::t_a33f68ce280a00 50,62,98-99,102-103,112-113,195-227
+test/release-workflow-panel-contract.test.mjs
+  s_65c049f229c758::t_466ec8c7eb2860 121-129
+test/release-workflow-state-machine.test.mjs
+  s_65c049f229c758::t_4f091ea3214e07 11,30-32,35,52,54-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ad88de5dc3cf4527001eb5688b46597efd8fd5d9",
+  "prompts": {},
+  "logical_commit_id": "ad88de5dc3cf4527001eb5688b46597efd8fd5d9",
+  "sessions": {
+    "s_65c049f229c758": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "554e7a30-87d9-42dd-8249-9e863b0a1b8d",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    },
+    "s_8b8169e06594ea": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a06749-cfc0-7b50-9b34-8e55cf03c94d",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    }
+  }
+}

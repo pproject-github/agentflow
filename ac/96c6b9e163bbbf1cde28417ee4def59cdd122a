@@ -1,0 +1,97 @@
+builtin/web-ui/src/App.jsx
+  s_7a3d4268756f4c::t_18bccaaa228c25 4,150,326
+docs/wiki/radar-tracking.zh-CN.md
+  s_7a3d4268756f4c::t_c56996e62a7324 1-175
+test/radar.test.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-391
+bin/lib/main.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 26,392-396
+bin/lib/ui-server.mjs
+  s_7a3d4268756f4c::t_b6139c9ba4a7ef 100,2245-2266,2268,2276,2320
+  s_7a3d4268756f4c::t_0a32429dcd9aca 5925-5926,5928,5930
+  s_7a3d4268756f4c::t_18bccaaa228c25 102-105,107-116,5803-5911,5913-5924,5927,5929,5931-5961,5963,6178-6196
+  s_7a3d4268756f4c::t_b70599135f4b29 99,101,106,5733-5802
+  s_7a3d4268756f4c::t_b16169988281c5 2243-2244
+bin/lib/radar-alert-sweep.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-132
+builtin/web-ui/src/index.css
+  s_7a3d4268756f4c::t_18bccaaa228c25 22-23,31165-31951
+  s_7a3d4268756f4c::t_e79173e31493a2 31975,32009
+  s_7a3d4268756f4c::t_bec82403e1eefd 31952,31955-31956,31967,31971,31976-31989,31991,32007-32008,32011,32017-32025,32027,32029-32031,32033,32035,32037-32040,32042,32048,32055,32057-32102
+  s_7a3d4268756f4c::t_34e7e56d3a110a 31953-31954,31957-31966,31968-31970,31972-31974,31990,31992-31997,32001-32006,32010,32012-32016,32026,32028,32032,32034,32036,32041,32043-32047,32049-32054,32056
+  s_7a3d4268756f4c::t_08fdb9316ca54a 31998-32000
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_7a3d4268756f4c::t_18bccaaa228c25 17
+builtin/web-ui/dist/assets/index-DKUJ-11E.css
+  s_7a3d4268756f4c::t_08fdb9316ca54a 1
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BGzZcmbB.js
+  s_7a3d4268756f4c::t_08fdb9316ca54a 1
+test/radar-cli.test.mjs
+  s_7a3d4268756f4c::t_f832f748d46651 32
+  s_7a3d4268756f4c::t_123a031da27541 250-353
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-31,33-249
+bin/lib/radar-cli.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-373
+builtin/web-ui/dist/assets/index-CRzpR0B-.js
+  s_7a3d4268756f4c::t_08fdb9316ca54a 1,9,17,25,33-35,37-38,40-52,60,68,73-75,77-81,83-89,91-94,96-99,101,103,182,186,188,203-204,207-214,216,218-223,227,229,232,276-277,281,284-291,295-296,298-299,301,305,313,315,319,327-342,345-347,354,368,379-380,383,401,410,446,464,491,527,543,567,611,630,642,657,668,700,713,733,764,779,790,806,820,828,837,841,867
+test/radar-alert-sweep.test.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-149
+builtin/web-ui/src/pages/RadarPage.jsx
+  s_7a3d4268756f4c::t_9096c4846870c1 712
+  s_7a3d4268756f4c::t_48fcc80fa31fcd 899-904,906-910
+  s_7a3d4268756f4c::t_dc6460b1759fd4 726,728,767-782,792-796,798-799,801,803-804,813-817
+  s_7a3d4268756f4c::t_78ad8c08822566 1080-1086,1088-1089,1091
+  s_7a3d4268756f4c::t_15a6a89dd00c3e 1095-1119
+  s_7a3d4268756f4c::t_1db600b563943a 635-711
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-634,713-725,732-766,819-896,913-941,950-962,984-1079,1092-1094,1120-1158
+  s_7a3d4268756f4c::t_e79173e31493a2 905,948
+  s_7a3d4268756f4c::t_231fc6f2a30d37 791,806-807,818
+  s_7a3d4268756f4c::t_faf095f297b704 727,729-731,783-790,797,800,802,805,808-812
+  s_7a3d4268756f4c::t_720c631e254489 897-898,911-912
+  s_7a3d4268756f4c::t_dd42ca14bdfcc9 944,946
+  s_7a3d4268756f4c::t_1de0d1cfc36227 963-983,1087,1090
+  s_7a3d4268756f4c::t_c58151bcf421a5 942-943,945,947,949
+test/radar-planner.test.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-205
+test/workspace-workflow-render-contract.test.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 99-105,107-108
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_7a3d4268756f4c::t_18bccaaa228c25 173-187,190,198-201,9510,15738-15744,15976-15980
+bin/lib/radar-planner.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-215
+scripts/seed-radar-demo.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-138
+bin/lib/radar-alerts.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-159
+builtin/web-ui/dist/index.html
+  s_7a3d4268756f4c::t_08fdb9316ca54a 33-34
+skills/agentflow-tracking/SKILL.md
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-107
+bin/lib/radar.mjs
+  s_7a3d4268756f4c::t_47984558da39b0 689-734
+  s_7a3d4268756f4c::t_12c15f1eabed90 404-406,636-640
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-403,407-462,470-482,484-496,498-511,560-574,576-635,641-688,735-774
+  s_7a3d4268756f4c::t_a6e3447840364f 463-469,483,497,575
+  s_7a3d4268756f4c::t_329ccff5d26f3f 512-559
+test/radar-alerts.test.mjs
+  s_7a3d4268756f4c::t_18bccaaa228c25 1-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ac96c6b9e163bbbf1cde28417ee4def59cdd122a",
+  "prompts": {},
+  "logical_commit_id": "ac96c6b9e163bbbf1cde28417ee4def59cdd122a",
+  "sessions": {
+    "s_7a3d4268756f4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7329e95-82e5-4abb-bcf4-0f6589ecb71a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 13335,
+      "total_deletions": 328
+    }
+  }
+}

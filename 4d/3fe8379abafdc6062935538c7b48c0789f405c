@@ -1,0 +1,24 @@
+test/ui-static-caching.test.mjs
+  s_ad13d23010ed00::t_2c941da2fac8f1 1-60
+bin/lib/ui-server.mjs
+  s_ad13d23010ed00::t_44610c0d892df7 5298-5329
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4d3fe8379abafdc6062935538c7b48c0789f405c",
+  "prompts": {},
+  "logical_commit_id": "4d3fe8379abafdc6062935538c7b48c0789f405c",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "unknown"
+      },
+      "human_author": null,
+      "total_additions": 92,
+      "total_deletions": 3
+    }
+  }
+}

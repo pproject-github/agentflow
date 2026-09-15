@@ -1,0 +1,114 @@
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_c491bf42c7dfb1::t_fd48cf526eff5b 1040,1044,1047-1049,1059-1061,1063-1064,1067-1068,1070-1071
+  s_c491bf42c7dfb1::t_e5a8b766b363c9 238-239,269,274,278,280-281,283
+  s_c491bf42c7dfb1::t_1219bd35629a43 67-68
+  s_c491bf42c7dfb1::t_6387bd7d3194a5 354
+  s_c491bf42c7dfb1::t_ba4d487bd008c9 355
+test/release-runtime-catalog.test.mjs
+  s_c491bf42c7dfb1::t_fa2b156ff3be48 14
+  s_c491bf42c7dfb1::t_0d13b2774e63df 36-37
+bin/lib/release-runtime-executor.mjs
+  s_c491bf42c7dfb1::t_f728c8edb3b3f6 290,381
+  s_c491bf42c7dfb1::t_caebcb76c252b4 434-435
+  s_c491bf42c7dfb1::t_9cbb01cb4c83e2 224
+  s_c491bf42c7dfb1::t_379615743e91bb 508
+  s_c491bf42c7dfb1::t_8a5b14be2c68f3 1133
+  s_c491bf42c7dfb1::t_1b4eea6b3b2629 294-297
+  s_c491bf42c7dfb1::t_215490bf9b4a84 457,497,1081-1085
+  s_c491bf42c7dfb1::t_53b1c3cb523737 473-476
+  s_c491bf42c7dfb1::t_6a37746ac6eef2 1131-1132
+  s_c491bf42c7dfb1::t_a09264b4906563 1139-1143
+  s_c491bf42c7dfb1::t_b07aaeb475c5d9 1079
+  s_c491bf42c7dfb1::t_3c0e27adab7d64 212,471
+  s_c491bf42c7dfb1::t_e96b0355c93a87 225,425-433,436-454
+  s_c491bf42c7dfb1::t_6699a79ececf69 211,213-221,502
+  s_c491bf42c7dfb1::t_597f1e7568612d 383-388
+  s_c491bf42c7dfb1::t_d1fd52e0036740 498
+  s_c491bf42c7dfb1::t_770674db40bf00 493-496,500,503,507,509
+bin/lib/workspace-routes.mjs
+  s_c491bf42c7dfb1::t_946bbddc30410a 1785
+  s_c491bf42c7dfb1::t_ce040cdbf5e4b9 1761,1764,1780-1781,1789,1793-1794,1796
+builtin/web-ui/src/lib/releaseWorkflowStateMachine.js
+  s_c491bf42c7dfb1::t_9890bcdd8871cf 264-265,274,298
+  s_c491bf42c7dfb1::t_96996c257b52ed 372
+test/release-runtime-executor.test.mjs
+  s_c491bf42c7dfb1::t_fa0447af825625 87,265,415,417-439,441
+  s_c491bf42c7dfb1::t_63111f075b8034 336,340
+  s_c491bf42c7dfb1::t_11156fa1fd927f 102-112
+  s_c491bf42c7dfb1::t_802ad02f716416 275-278,281-283
+  s_c491bf42c7dfb1::t_78856948561faa 89-96,98-101
+  s_c491bf42c7dfb1::t_4bb4b5c098fdcf 85,97
+  s_c491bf42c7dfb1::t_a56478b65cbaf8 300
+  s_c491bf42c7dfb1::t_874d42dc14af69 468,471
+  s_c491bf42c7dfb1::t_55ebd19fb3fa3c 298
+  s_c491bf42c7dfb1::t_9979492f3ae000 228
+  s_c491bf42c7dfb1::t_c4c74b9346ae84 260
+  s_c491bf42c7dfb1::t_b6ebde5918f386 370-372
+  s_c491bf42c7dfb1::t_186839f14b8652 225,242
+  s_c491bf42c7dfb1::t_cb2db41c782e72 291-292
+  s_c491bf42c7dfb1::t_8708dbbf41ed97 284-290,293-294,296-297,299,302-304,306
+  s_c491bf42c7dfb1::t_ab185d334f7a9d 274,279-280
+  s_c491bf42c7dfb1::t_e19c86376599f0 295,301
+  s_c491bf42c7dfb1::t_eb0aa86743ef96 259
+  s_c491bf42c7dfb1::t_f2386ca52b6961 267-273
+  s_c491bf42c7dfb1::t_aae1a946352773 86
+  s_c491bf42c7dfb1::t_19a8e59929790d 88
+  s_c491bf42c7dfb1::t_5c316da2b18868 266
+  s_c491bf42c7dfb1::t_bcf512ebb67db4 416
+test/release-deployment-config.test.mjs
+  s_c491bf42c7dfb1::t_f2386ca52b6961 80-88
+bin/lib/release-runtime-store.mjs
+  s_c491bf42c7dfb1::t_ddda0d4d9f5c85 242
+  s_c491bf42c7dfb1::t_b909dbc5058710 221,234-235
+shared/release-workflow-config.js
+  s_c491bf42c7dfb1::t_6699a79ececf69 63
+  s_c491bf42c7dfb1::t_9cbe2daaa4d182 89
+  s_c491bf42c7dfb1::t_3d0910d8f16e59 53,56-57,64-68,70-71,73,75,79,81
+  s_c491bf42c7dfb1::t_21337b229e8a72 76
+  s_c491bf42c7dfb1::t_89f108c042bd87 58
+  s_c491bf42c7dfb1::t_187964df2276e8 226-227
+shared/release-deployment-config.js
+  s_c491bf42c7dfb1::t_6699a79ececf69 25-26,513
+bin/lib/release-runtime.mjs
+  s_c491bf42c7dfb1::t_fe29c93dea0f7d 462
+  s_c491bf42c7dfb1::t_bfef61cadcecef 256,278
+  s_c491bf42c7dfb1::t_f6fa9cfeb13b9a 461
+  s_c491bf42c7dfb1::t_83fd747bbf3d9c 184-189
+test/release-workflow-state-machine.test.mjs
+  s_c491bf42c7dfb1::t_a7097ab240b947 129,139,144,152,172,182
+test/release-workflow-panel-contract.test.mjs
+  s_c491bf42c7dfb1::t_9aebb5e55a25e4 142
+  s_c491bf42c7dfb1::t_a7097ab240b947 130,139
+test/release-runtime-api.test.mjs
+  s_c491bf42c7dfb1::t_a7097ab240b947 23,29-30,32-33,320,361-364
+  s_c491bf42c7dfb1::t_2f1dd68bb15eeb 27,31
+  s_c491bf42c7dfb1::t_1bc381ea4ac0f1 49-58,60
+  s_c491bf42c7dfb1::t_d81dcbef07929e 47-48
+test/release-workflow-config.test.mjs
+  s_c491bf42c7dfb1::t_a7097ab240b947 81-87
+  s_c491bf42c7dfb1::t_d524b3ba6d8de4 72-73
+  s_c491bf42c7dfb1::t_8e5130b89629f5 88,92,94
+  s_c491bf42c7dfb1::t_cce590ae542e94 123
+builtin/web-ui/src/components/ReleaseNodeInspector.jsx
+  s_c491bf42c7dfb1::t_6387bd7d3194a5 195
+  s_c491bf42c7dfb1::t_7d5285da0dc90d 196,205-206,364
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a774b9e9b5bce7eb427f14aecca66adcd47e0fbb",
+  "prompts": {},
+  "logical_commit_id": "311998712bbe30ee39ac2a9f1e9e1106b02dd926",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 11969,
+      "total_deletions": 1689
+    }
+  }
+}

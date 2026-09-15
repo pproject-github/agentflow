@@ -1,0 +1,30 @@
+builtin/web-ui/src/lib/releaseNodeCatalog.js
+  s_c491bf42c7dfb1::t_159907008b2daf 7,228-263,269-296,303
+  s_c491bf42c7dfb1::t_bd7e2855fd7ec8 297,301-302
+  s_c491bf42c7dfb1::t_92fb97dc561634 264-268
+test/release-runtime-api.test.mjs
+  s_c491bf42c7dfb1::t_e668593c0b8e91 265-269
+bin/lib/workspace-routes.mjs
+  s_c491bf42c7dfb1::t_c2e377e8dc1da4 1379,1406,1411,1437,1443
+  s_c491bf42c7dfb1::t_795d2fe1b92448 1192-1234
+  s_c491bf42c7dfb1::t_93eae4ea03977d 1393-1394,1424-1425
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ffbc10d42c8987191fabd893508dfb8e7180620d",
+  "prompts": {},
+  "logical_commit_id": "ffbc10d42c8987191fabd893508dfb8e7180620d",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 27869,
+      "total_deletions": 3124
+    }
+  }
+}

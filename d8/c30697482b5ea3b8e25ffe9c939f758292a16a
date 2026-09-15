@@ -1,0 +1,44 @@
+test/release-workflow-config.test.mjs
+  s_c491bf42c7dfb1::t_24449a59879a8b 215-219
+  s_c491bf42c7dfb1::t_3145e565303d87 118
+  s_c491bf42c7dfb1::t_2ded81d00605b9 223
+  s_c491bf42c7dfb1::t_55204ab5ba88b4 204
+  s_c491bf42c7dfb1::t_24035e09580d19 147-152,190,258-275
+  s_c491bf42c7dfb1::t_c3d73e4ca8a7ff 242
+  s_c491bf42c7dfb1::t_2c5885bd1d9458 222
+  s_c491bf42c7dfb1::t_a794f1663dbc96 10,192-203,220-221,224-241,243-257
+  s_c491bf42c7dfb1::t_518258ecd3c0a7 205-214
+  s_c491bf42c7dfb1::t_0274195dfb656f 191
+shared/release-workflow-config.js
+  s_c491bf42c7dfb1::t_51f42d01e1cc02 101,116,129
+  s_c491bf42c7dfb1::t_bdd98cb4ed73d6 284-285
+  s_c491bf42c7dfb1::t_54dec520ab9e5d 261-262,267-268,271-272,274-278,280-283
+  s_c491bf42c7dfb1::t_6a09392b355609 422,446-477,479-481,493-502,504,510
+  s_c491bf42c7dfb1::t_c9347084398946 505-509
+  s_c491bf42c7dfb1::t_0902059b9f1b81 503
+  s_c491bf42c7dfb1::t_cd73c57c706c88 217
+  s_c491bf42c7dfb1::t_9c7adf7124ca3e 127
+  s_c491bf42c7dfb1::t_1a43e80dfd2cf9 432-445
+  s_c491bf42c7dfb1::t_97829042afe577 98-99,111-114,126,139-141,143
+  s_c491bf42c7dfb1::t_b4fbf288e7facc 219-220,222-223
+  s_c491bf42c7dfb1::t_cf1559eee96038 279,289-291
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d8c30697482b5ea3b8e25ffe9c939f758292a16a",
+  "prompts": {},
+  "logical_commit_id": "b713bec55154244134b345ed47d543d26661d1e2",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 25239,
+      "total_deletions": 3048
+    }
+  }
+}

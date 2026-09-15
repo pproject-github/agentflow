@@ -1,0 +1,38 @@
+builtin/web-ui/dist/assets/index-CNQn4PSh.css
+  s_c491bf42c7dfb1::t_14947cc2157849 1
+builtin/web-ui/dist/assets/WorkflowAssistantThread-D63KotXq.js
+  s_eff114830a270d::t_9c2f8756aff9b3 1
+builtin/web-ui/dist/assets/index-BDF5KzrN.js
+  s_eff114830a270d::t_9c2f8756aff9b3 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,200-215,217-227,230-237,241-246,250,252,255,299-300,304,308,310-314,318-319,321-323,325,329,337,339,343,351-360,367,381,392-393,396,414,423,459,477,504,540,556,580,624,643,655,670,681,713,726,746,777,792,803,819,833,841,850,854,880
+builtin/web-ui/dist/index.html
+  s_eff114830a270d::t_58b8d6a864d0a2 33-34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cbb681f47be5b13a8dd77bd0a2a401ed303e251e",
+  "prompts": {},
+  "logical_commit_id": "cbb681f47be5b13a8dd77bd0a2a401ed303e251e",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 4718,
+      "total_deletions": 1201
+    },
+    "s_eff114830a270d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 3559,
+      "total_deletions": 14
+    }
+  }
+}

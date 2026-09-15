@@ -1,0 +1,26 @@
+scripts/generate-agentflow-skill-references.mjs
+  s_ad13d23010ed00::t_8e8f15c5826d1e 86-89
+CLAUDE.md
+  s_ad13d23010ed00::t_a8c10a3ddd574c 272,281-286
+skills/agentflow-node-reference/references/builtin-nodes.md
+  s_ad13d23010ed00::t_8e8f15c5826d1e 12-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f43beebe6fb2a95fd9649ce3e32603206137002d",
+  "prompts": {},
+  "logical_commit_id": "f43beebe6fb2a95fd9649ce3e32603206137002d",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "unknown"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 7124,
+      "total_deletions": 482
+    }
+  }
+}

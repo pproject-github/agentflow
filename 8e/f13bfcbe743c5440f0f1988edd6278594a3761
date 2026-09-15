@@ -1,0 +1,30 @@
+test/flow-dsl-duplicate-run-declaration.test.mjs
+  s_ad13d23010ed00::t_f05a091ba61fe4 1-78
+docs/wiki/flow-dsl.zh-CN.md
+  s_ad13d23010ed00::t_e10b61e8bc47e7 222-227
+docs/wiki/flow-dsl.en.md
+  s_ad13d23010ed00::t_52737691edf96b 257,259-265
+bin/lib/flow-dsl/codegen.mjs
+  s_ad13d23010ed00::t_f05a091ba61fe4 335-342
+bin/lib/workspace-server.mjs
+  s_ad13d23010ed00::t_35fffac9ccfa2c 697-698
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8ef13bfcbe743c5440f0f1988edd6278594a3761",
+  "prompts": {},
+  "logical_commit_id": "8ef13bfcbe743c5440f0f1988edd6278594a3761",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 4173,
+      "total_deletions": 222
+    }
+  }
+}

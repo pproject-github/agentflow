@@ -1,0 +1,34 @@
+bin/lib/ui-server.mjs
+  s_ad13d23010ed00::t_1a345863e6fde7 2118,2122,2158-2160
+builtin/web-ui/src/scheduleNavigation.js
+  s_ad13d23010ed00::t_353ccd0504b590 1-16,26-27
+builtin/web-ui/dist/index.html
+  s_ad13d23010ed00::t_81b881b01b455a 33
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BCu-qutj.js
+  s_ad13d23010ed00::t_81b881b01b455a 1
+builtin/web-ui/src/pages/SchedulesPage.jsx
+  s_ad13d23010ed00::t_726052320c8501 3,35,52,61,155,228-230
+builtin/web-ui/dist/assets/index-Bn5e2_35.js
+  s_ad13d23010ed00::t_81b881b01b455a 1,9,17,25,33,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195-196,199-206,210-215,219,221,224,268-269,273,277,279-280,282-283,287-288,290-291,293,297,305,307,311,319,321-323,325-329,332-334,337-339,346,360,371-372,375,393,402,438,456,483,519,535,559,603,622,634,649,660,692,705,725,756,771,782,798,812,820,829,833,859
+test/schedule-target-url.test.mjs
+  s_ad13d23010ed00::t_a22d0b168be40c 1-45
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "98a921117d8f493f749d42b8a8fa862e8734f9f2",
+  "prompts": {},
+  "logical_commit_id": "98a921117d8f493f749d42b8a8fa862e8734f9f2",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 13152,
+      "total_deletions": 570
+    }
+  }
+}

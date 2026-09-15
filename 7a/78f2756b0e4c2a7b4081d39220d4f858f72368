@@ -1,0 +1,40 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-CL9OpI-8.js
+  s_ad13d23010ed00::t_531068b83c7c3f 1
+docs/wiki/flow-dsl.zh-CN.md
+  s_ad13d23010ed00::t_83d6821550657c 142-148
+test/slot-handles.test.mjs
+  s_ad13d23010ed00::t_278559d1730be1 5,84-131
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_ad13d23010ed00::t_219f0893cf4f7c 22,2376,2379,2514
+  s_ad13d23010ed00::t_9576ad20789fba 2373-2375,2377-2378,2387,2521-2522,2538
+  s_ad13d23010ed00::t_726b78e2cb9609 2505-2513
+builtin/web-ui/src/flowFormat.js
+  s_ad13d23010ed00::t_219f0893cf4f7c 4,131-141
+builtin/web-ui/dist/index.html
+  s_ad13d23010ed00::t_531068b83c7c3f 33
+builtin/web-ui/dist/assets/index-iTwtgi32.js
+  s_ad13d23010ed00::t_531068b83c7c3f 1,9,17,25,33-35,37-38,40-44,52,60,65-67,69-73,75-81,83-86,88-91,93,95,174,178,180,195,197,201-204,210-211,213-214,225-227,230-237,239,241-246,250,252,255,299-300,302,304,308,310-314,318-319,321-322,324,328,336,338,342,350,352-354,356-360,364-367,370-372,379,393,404-405,408,426,435,471,489,552,568,592,636,655,667,682,693,725,738,758,789,804,815,831,845,853,862,866,892
+docs/wiki/flow-dsl.en.md
+  s_ad13d23010ed00::t_83d6821550657c 159-168
+shared/slot-handles.js
+  s_ad13d23010ed00::t_36360111593b2e 103-132
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7a78f2756b0e4c2a7b4081d39220d4f858f72368",
+  "prompts": {},
+  "logical_commit_id": "7a78f2756b0e4c2a7b4081d39220d4f858f72368",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 6125,
+      "total_deletions": 271
+    }
+  }
+}

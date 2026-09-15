@@ -1,0 +1,24 @@
+bin/lib/ui-server.mjs
+  s_ad13d23010ed00::t_dafda37b9b35a6 2458-2459,2482-2485,2493,2563-2567
+test/cli-auth-logging.test.mjs
+  s_ad13d23010ed00::t_7cc80fcd63f70e 1-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "0b5bb5a2fb9ad7f8fb284bba1a5f6aa5f4956f58",
+  "prompts": {},
+  "logical_commit_id": "0b5bb5a2fb9ad7f8fb284bba1a5f6aa5f4956f58",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 13191,
+      "total_deletions": 570
+    }
+  }
+}

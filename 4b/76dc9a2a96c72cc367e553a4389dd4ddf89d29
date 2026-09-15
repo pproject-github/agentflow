@@ -1,0 +1,24 @@
+shared/release-workflow-config.js
+  s_c491bf42c7dfb1::t_5b0fde86bc0273 115,130,226-231
+test/release-workflow-config.test.mjs
+  s_c491bf42c7dfb1::t_e6b06f31efde94 24-25,52-79
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4b76dc9a2a96c72cc367e553a4389dd4ddf89d29",
+  "prompts": {},
+  "logical_commit_id": "4b76dc9a2a96c72cc367e553a4389dd4ddf89d29",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 21746,
+      "total_deletions": 2532
+    }
+  }
+}

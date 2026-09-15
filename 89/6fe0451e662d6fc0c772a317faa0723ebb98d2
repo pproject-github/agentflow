@@ -1,0 +1,39 @@
+test/release-workflow-config.test.mjs
+  s_c491bf42c7dfb1::t_1f8e64a3762a62 148
+  s_c491bf42c7dfb1::t_79a96cec846733 141-147,149-155
+shared/release-workflow-config.js
+  s_c491bf42c7dfb1::t_9d219bf6a30963 96,116-117
+  s_c491bf42c7dfb1::t_f704149290f84c 93,113
+builtin/web-ui/src/lib/releaseNodeCatalog.js
+  s_c491bf42c7dfb1::t_59dfdb9c73eb7f 232-234
+  s_c491bf42c7dfb1::t_1a9f66b3b3f554 196-205
+test/release-runtime-catalog.test.mjs
+  s_c491bf42c7dfb1::t_7ed72811a860c5 190-207,209
+  s_c491bf42c7dfb1::t_df67e3810104d0 161
+  s_c491bf42c7dfb1::t_60e8897654f7e8 168,171-172,174-175
+  s_c491bf42c7dfb1::t_edaf92d8649c9b 173
+  s_c491bf42c7dfb1::t_c41599f068f436 188-189
+test/release-workflow-state-machine.test.mjs
+  s_c491bf42c7dfb1::t_ed83b24a2cf7a9 185
+  s_c491bf42c7dfb1::t_40450a4e1b831f 45,57,70,79,93,116,286
+  s_c491bf42c7dfb1::t_52f5f6a4f71f10 169,200
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "896fe0451e662d6fc0c772a317faa0723ebb98d2",
+  "prompts": {},
+  "logical_commit_id": "896fe0451e662d6fc0c772a317faa0723ebb98d2",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 23649,
+      "total_deletions": 3001
+    }
+  }
+}

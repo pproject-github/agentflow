@@ -1,0 +1,58 @@
+test/slot-handles.test.mjs
+  s_ad13d23010ed00::t_51c020267db86f 30-36
+  s_ad13d23010ed00::t_89f0f21b6e018d 1-29,37-83
+shared/slot-handles.js
+  s_ad13d23010ed00::t_ab43998fb509b2 1-28,30,33-74,76-82,102
+  s_ad13d23010ed00::t_51c020267db86f 29,31-32
+  s_ad13d23010ed00::t_ebae287ba68e46 75,83-101
+test/flow-dsl-packages.test.mjs
+  s_ad13d23010ed00::t_54c38cbb87b7a1 1,91-92
+bin/lib/flow-dsl/ir.mjs
+  s_ad13d23010ed00::t_d33e75c33966df 13,70-75
+  s_ad13d23010ed00::t_9068f9ea9626c1 319-321
+bin/lib/workspace-auto-layout.mjs
+  s_ad13d23010ed00::t_b25fc03a97e06d 1-2,42-47
+bin/lib/workspace-state.mjs
+  s_ad13d23010ed00::t_fbf86c3bcaa720 33-34,115-116
+builtin/web-ui/src/flowFormat.js
+  s_ad13d23010ed00::t_d54c2c4c1e446d 4,130,133-146
+test/flow-dsl-js-habits.test.mjs
+  s_ad13d23010ed00::t_8d9410a916852e 7,24-26
+bin/lib/release-runtime-executor.mjs
+  s_ad13d23010ed00::t_b25fc03a97e06d 862,876
+bin/lib/workspace-flow-store.mjs
+  s_ad13d23010ed00::t_2f720880454dee 230-232
+  s_ad13d23010ed00::t_0072520872a135 357-359
+  s_ad13d23010ed00::t_ebae287ba68e46 30,360
+test/flow-dsl.test.mjs
+  s_ad13d23010ed00::t_889adb8faa9e6e 18,321,343-345
+  s_ad13d23010ed00::t_3a22ff9d6b9b93 20,22-24
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_ad13d23010ed00::t_c522253df1cbc5 22,2846,2852-2853
+test/release-runtime-executor.test.mjs
+  s_ad13d23010ed00::t_1727b960293875 108
+  s_ad13d23010ed00::t_809e54a667241d 109-112
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_ad13d23010ed00::t_4b910a11460af5 1847-1887,1929-1930,13036-13040,13214-13216,14221,14299-14300,14801-14806
+bin/lib/workspace-server.mjs
+  s_ad13d23010ed00::t_8486a1bb1d1576 12,2230,3215-3216,3314-3315,3488-3489,3618-3619,3621-3622,3814,3817-3846,3853,3909,3923,5840-5841,6111-6114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "585fbb7103f096ab1ff952d1a8114b824bf97817",
+  "prompts": {},
+  "logical_commit_id": "585fbb7103f096ab1ff952d1a8114b824bf97817",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 2160,
+      "total_deletions": 112
+    }
+  }
+}

@@ -1,0 +1,26 @@
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_c491bf42c7dfb1::t_4e85b6742f4813 702-703,705,715,721-722
+  s_c491bf42c7dfb1::t_1ccaac2eb171d9 3,8,187-189,667-691,804
+  s_c491bf42c7dfb1::t_e0cd8914e1b1a4 766-769
+  s_c491bf42c7dfb1::t_eb3ea795bf27c7 485,704,823
+  s_c491bf42c7dfb1::t_1475433bf2d815 81-82
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "91b54d33f17413422b71caeb0f2376478a608fa8",
+  "prompts": {},
+  "logical_commit_id": "91b54d33f17413422b71caeb0f2376478a608fa8",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 36392,
+      "total_deletions": 4717
+    }
+  }
+}

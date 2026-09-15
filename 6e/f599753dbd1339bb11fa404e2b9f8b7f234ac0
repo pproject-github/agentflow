@@ -1,0 +1,73 @@
+docs/release-local-processes.md
+  s_fb1f118e3bc599::t_706e4648c1705f 40,48,50,69,76,78
+  s_65c049f229c758::t_36690f87329e21 42,52,70,79
+scripts/release-flow-smoke-test.mjs
+  s_fb1f118e3bc599::t_e1933f62953547 92-96
+builtin/web-ui/src/lib/releaseWorkflowModel.js
+  s_fb1f118e3bc599::t_11cc9db42b8b84 45-47
+  s_9e830794f4a2a5::t_911fa225359ae7 49
+test/release-workflow-config.test.mjs
+  s_fb1f118e3bc599::t_22421f7cde5b48 50,59-61,99,103,110-112,215,220,230-235
+shared/release-workflow-config.js
+  s_fb1f118e3bc599::t_1d52cb90f61fdd 58-62,111,116,129,134
+  s_c491bf42c7dfb1::t_c42fcedcb3ad40 70
+  s_c491bf42c7dfb1::t_fdd162f1189c2d 69
+bin/lib/release-runtime-executor.mjs
+  s_fb1f118e3bc599::t_264e0a10d16b23 338,341-343,347-349,351,354-356,360-362,364-371
+  s_9e830794f4a2a5::t_58a4046c3c76fc 372
+  s_9e830794f4a2a5::t_66bd4c87f59cfc 388,392
+builtin/web-ui/dist/index.html
+  s_fb1f118e3bc599::t_ca9b7a0ce6b413 33
+test/release-runtime-executor.test.mjs
+  s_fb1f118e3bc599::t_115d06edc3e67c 247-249,271,280-285
+  s_9e830794f4a2a5::t_795a71d97e0c78 286-287
+builtin/web-ui/dist/assets/WorkflowAssistantThread-C73WRFUs.js
+  s_fb1f118e3bc599::t_05adcc6fc1fa41 1
+builtin/web-ui/dist/assets/index-B84QQpiG.js
+  s_fb1f118e3bc599::t_d2ce1dfad5203f 38,40,42,44,65-67,230,242,246,300,304,310-311,319-323,353,355,366-367,863
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6ef599753dbd1339bb11fa404e2b9f8b7f234ac0",
+  "prompts": {},
+  "logical_commit_id": "9b3cb49c7e27bd0043a4d13ac0f73b63cfa05de2",
+  "sessions": {
+    "s_65c049f229c758": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "554e7a30-87d9-42dd-8249-9e863b0a1b8d",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    },
+    "s_9e830794f4a2a5": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "7c6e1c6f-c7b6-4993-9f54-c7957ae2a58a",
+        "model": "default"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 13748,
+      "total_deletions": 1491
+    },
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 43404,
+      "total_deletions": 5165
+    },
+    "s_fb1f118e3bc599": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "defa4443-f97e-4f03-b976-254a442f509a",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    }
+  }
+}

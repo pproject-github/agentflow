@@ -1,0 +1,26 @@
+package-lock.json
+  s_7a3d4268756f4c::t_985c7a6fdf1888 3,9
+package.json
+  s_7a3d4268756f4c::t_7114710d4f486c 3
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_7a3d4268756f4c::t_83fc1b4cde5348 1
+skills/agentflow-cli/runtime/package.json
+  s_7a3d4268756f4c::t_c1bc6056f152f0 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d3a3f79719d1ca79ff28ea180cb7c21279992fd3",
+  "prompts": {},
+  "logical_commit_id": "d3a3f79719d1ca79ff28ea180cb7c21279992fd3",
+  "sessions": {
+    "s_7a3d4268756f4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7329e95-82e5-4abb-bcf4-0f6589ecb71a",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

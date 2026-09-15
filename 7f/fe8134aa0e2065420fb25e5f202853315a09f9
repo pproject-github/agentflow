@@ -1,0 +1,230 @@
+test/release-registry.test.mjs
+  s_c491bf42c7dfb1::t_47bd25ae17b172 37-41
+bin/lib/workspace-routes.mjs
+  s_c491bf42c7dfb1::t_f7cbdc82de1ff6 1174
+  s_c491bf42c7dfb1::t_1a34a67a5a6eba 1176,1180-1181
+  s_c491bf42c7dfb1::t_e6ab1e9de6d76b 88,1353-1354,1358-1359
+bin/lib/release-runtime.mjs
+  s_c491bf42c7dfb1::t_55084ba0743998 6-8,86-87,98-102
+  s_c491bf42c7dfb1::t_c1f3569751cdbd 285-292
+  s_c491bf42c7dfb1::t_ac36a8e2fab921 303
+  s_c491bf42c7dfb1::t_f889ade60a900e 82-83,89-91
+  s_c491bf42c7dfb1::t_e4faf0ca3c7797 300-301
+  s_607fb1869dd3f7::t_5eaffc8ecb7f7e 103-104
+builtin/web-ui/src/pages/ReleasePage.jsx
+  s_c491bf42c7dfb1::t_f5bd99da86b60c 189
+  s_c491bf42c7dfb1::t_59a0c1cf0f0710 4,15-20,25,103,140-142,145
+  s_c491bf42c7dfb1::t_e831fadc0d9041 21,137,172
+test/release-workflow-config.test.mjs
+  s_c491bf42c7dfb1::t_85411d9ee60ea6 60,104,111
+  s_c491bf42c7dfb1::t_7ca51630308265 50
+  s_c491bf42c7dfb1::t_c88a99d91c2a28 220,232-233
+  s_c491bf42c7dfb1::t_a19a400dce2fb8 85-87
+shared/release-workflow-config.js
+  s_c491bf42c7dfb1::t_f657cedd812ca9 72
+  s_c491bf42c7dfb1::t_d010b122280661 4-24
+  s_c491bf42c7dfb1::t_9ceb8327a2add0 73
+  s_c491bf42c7dfb1::t_d61793033876cd 81-82,131,149
+test/release-workflow-state-machine.test.mjs
+  s_c491bf42c7dfb1::t_01f3b51d1d5faa 86-89
+  s_c491bf42c7dfb1::t_fb70ab8b9e034e 55,66-74
+  s_c491bf42c7dfb1::t_53f6e33bdbf724 75-76,78-85,91
+  s_c491bf42c7dfb1::t_fa543f8e610abf 57-65
+  s_c491bf42c7dfb1::t_63d7010288054a 10,77
+  s_c491bf42c7dfb1::t_ba31e970c16e71 56
+  s_607fb1869dd3f7::t_5eaffc8ecb7f7e 90
+bin/lib/release-registry.mjs
+  s_c491bf42c7dfb1::t_76d8b04e5a7975 34,60-70,74-94,101-110
+  s_c491bf42c7dfb1::t_95be775382b3b3 35-38
+  s_c491bf42c7dfb1::t_dbf35529cb03fa 71-73
+  s_c491bf42c7dfb1::t_2d56a21e2c5585 95-100
+  s_607fb1869dd3f7::t_5eaffc8ecb7f7e 113
+bin/lib/release-tapd.mjs
+  s_c491bf42c7dfb1::t_1859d576649dd3 184
+  s_c491bf42c7dfb1::t_676387c3b88fda 80,82,103,125-134,153,159-160,168-171,174
+  s_c491bf42c7dfb1::t_71054d72a0c8c1 161-167
+  s_c491bf42c7dfb1::t_a87b23b0bca5b0 40-48,84-86,92-96,98-101
+  s_c491bf42c7dfb1::t_ff35664ff13579 180,198
+  s_c491bf42c7dfb1::t_0bcf618781f113 203
+  s_c491bf42c7dfb1::t_8cfca56ca27aab 1,3,49-58,62-69,71-75,77,79,81,83,87-91,97,102,104-124,176-178
+  s_c491bf42c7dfb1::t_d1816c9baba8ef 59-61
+  s_c491bf42c7dfb1::t_7a74152f77a6c0 2,4-39,70,76,78,135-152,154-158,172-173,175,179,181-183,185-197,199-202
+test/release-runtime-executor.test.mjs
+  s_c491bf42c7dfb1::t_19a9f032627ea7 309,316,363,378
+  s_c491bf42c7dfb1::t_d37674398bdc02 455-471,473
+  s_c491bf42c7dfb1::t_fd84371d4e8fe8 307-308,315
+  s_c491bf42c7dfb1::t_cb029309907047 737,763-765,769,795-797
+  s_c491bf42c7dfb1::t_27c2e59cf4e094 583,611,641
+  s_c491bf42c7dfb1::t_2c72e5ae9960d3 453,579-580,672-733,736
+  s_c491bf42c7dfb1::t_85411d9ee60ea6 288-293
+  s_c491bf42c7dfb1::t_fb70ab8b9e034e 582,584-595,597-610,612-625,627-640,642-657,659-671
+  s_c491bf42c7dfb1::t_c88a99d91c2a28 253
+  s_c491bf42c7dfb1::t_cf96c39c0525fc 275
+  s_c491bf42c7dfb1::t_1e3977c646feff 310,317,364
+  s_c491bf42c7dfb1::t_c474dc6168f4e9 349-362,365-377,380-381
+  s_c491bf42c7dfb1::t_7b854e4e688907 596,626,658
+  s_c491bf42c7dfb1::t_92f72b1878e207 379
+  s_c491bf42c7dfb1::t_2b2d12f4f73d1a 454
+  s_c491bf42c7dfb1::t_0f7d584fdafbe9 581
+  s_607fb1869dd3f7::t_5eaffc8ecb7f7e 472,734-735
+builtin/web-ui/src/lib/releaseWorkflowModel.js
+  s_c491bf42c7dfb1::t_e4db9fe33e2a19 2
+  s_c491bf42c7dfb1::t_9bae20c48d225b 129,131,135-136
+  s_c491bf42c7dfb1::t_d91d7d8d2c6d79 145-146
+  s_c491bf42c7dfb1::t_c88a99d91c2a28 47
+  s_c491bf42c7dfb1::t_1500ffbaaf1a76 402
+  s_c491bf42c7dfb1::t_29a7bb0bee74fe 332,334-356,358,374,395-397
+  s_c491bf42c7dfb1::t_dd45221af78ee9 372
+  s_c491bf42c7dfb1::t_023debdf746e9d 400-401
+  s_c491bf42c7dfb1::t_313deff121cc8e 333
+  s_607fb1869dd3f7::t_5eaffc8ecb7f7e 357
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_c491bf42c7dfb1::t_15f1708915c839 814,835-836,842,905
+  s_c491bf42c7dfb1::t_520ea6f1de6eab 674-675,678,734,753,755,758,767,769
+  s_c491bf42c7dfb1::t_20deb8af0eabd0 1228,1246,1266,1328,1385,1387
+  s_c491bf42c7dfb1::t_1d41e8af0e545b 308
+  s_c491bf42c7dfb1::t_aa4c8ac017d5a9 1405,1421
+  s_c491bf42c7dfb1::t_6574e9c2adfed6 12,737-739
+  s_c491bf42c7dfb1::t_0ea079dcb83124 354,357
+  s_c491bf42c7dfb1::t_0083ac5d392247 1091,1106-1107,1111,1130-1133
+  s_c491bf42c7dfb1::t_9943dc9a1005fe 960,1098,1142,1171,1176,1188,1190,1211,1213
+  s_c491bf42c7dfb1::t_929cfde90016f5 14,199,1367
+  s_c491bf42c7dfb1::t_ec0da63d97d08f 312-313,338,868-871
+  s_c491bf42c7dfb1::t_3560d5537b7f43 382-400
+test/release-page-contract.test.mjs
+  s_c491bf42c7dfb1::t_59c1489bcefc6b 22,24,27
+  s_c491bf42c7dfb1::t_f9986c3e94f048 23,25-26
+test/release-workflow-model.test.mjs
+  s_c491bf42c7dfb1::t_dde086385d1b30 115,118,120-121,492,496
+  s_c491bf42c7dfb1::t_c8b0435ea5190c 77-79,81-86,88,90-91
+  s_c491bf42c7dfb1::t_6bca9a574013b8 56
+  s_c491bf42c7dfb1::t_a278f46d042190 80,87,89
+  s_c491bf42c7dfb1::t_a7737ee6e2da95 59-76
+  s_607fb1869dd3f7::t_5eaffc8ecb7f7e 57-58
+bin/lib/release-runtime-store.mjs
+  s_c491bf42c7dfb1::t_b9896ede9200e4 71-75,78,80,83,94
+  s_c491bf42c7dfb1::t_5880ecc1faf2b1 12
+  s_c491bf42c7dfb1::t_8d777b32e8fc3f 4,22-23,26,45
+  s_c491bf42c7dfb1::t_abc25984d011e1 35-36
+  s_c491bf42c7dfb1::t_d8ef6e406b36ad 34
+  s_c491bf42c7dfb1::t_8f914ac8caec30 82
+  s_c491bf42c7dfb1::t_6653b138d59526 51-56,58
+  s_c491bf42c7dfb1::t_eb505c9e9bd4fc 68
+bin/lib/release-runtime-executor.mjs
+  s_c491bf42c7dfb1::t_3464b09f321d41 271
+  s_c491bf42c7dfb1::t_7ac66cdb7e70cf 648-656,658-666,670-673,675-676,678-680,690,693,702-705,707
+  s_c491bf42c7dfb1::t_8da7466cc2cca4 691
+  s_c491bf42c7dfb1::t_f91cd6209c812c 736-740
+  s_c491bf42c7dfb1::t_23a818a3398e59 667-669
+  s_c491bf42c7dfb1::t_35e26b9e7ec1a7 837-838
+  s_c491bf42c7dfb1::t_f657cedd812ca9 268
+  s_c491bf42c7dfb1::t_90c06b8ffe5a6c 722,725,729-731,759,765-773,776-782,787-789,794-803,808-810,814-829
+  s_c491bf42c7dfb1::t_e990ef7bd4ccf6 532,657,674,677
+  s_c491bf42c7dfb1::t_841c72353a3c7a 376
+  s_c491bf42c7dfb1::t_64a08b7bfb14a0 544-555,557,559,581-586,589,601
+  s_c491bf42c7dfb1::t_fa9b87aaa6ff85 6-7,628-647,681-682,694,697-701,706,708-720
+  s_c491bf42c7dfb1::t_1d69d37192047c 593,605
+  s_c491bf42c7dfb1::t_28e737df8d324b 267
+  s_c491bf42c7dfb1::t_afe24a15bf3c27 733-735,741-757
+  s_c491bf42c7dfb1::t_f3d1a3056b9a99 594-595
+  s_c491bf42c7dfb1::t_d61793033876cd 366,369,373-375,377-378
+  s_607fb1869dd3f7::t_5eaffc8ecb7f7e 587-588,721
+builtin/web-ui/src/pages/ReleasesPage.jsx
+  s_c491bf42c7dfb1::t_bfc881e7088a99 30
+  s_c491bf42c7dfb1::t_6c7821c191f8c5 67
+bin/lib/ui-server.mjs
+  s_c491bf42c7dfb1::t_e8a77b61535855 3076-3098
+  s_c491bf42c7dfb1::t_5ef1f7918ed12f 160
+  s_c491bf42c7dfb1::t_26d8ea1b4ec23c 129
+  s_c491bf42c7dfb1::t_8644092cecad9c 3130-3168,3171
+  s_c491bf42c7dfb1::t_4808a3f65b4b82 159
+  s_c491bf42c7dfb1::t_43aa78862c2439 3127-3129
+scripts/release-flow-smoke-test.mjs
+  s_c491bf42c7dfb1::t_a726b725e70b12 96
+test/release-tapd-sync.test.mjs
+  s_c491bf42c7dfb1::t_d28911f7cafe1d 1,6-7,16-42
+  s_c491bf42c7dfb1::t_cb6df148e27cf6 3,8-15,65-91,99-101,103-105,109,113
+  s_c491bf42c7dfb1::t_2121364c65a475 95
+  s_c491bf42c7dfb1::t_b42df6dda898f2 2,4-5,92-94,96-98,102,106-108,110-112
+  s_c491bf42c7dfb1::t_8ffeb7cb75c25f 43-64,114
+shared/release-deployment-config.js
+  s_c491bf42c7dfb1::t_968952e783ec83 49-54,57,64,341
+  s_c491bf42c7dfb1::t_c502debde1fb0d 55-56
+  s_c491bf42c7dfb1::t_73b3f3993e3b7a 266,274,295,303
+test/release-list-api.test.mjs
+  s_c491bf42c7dfb1::t_faa32a8322572a 1-2,4-11,13-15,23,25-50,54-57,60-62
+  s_c491bf42c7dfb1::t_814010f16271e0 51-53
+  s_c491bf42c7dfb1::t_703c2aa6ee02d6 3,12,16-22,24,58-59
+builtin/web-ui/src/lib/releaseWorkflowStateMachine.js
+  s_c491bf42c7dfb1::t_ac36a8e2fab921 406
+  s_c491bf42c7dfb1::t_1a36a5e6dbf1b6 388-395
+  s_c491bf42c7dfb1::t_9e6a0ea15a768c 10,403-404,409-412
+  s_c491bf42c7dfb1::t_03254eac351dd2 386
+test/release-deployment-config.test.mjs
+  s_c491bf42c7dfb1::t_31678687f43efe 24,26
+  s_c491bf42c7dfb1::t_c05a6387e4020d 21-23,25,27-28
+bin/lib/admin-release-projects.mjs
+  s_c491bf42c7dfb1::t_bc5cb52c3760bc 71,82-84
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_c491bf42c7dfb1::t_0069c8676f7a35 484-486,524-528,1823-1825
+  s_c491bf42c7dfb1::t_7f433fc350882a 1701
+  s_c491bf42c7dfb1::t_d8ce7f373f74c2 1783-1806
+  s_607fb1869dd3f7::t_5eaffc8ecb7f7e 1807
+test/release-runtime-integration.test.mjs
+  s_c491bf42c7dfb1::t_e47cb498e9b52d 88-99,101
+  s_c491bf42c7dfb1::t_d5ee08ce1d8310 71-79
+  s_c491bf42c7dfb1::t_c29557d05dfd22 63
+  s_c491bf42c7dfb1::t_5dfd8d9f6f6614 59-62,64-70
+  s_c491bf42c7dfb1::t_9d80c01d78e771 46,51-56
+  s_c491bf42c7dfb1::t_60251848fe077a 21-23
+  s_c491bf42c7dfb1::t_5e05c509418f9d 43,80-87
+  s_c491bf42c7dfb1::t_a7737ee6e2da95 45,47-50,57-58
+  s_c491bf42c7dfb1::t_a51e0c4af6a820 44
+  s_607fb1869dd3f7::t_5eaffc8ecb7f7e 100
+builtin/web-ui/dist/assets/index-DFReZZcO.js
+  s_0dc6e255aa11c3::t_6e5fbf83ae4794 1-210,212-860
+  s_607fb1869dd3f7::t_dc4442d13ae17e 211,861
+builtin/web-ui/dist/index.html
+  s_607fb1869dd3f7::t_dc4442d13ae17e 33
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Dismne6x.js
+  s_607fb1869dd3f7::t_dc4442d13ae17e 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "7ffe8134aa0e2065420fb25e5f202853315a09f9",
+  "prompts": {},
+  "logical_commit_id": "62273947e5f04e24f2bb3f4c219ed77f1af54b27",
+  "sessions": {
+    "s_0dc6e255aa11c3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07f3b-081e-70d3-a285-dce1ee981095",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 868,
+      "total_deletions": 6
+    },
+    "s_607fb1869dd3f7": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "01a07f3b-081e-70d3-a285-dce1ee981095",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 2310,
+      "total_deletions": 283
+    },
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 9721,
+      "total_deletions": 482
+    }
+  }
+}

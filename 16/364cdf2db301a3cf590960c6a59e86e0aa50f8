@@ -1,0 +1,69 @@
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_1d5621ba93ee29::t_42bbacc3c1e4dd 16956
+  s_1d5621ba93ee29::t_0eb8a1eb30415c 16963-16966
+  s_1d5621ba93ee29::t_2ff7a32efc9846 15865-15866,15868
+  s_1d5621ba93ee29::t_b89b8e5c2aa8ab 15928-15983,15985-15986
+  s_1d5621ba93ee29::t_598f0bfe0d699e 16388,16391,16393-16398
+builtin/web-ui/src/components/RunInspector.jsx
+  s_1d5621ba93ee29::t_7b1a657fde7620 135,155,220,255
+  s_1d5621ba93ee29::t_44e549ca81cacc 50-58,160,173-193,204,206-208
+  s_1d5621ba93ee29::t_1928af6f5c7ba5 194-203,205
+builtin/web-ui/dist/assets/index-Wjym8GQw.js
+  s_1d5621ba93ee29::t_3c94f113154ff1 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,200-204,206,210-211,213-214,225-227,230-237,241-246,250,252,255,299-300,302,304,307-314,318-319,321-322,324,328,336,338,342,350,352-353,355-359,363,370,384,395-396,399,417,426,462,480,507,543,559,583,627,646,658,673,684,716,729,749,780,795,806,822,836,844,853,857,883
+builtin/web-ui/src/index.css
+  s_1d5621ba93ee29::t_6bb2c89a281814 13858,13870-13894,13977-14023
+  s_1d5621ba93ee29::t_5505181c54fa81 13698,13704-13705,13711,13713,13773
+  s_1d5621ba93ee29::t_93652e868af8cf 13896-13897,13911-13912,13971-13974
+  s_1d5621ba93ee29::t_0172e0585d3d1a 13769,14344,14346-14351
+  s_1d5621ba93ee29::t_9c5e3115cf1acd 13913-13926,13928-13970
+  s_1d5621ba93ee29::t_319358898fefee 13895,13898-13910,13975-13976
+  s_1d5621ba93ee29::t_b58d5a2fd6b956 14297-14320
+  s_1d5621ba93ee29::t_ade80b1e691de5 13771-13772,13774-13852
+  s_1d5621ba93ee29::t_4951c37ea0c11a 8713-8782
+  s_1d5621ba93ee29::t_d5ebcc256dabab 14274-14296
+  s_1d5621ba93ee29::t_e22bec6bebfbbf 13724,13729-13730,13732-13762,13764-13768
+  s_1d5621ba93ee29::t_b20e221edb78a0 13770
+  s_1d5621ba93ee29::t_0482a1ae79e64e 14024
+  s_1d5621ba93ee29::t_cadf7274e42b6b 14273
+  s_1d5621ba93ee29::t_59d267e48c4be7 14345
+builtin/web-ui/dist/assets/index-JqvLc--O.css
+  s_1d5621ba93ee29::t_1df2958026dea7 1
+builtin/web-ui/dist/assets/WorkflowAssistantThread-BRFYwFCe.js
+  s_1d5621ba93ee29::t_3c94f113154ff1 1
+builtin/web-ui/src/components/WorkspaceRunLogsDrawer.jsx
+  s_1d5621ba93ee29::t_cbd08ff4c7e6f0 192-194
+  s_1d5621ba93ee29::t_1997b6b9898d4f 69-76
+  s_1d5621ba93ee29::t_749cd8fc7e3a2c 210,213
+  s_1d5621ba93ee29::t_4c4f14fac1847d 232-245
+  s_1d5621ba93ee29::t_c43a1756564b3a 49-68
+  s_1d5621ba93ee29::t_fd76afe31a07c0 249-251
+  s_1d5621ba93ee29::t_ad6a16e0c2c50c 35-48,158
+  s_1d5621ba93ee29::t_42301e17ca64f3 2,98-119
+  s_1d5621ba93ee29::t_97aff43ee89dd2 90-96,254-260,277-282,285-302,304-306
+  s_1d5621ba93ee29::t_a9503212c6148e 303
+  s_1d5621ba93ee29::t_2788e6637dd909 4,219-228
+  s_1d5621ba93ee29::t_fe97cdcde48e4e 79-89
+  s_1d5621ba93ee29::t_5f35326271c9fb 77-78,97,120-122,129-132
+builtin/web-ui/dist/index.html
+  s_1d5621ba93ee29::t_3c94f113154ff1 33
+  s_1d5621ba93ee29::t_1df2958026dea7 34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "16364cdf2db301a3cf590960c6a59e86e0aa50f8",
+  "prompts": {},
+  "logical_commit_id": "16364cdf2db301a3cf590960c6a59e86e0aa50f8",
+  "sessions": {
+    "s_1d5621ba93ee29": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0611d-7a76-74e3-b81d-183b0ce62f6d",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 17058,
+      "total_deletions": 412
+    }
+  }
+}

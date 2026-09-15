@@ -1,0 +1,22 @@
+docs/superpowers/specs/2026-08-31-release-workflow-state-machine-design.md
+  s_3d3b0fff602cca::t_e0ad92b25e1d01 1-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c44453d0b45bc88387351da95367be1dedf660d3",
+  "prompts": {},
+  "logical_commit_id": "c44453d0b45bc88387351da95367be1dedf660d3",
+  "sessions": {
+    "s_3d3b0fff602cca": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fffd7-fa6c-7572-bc05-6bbf52feb6a6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 444,
+      "total_deletions": 49
+    }
+  }
+}

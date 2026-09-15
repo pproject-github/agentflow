@@ -1,0 +1,22 @@
+bin/lib/release-runtime.mjs
+  s_c491bf42c7dfb1::t_3717f81ca39c76 130-131
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "30d5b28441ed33fc2401edddff4bdfe6f2ea6502",
+  "prompts": {},
+  "logical_commit_id": "30d5b28441ed33fc2401edddff4bdfe6f2ea6502",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 12207,
+      "total_deletions": 1549
+    }
+  }
+}

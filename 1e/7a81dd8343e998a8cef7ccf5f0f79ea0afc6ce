@@ -1,0 +1,30 @@
+builtin/nodes/control_interrupt.md
+  s_1d5621ba93ee29::t_44c51b2a7af99b 33,38,59-64
+builtin/web-ui/dist/assets/index-RmgXc1d1.js
+  s_1d5621ba93ee29::t_88c428ea68d5c5 25,33,37-38,40,42,44,65-67,69,202-214,218-226,230-231,236,241-242,246,304,310-314,318-319,321-322,352-353,358-359,363,853,883
+builtin/web-ui/dist/index.html
+  s_1d5621ba93ee29::t_88c428ea68d5c5 33
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Bb5vwfET.js
+  s_1d5621ba93ee29::t_88c428ea68d5c5 1
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_1d5621ba93ee29::t_891b8a277aa3c3 2778,5999,6011,6018-6025,6043
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "1e7a81dd8343e998a8cef7ccf5f0f79ea0afc6ce",
+  "prompts": {},
+  "logical_commit_id": "1e7a81dd8343e998a8cef7ccf5f0f79ea0afc6ce",
+  "sessions": {
+    "s_1d5621ba93ee29": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0611d-7a76-74e3-b81d-183b0ce62f6d",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 35994,
+      "total_deletions": 734
+    }
+  }
+}

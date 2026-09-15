@@ -1,0 +1,98 @@
+.npmrc
+  s_65c049f229c758::t_f31c2280014b60 1
+README.md
+  s_65c049f229c758::t_1a5cefe5b05def 186-191
+README.zh-CN.md
+  s_65c049f229c758::t_417c7eb85d8ff0 178-183
+bin/lib/admin-project-ownership.mjs
+  s_65c049f229c758::t_2c7fe0c9eefdc4 1-199
+bin/lib/agent-runners.mjs
+  s_65c049f229c758::t_8ed75c95cb42f4 96-157,170,172,527,541,559,656-667,862-874
+bin/lib/auth.mjs
+  s_65c049f229c758::t_4924312bf90210 15-17,49-52,107-112,186-189,205-210,239-344,346-363,367,437,510,516,519,522-523,549,715-720,732,751-799,803,805-841
+bin/lib/cas-auth.mjs
+  s_65c049f229c758::t_27f02de3d6d2c9 1-210
+bin/lib/cli-auth-page.mjs
+  s_65c049f229c758::t_8c93e50b04ba1c 32-34,64-65,71-73
+bin/lib/composer-agent.mjs
+  s_65c049f229c758::t_2c587023980561 444-445,475
+bin/lib/repository-index.mjs
+  s_65c049f229c758::t_9923d0915e969d 18-19,25,172,175,179-185,188-189,192,194,511,516-522,524
+bin/lib/ui-server.mjs
+  s_65c049f229c758::t_ab00cd54cfe3d3 76,84,86-87,93,97-112,1602-1613,2317-2320,2327-2401,2407,2415-2418,2483-2495,2514,2552-2556,2564,2566,2573-2574,2586,2926-2996,3267,3273-3276,3298-3335
+bin/lib/workspace-collaboration.mjs
+  s_65c049f229c758::t_ef6d55616c71bb 369-398
+bin/lib/workspace-routes.mjs
+  s_65c049f229c758::t_69d368dda8a2aa 1112-1115,2784-2794,3262-3270,3309,3359-3364
+bin/lib/workspace-server.mjs
+  s_65c049f229c758::t_6da47218f87b5f 744-747,754-761,763,765,772-836,838-842,845-863,946,949-969,971-987,989-997,1001-1002,1005,1007,1021,1023,1028,1031-1039,1053,1057-1060,1075,1083,1096,1103-1112,1116,5811-5814,7038,7638,7640,7644-7656,7747-7759,7831-7863,7916-7917,7929,8045-8047,8202
+builtin/web-ui/dist/assets/index-Bc7DF52C.css
+  s_65c049f229c758::t_33bc9383998f71 1
+builtin/web-ui/src/App.jsx
+  s_65c049f229c758::t_8a334692055e02 13,137,144-153,168-169,173,182-193,199,224-242,250,278,280,287-292
+builtin/web-ui/src/components/LegacyAccountLinkCard.jsx
+  s_65c049f229c758::t_48162fcaf771db 1-75
+builtin/web-ui/src/i18n/locales/en/settings.json
+  s_65c049f229c758::t_9206be4a0f50db 78-81,90
+builtin/web-ui/src/i18n/locales/zh/settings.json
+  s_65c049f229c758::t_919e31a4d42b2b 78-81,90
+builtin/web-ui/src/index.css
+  s_65c049f229c758::t_b0fd031a2ccf05 333-337,369-385,6323-6463,6466-6515,30487-30501
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_65c049f229c758::t_51b4323ff25f71 19
+builtin/web-ui/src/pages/AdminUsersPage.jsx
+  s_65c049f229c758::t_a425a1b3d72ace 1-131
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_65c049f229c758::t_d4d5478452b462 4,1057,1857,1865-1866
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_65c049f229c758::t_9a697e9b220006 9199,9500-9531,9542-9548,9596,9609,9801-9804,9819,9828,9834,9852,9859,9865,15822,15825-15831,15834,15836-15840,15917,15922-15923,15932-15936,17193,17199,17205,17218-17237,17239,17243-17247,17250-17254,17259,17276,17278,17280-17281,17317,17324
+package-lock.json
+  s_65c049f229c758::t_2c4d9bd945c806 3,9
+package.json
+  s_65c049f229c758::t_f2444474e33fca 3,37
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_65c049f229c758::t_24ce4fae94f6bb 1
+skills/agentflow-cli/runtime/package.json
+  s_65c049f229c758::t_b1f2255a847fcf 3
+test/admin-password-reset.test.mjs
+  s_65c049f229c758::t_dce99d6ca72c1a 7,80,87-88
+test/admin-project-ownership.test.mjs
+  s_65c049f229c758::t_7a1aa51974c737 1-104
+test/agentflow-cli-auth.test.mjs
+  s_65c049f229c758::t_0ec34cf315ef09 22,66-67,80-81,83
+test/cas-auth-api.test.mjs
+  s_65c049f229c758::t_04cf7e2047f7fd 1-127
+test/cas-auth-ui.test.mjs
+  s_65c049f229c758::t_be03e1dbd9e11b 1-30
+test/cas-legacy-account-link.test.mjs
+  s_65c049f229c758::t_94b0d6e325c3da 1-112
+test/cursor-composer-fallback.test.mjs
+  s_65c049f229c758::t_81057a46feb74e 390-458,499-515
+test/marketplace-resources.test.mjs
+  s_65c049f229c758::t_60f9f521a4ca3b 204-208,287-288
+test/repository-index.test.mjs
+  s_65c049f229c758::t_839992698990d3 102-169
+test/workspace-node-review-api.test.mjs
+  s_65c049f229c758::t_ecae7bad1f17f3 68-73,78-79,95
+test/workspace-release-api.test.mjs
+  s_65c049f229c758::t_143c115b811735 31-118
+test/workspace-scheduled-cursor-permissions.test.mjs
+  s_65c049f229c758::t_e492fc5acb8faa 1-126
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "5c4ba62499bef296a83ff03e7ad7a9d2ba15685d",
+  "prompts": {},
+  "logical_commit_id": "5c4ba62499bef296a83ff03e7ad7a9d2ba15685d",
+  "sessions": {
+    "s_65c049f229c758": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "554e7a30-87d9-42dd-8249-9e863b0a1b8d",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    }
+  }
+}

@@ -1,0 +1,34 @@
+builtin/web-ui/src/components/ReleaseNodeInspector.jsx
+  s_0dc6e255aa11c3::t_03d3ac9ed3507a 4,452
+builtin/web-ui/src/lib/releaseWorkflowModel.js
+  s_0dc6e255aa11c3::t_11a446ce34f4d5 125-141
+test/release-workflow-model.test.mjs
+  s_0dc6e255aa11c3::t_a1f7744dc354d3 18,483-508
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_0dc6e255aa11c3::t_31a5646141b278 12,1432-1434,1436,1439,1452
+builtin/web-ui/dist/assets/index-BiwbprTf.js
+  s_0dc6e255aa11c3::t_adc127245f33aa 1,9,17,25,33-35,37-38,40-44,52,60,65-67,69-73,75-81,83-86,88-91,93,95,174,178,180,195-196,199-206,208,210-215,219,221,224,268-269,273,277,279-280,282-283,287-288,290-291,293,297,305,307,311,319,321-323,325-329,333-334,337-339,346,360,371-372,375,393,402,438,456,483,519,535,559,603,622,634,649,660,692,705,725,756,771,782,798,812,820,829,833,859
+builtin/web-ui/dist/assets/WorkflowAssistantThread-C93GyxpG.js
+  s_0dc6e255aa11c3::t_adc127245f33aa 1
+builtin/web-ui/dist/index.html
+  s_0dc6e255aa11c3::t_adc127245f33aa 33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ec829181e40e18a9dfdb71fdee4a8636f247d78e",
+  "prompts": {},
+  "logical_commit_id": "ec829181e40e18a9dfdb71fdee4a8636f247d78e",
+  "sessions": {
+    "s_0dc6e255aa11c3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07f3b-081e-70d3-a285-dce1ee981095",
+        "model": "gpt-5.5"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 919,
+      "total_deletions": 8
+    }
+  }
+}

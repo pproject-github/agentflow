@@ -1,0 +1,32 @@
+test/repository-index-user-aliases.test.mjs
+  s_ad13d23010ed00::t_66efbcb21851bc 1-56
+bin/lib/workspace-preview.mjs
+  s_ad13d23010ed00::t_70c82c60b93557 15-19
+bin/lib/auth.mjs
+  s_ad13d23010ed00::t_fc436ffee13d14 242-257
+bin/lib/repository-index.mjs
+  s_ad13d23010ed00::t_6b01c42a22e726 13,104-106,110-111
+test/workspace-linked-output-size.test.mjs
+  s_ad13d23010ed00::t_e0660d935a4707 57-66
+bin/lib/workspace-server.mjs
+  s_ad13d23010ed00::t_cf21ce5e72fc04 13,2005-2009
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "75fedb869926e158c0567734ec00048429d1894d",
+  "prompts": {},
+  "logical_commit_id": "75fedb869926e158c0567734ec00048429d1894d",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 93,
+      "total_deletions": 1
+    }
+  }
+}

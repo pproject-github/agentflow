@@ -1,0 +1,22 @@
+.superpowers/sdd/2026-08-31-release-workflow-state-machine/task-4-report.md
+  s_c491bf42c7dfb1::t_ca5293240506d6 15-16,31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ea31349fb2881212c28b2a4734b9689898c169e7",
+  "prompts": {},
+  "logical_commit_id": "ea31349fb2881212c28b2a4734b9689898c169e7",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 23652,
+      "total_deletions": 3002
+    }
+  }
+}

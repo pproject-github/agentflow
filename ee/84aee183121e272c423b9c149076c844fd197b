@@ -1,0 +1,41 @@
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_c491bf42c7dfb1::t_21e1df6ab9f79b 200-207,209-211
+  s_c491bf42c7dfb1::t_85b090d19b5cf5 4-28,30,34-50,52-53,57-62,64-72,74-87,120,123,137,149,152,156-163,169-172
+  s_c491bf42c7dfb1::t_bd8177dd0f8a48 164-168
+  s_c491bf42c7dfb1::t_d70d4b296beebe 89-106,128-129,132-133
+  s_c491bf42c7dfb1::t_0c30ef5065e36e 63,295
+  s_c491bf42c7dfb1::t_ddeca41ede0a89 119,124-127,130,134
+  s_c491bf42c7dfb1::t_2547372929b984 361,367-394
+  s_c491bf42c7dfb1::t_e4e1265bde697f 178-181,219,221
+  s_c491bf42c7dfb1::t_b026fc20e178ae 29,31-33,51,54-56
+  s_c491bf42c7dfb1::t_95e5d4d7efbead 184,281-285,291,300-306,315-323,337,348
+  s_c491bf42c7dfb1::t_7a7748b6ad7c23 417,422-423
+  s_c491bf42c7dfb1::t_2a03e952cf6543 88,154-155,366
+  s_c491bf42c7dfb1::t_a336dad670c054 73,298,415
+builtin/web-ui/src/lib/releaseNodeCatalog.js
+  s_c491bf42c7dfb1::t_86c3018fe5edae 118
+  s_c491bf42c7dfb1::t_02c5f9fb9a61b4 124
+  s_c491bf42c7dfb1::t_b3445ccd3b0476 16,22,49,57,66,91,99,107,116-117,119-123,125-129
+  s_c491bf42c7dfb1::t_534d888b231e01 163-167,214,226,248-251
+builtin/web-ui/src/index.css
+  s_c491bf42c7dfb1::t_40b2b0387e581c 29766-29785,29931-29933
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ee84aee183121e272c423b9c149076c844fd197b",
+  "prompts": {},
+  "logical_commit_id": "2a49cb8e91faeb6e026343e3c321afbdce48b7d5",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 4668,
+      "total_deletions": 1173
+    }
+  }
+}

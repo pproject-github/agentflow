@@ -1,0 +1,122 @@
+bin/lib/flow-dsl/codegen.mjs
+  s_fb1f118e3bc599::t_19291c4b6d935a 452-455
+bin/lib/flow-dsl/ir.mjs
+  s_fb1f118e3bc599::t_200b00dac23139 172,334
+bin/lib/flow-dsl/parser.mjs
+  s_fb1f118e3bc599::t_53692735e817fc 160,378-389,707
+bin/lib/node-package-bootstrap.mjs
+  s_fb1f118e3bc599::t_e27aee97362b58 20-26,72-81
+bin/lib/node-ui-kit.mjs
+  s_fb1f118e3bc599::t_11fb99e8618c9f 12,106-108
+bin/lib/ui-server.mjs
+  s_fb1f118e3bc599::t_338a1cb67e7dc3 210,1624,2406-2413,2420,2601-2624,2627,2631-2665,2992
+bin/lib/workspace-interrupt.mjs
+  s_fb1f118e3bc599::t_8fdc0cbb6dc888 1-199
+bin/lib/workspace-routes.mjs
+  s_fb1f118e3bc599::t_42fb0085683d2a 77-79,1901-1940,1954-1956,3713-3719,3748-3751,3844,3852-3870,3918-3929,4055-4068,4166-4178,4236-4288,4290-4300,4372-4375
+bin/lib/workspace-run-state.mjs
+  s_fb1f118e3bc599::t_23ffe822639b85 1-280
+bin/lib/workspace-server.mjs
+  s_fb1f118e3bc599::t_21183db8ba8e52 49-50,1313,1520,1536,5146-5156,5208,5251-5253,5521-5524,5819,5875,5883,5893-5912,5928-5949,5964,6005-6020,6039-6160,6515-6516,7074,7076-7077,7080,7100-7101,7121,7190-7191,7215-7220,7368,7405-7423,7466-7475
+builtin/nodes/control_interrupt.md
+  s_fb1f118e3bc599::t_40a577d2c36c39 1-71
+builtin/nodes/display_markdown.md
+  s_fb1f118e3bc599::t_0a53304d9c9cac 23-34
+builtin/nodes/tool_display_share_link.md
+  s_fb1f118e3bc599::t_eda9488a084158 46-65
+builtin/nodes/tool_nodejs.md
+  s_fb1f118e3bc599::t_af78480615f6f0 51-65
+builtin/nodes/tool_wecom_send_group_markdown.md
+  s_fb1f118e3bc599::t_9f66a53c6a857d 42-63
+builtin/web-ui/dist/assets/WorkflowAssistantThread-CMrAiKsi.js
+  s_fb1f118e3bc599::t_f57bdda207d7cf 1
+builtin/web-ui/dist/assets/index-DEC7SwpK.css
+  s_fb1f118e3bc599::t_730c7ee40aa7c8 1
+builtin/web-ui/dist/assets/index-Zgmpr3Nb.js
+  s_fb1f118e3bc599::t_80273a3317bb1f 1,9,17,25,33-35,37-38,40-44,52,60,65-67,69-73,75-81,83-86,88-91,93,95,174,178,180,195,197,200-211,213-214,219-220,222,224-227,230-237,239,241-246,250,252,255,299-300,302,304,307-314,318-319,321-322,324,328,336,338,342,350,352-354,356-360,363-367,370-372,379,393,404-405,408,426,435,471,489,516,552,568,592,636,655,667,682,693,725,738,758,789,804,815,831,845,853,862,866,892
+builtin/web-ui/dist/index.html
+  s_fb1f118e3bc599::t_4809dd38f0440e 33-34
+builtin/web-ui/src/App.jsx
+  s_fb1f118e3bc599::t_c27c78491481f8 15,159
+builtin/web-ui/src/FlowNode.jsx
+  s_fb1f118e3bc599::t_98089591e57457 970-976
+builtin/web-ui/src/NodeUiKit.jsx
+  s_fb1f118e3bc599::t_40a909f73ff529 30-49,169-177,180-182,184-194,206,208,259-260
+builtin/web-ui/src/appVersion.js
+  s_fb1f118e3bc599::t_bff4ffef9b798d 13-21,25-28
+builtin/web-ui/src/components/RunInspector.jsx
+  s_fb1f118e3bc599::t_759764ffe9d8f9 4,12-18,57-77,154,156,159-160,168,175,178,181,194-273,285,320
+builtin/web-ui/src/components/WorkspaceRunLogsDrawer.jsx
+  s_fb1f118e3bc599::t_fbd05f48518e20 2,4,35-122,129-132,158,192-194,210,213,219-228,232-245,249-251,254-260,277-282,285-311
+builtin/web-ui/src/index.css
+  s_fb1f118e3bc599::t_0b36cb7430501f 160-271,8908-8977,13895,13901-13902,13908,13910,13921,13926-13927,13929-13959,13961-14049,14055,14067-14195,14197-14220,14470-14485,14487-14570,14594-14601,23267-23286
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_fb1f118e3bc599::t_48d87a8db6e1c5 17
+builtin/web-ui/src/lib/runInspectorModel.js
+  s_fb1f118e3bc599::t_edf7775cb3bc7e 621-757
+builtin/web-ui/src/pages/ApprovalsPage.jsx
+  s_fb1f118e3bc599::t_41e0309f05fb23 1-92
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_fb1f118e3bc599::t_2611a5103e721b 162-167,498,503-504,790-799,2075-2079,2657,10628-10652,11884,13342-13351,13454,13456,13461,13464,13475-13486,15933-15934,15936,15996-16051,16053-16054,16456,16459,16461-16466,17024,17031-17034
+package-lock.json
+  s_fb1f118e3bc599::t_3fd48741235a9e 3,9
+package.json
+  s_fb1f118e3bc599::t_ad9e0b160a6f76 3
+skills/agentflow-author-flow/SKILL.md
+  s_fb1f118e3bc599::t_e2212047edec65 19-25
+skills/agentflow-cli/SKILL.md
+  s_fb1f118e3bc599::t_7b4f601ac3cdcb 154-156,165-167
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_fb1f118e3bc599::t_53baf2f820d769 1,12962-12965,13084-13085,13192-13193,13378,13551-13559,13836
+skills/agentflow-cli/runtime/builtin/nodes/control_interrupt.md
+  s_fb1f118e3bc599::t_6430553a11ad35 1-71
+skills/agentflow-cli/runtime/builtin/nodes/display_markdown.md
+  s_fb1f118e3bc599::t_337f921cdfdcd6 23-34
+skills/agentflow-cli/runtime/builtin/nodes/tool_display_share_link.md
+  s_fb1f118e3bc599::t_adc12683f9b9ad 46-65
+skills/agentflow-cli/runtime/builtin/nodes/tool_nodejs.md
+  s_fb1f118e3bc599::t_792b7499b0c640 51-65
+skills/agentflow-cli/runtime/builtin/nodes/tool_wecom_send_group_markdown.md
+  s_fb1f118e3bc599::t_d5c58b1215de55 42-63
+skills/agentflow-cli/runtime/package.json
+  s_fb1f118e3bc599::t_99403da2a8f927 3
+skills/agentflow-flow-dsl/SKILL.md
+  s_fb1f118e3bc599::t_6ec8e8ab1e4f7c 96-107
+skills/agentflow-flow-dsl/references/node-calls.md
+  s_fb1f118e3bc599::t_82a1412c1affa6 17,37
+skills/agentflow-node-dsl/SKILL.md
+  s_fb1f118e3bc599::t_1b0de87212d668 33-34,164,167-179
+skills/agentflow-node-reference/references/builtin-nodes.md
+  s_fb1f118e3bc599::t_55556fcc08239f 50-57,122
+test/app-version.test.mjs
+  s_fb1f118e3bc599::t_7628d76b9d78bd 14
+test/flow-dsl.test.mjs
+  s_fb1f118e3bc599::t_4c863bc73c44c1 61-69
+test/node-package-runtime.test.mjs
+  s_fb1f118e3bc599::t_1a70189d492c09 180-254
+test/node-ui-kit.test.mjs
+  s_fb1f118e3bc599::t_c8a57317c5c2bc 56-70
+test/run-inspector-model.test.mjs
+  s_fb1f118e3bc599::t_345678bb5375d4 7,106-183
+test/workspace-interrupt.test.mjs
+  s_fb1f118e3bc599::t_62e56244c622f9 1-66
+test/workspace-run-state.test.mjs
+  s_fb1f118e3bc599::t_38c8df7e17e31f 1-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e9d19a5ecb668ed7fd76c7707667a91c426a1086",
+  "prompts": {},
+  "logical_commit_id": "e9d19a5ecb668ed7fd76c7707667a91c426a1086",
+  "sessions": {
+    "s_fb1f118e3bc599": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "defa4443-f97e-4f03-b976-254a442f509a",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    }
+  }
+}

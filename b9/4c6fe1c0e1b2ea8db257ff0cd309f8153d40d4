@@ -1,0 +1,24 @@
+docs/superpowers/specs/2026-09-13-release-operator-rotation-design.md
+  s_0dc6e255aa11c3::t_01a85365bc0ead 1-31
+docs/superpowers/plans/2026-09-13-release-operator-rotation.md
+  s_0dc6e255aa11c3::t_01a85365bc0ead 1-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b94c6fe1c0e1b2ea8db257ff0cd309f8153d40d4",
+  "prompts": {},
+  "logical_commit_id": "b94c6fe1c0e1b2ea8db257ff0cd309f8153d40d4",
+  "sessions": {
+    "s_0dc6e255aa11c3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07f3b-081e-70d3-a285-dce1ee981095",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 2465,
+      "total_deletions": 151
+    }
+  }
+}

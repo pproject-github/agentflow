@@ -1,0 +1,32 @@
+builtin/web-ui/dist/assets/WorkflowAssistantThread-Ct6u5row.js
+  s_ad13d23010ed00::t_5bbbbfb1802187 1
+builtin/web-ui/dist/assets/index-Cirfgj3k.js
+  s_ad13d23010ed00::t_4b07470aaa92b3 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69,73,75,78-79,86,89,93,180,195,197,201-204,210-211,214,225-227,230-237,241-246,250,252,255,299-300,302,304,308,310-314,318-319,321-322,324,328,336,338,342,350,352-354,356-360,364-367,370,372,379,393,404-405,408,426,516,568,636,655,667,682,693,725,738,789,804,815,831,845,853,862,866,892
+builtin/web-ui/dist/index.html
+  s_ad13d23010ed00::t_2d698109212166 33
+package-lock.json
+  s_ad13d23010ed00::t_b543aa0a149382 3,9
+package.json
+  s_ad13d23010ed00::t_a4ca718d3e5e09 3
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_ad13d23010ed00::t_ff1af462013428 1,10759-10764,12677-12683,12809,12826,12910-12913,13051,13072,13108,13126,13187,13260,13273,13303-13304,13484,13502,13906,13908,13921-13984,14105-14106,14130-14131,14217-14234,14238-14239,14242,14244,14266,14274-14277,14282,14284,14287-14292,14295-14296,14298,14319,14323,14325,14332-14335,14341,14352,14360,14365,14416-14418,14436,14445,14447,14458-14459,14472
+skills/agentflow-cli/runtime/package.json
+  s_ad13d23010ed00::t_8af1bfc13f7a5e 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b8666baaf81f5001e0eabf1566f112055e8a7cd2",
+  "prompts": {},
+  "logical_commit_id": "b8666baaf81f5001e0eabf1566f112055e8a7cd2",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>"
+    }
+  }
+}

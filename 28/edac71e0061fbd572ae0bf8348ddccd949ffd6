@@ -1,0 +1,55 @@
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_ebfe2612cbb1e3::t_566f070493e38f 1013-1032,1040
+  s_ebfe2612cbb1e3::t_509b088a725511 1107-1124
+  s_bb33e4058403f5::t_f23b0dc2226ba0 1105-1106
+skills/agentflow-cli/scripts/agentflow-cli.mjs
+  s_bb33e4058403f5::t_1af0d688cfe6ed 1683-1686,1718-1737
+  s_bb33e4058403f5::t_a6d1cb7587e1fb 836-860
+  s_bb33e4058403f5::t_c7edf79f2905f6 112
+bin/lib/workspace-routes.mjs
+  s_ebfe2612cbb1e3::t_c10163c07c5e30 1292-1293
+  s_ebfe2612cbb1e3::t_8446f186413a1e 1597-1606,1608-1615
+  s_ebfe2612cbb1e3::t_e20c181ebed6ca 1691-1750,1752-1875,1883-1886,1889-1890,1894-1899,1902-1911,1913-1918,1920-1929,1931-1933
+  s_ebfe2612cbb1e3::t_0fcc63a7c8670d 1288-1291
+  s_bb33e4058403f5::t_e9f34e3f1121f0 1607
+  s_ebfe2612cbb1e3::t_cd3ecd62c794f9 1919
+builtin/web-ui/dist/index.html
+  s_ebfe2612cbb1e3::t_1a382f323e3f37 33
+test/release-runtime-api.test.mjs
+  s_ebfe2612cbb1e3::t_97b4de0ddc2e44 679-786
+builtin/web-ui/dist/assets/index-x9nVApOq.js
+  s_ebfe2612cbb1e3::t_1a382f323e3f37 17,33,37-38,40,42,44,60,65-67,69,196,199-200,203,211,215,269,273,277,279-280,282-283,287-288,290-291,321-323,333,337,339,829,833,859
+skills/agentflow-cli/SKILL.md
+  s_bb33e4058403f5::t_f625393c9df487 484-485
+builtin/web-ui/dist/assets/WorkflowAssistantThread-CJIPW10-.js
+  s_ebfe2612cbb1e3::t_1a382f323e3f37 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "28edac71e0061fbd572ae0bf8348ddccd949ffd6",
+  "prompts": {},
+  "logical_commit_id": "28edac71e0061fbd572ae0bf8348ddccd949ffd6",
+  "sessions": {
+    "s_bb33e4058403f5": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f74eaf260ffe2JDrSNMmkZnC5C",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 55,
+      "total_deletions": 6
+    },
+    "s_ebfe2612cbb1e3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f75e5b33bffeNTWiEJ109r0jgy",
+        "model": "gemini-3-pro-image"
+      },
+      "human_author": null,
+      "total_additions": 1865,
+      "total_deletions": 793
+    }
+  }
+}

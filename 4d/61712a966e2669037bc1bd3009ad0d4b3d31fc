@@ -1,0 +1,23 @@
+builtin/web-ui/src/pages/WorkspacesPage.jsx
+  s_c491bf42c7dfb1::t_f759daecd1b542 2,137,140,142-151,361-369,371-376,378-380,382-383,385-437,439-452,454-455,458-466,469-470,472-516,518-519,521-544,546-547
+  s_c491bf42c7dfb1::t_508059249e8210 370
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4d61712a966e2669037bc1bd3009ad0d4b3d31fc",
+  "prompts": {},
+  "logical_commit_id": "4d61712a966e2669037bc1bd3009ad0d4b3d31fc",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 1990,
+      "total_deletions": 1081
+    }
+  }
+}

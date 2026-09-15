@@ -1,0 +1,25 @@
+.superpowers/sdd/2026-08-27-workspace-release-tab/task-2-report.md
+  s_c491bf42c7dfb1::t_a576bb50bca93a 1-5
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_c491bf42c7dfb1::t_66fcc9663aa480 59,70-74,80-83
+  s_c491bf42c7dfb1::t_2a03e952cf6543 1-58,60-69,75-79,84-196
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "d179fecf9787e7f7b372c5d172d8e693b90666fe",
+  "prompts": {},
+  "logical_commit_id": "d179fecf9787e7f7b372c5d172d8e693b90666fe",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 693,
+      "total_deletions": 13
+    }
+  }
+}

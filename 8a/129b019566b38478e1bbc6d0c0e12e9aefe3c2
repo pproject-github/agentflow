@@ -1,0 +1,45 @@
+bin/lib/startup-storage-migrations.mjs
+  s_7a3d4268756f4c::t_e152b490ef921f 23
+  s_7a3d4268756f4c::t_abbc32c91146f1 373-387,398,408
+  s_7a3d4268756f4c::t_0e8cdec7c16225 12
+  s_7a3d4268756f4c::t_ef8f8ebe6432bb 232
+  s_7a3d4268756f4c::t_8eeb54dd259b42 198-231,233-235,237-254,256-283,289-297,309-314,316-317
+  s_7a3d4268756f4c::t_1922350e94822b 236,255,299
+  s_7a3d4268756f4c::t_63b6fe2204d5f5 284-288
+  s_7a3d4268756f4c::t_a5691c101fa7d2 298,300-308,315
+test/workspace-schedule-owner.test.mjs
+  s_7a3d4268756f4c::t_718cff627615a6 1-242,262-267
+  s_7a3d4268756f4c::t_76db0b4032052f 243-261
+bin/lib/workspace-routes.mjs
+  s_7a3d4268756f4c::t_895a306803fbc8 3670
+  s_7a3d4268756f4c::t_3b11ab8c5cfc55 3323
+bin/lib/ui-server.mjs
+  s_7a3d4268756f4c::t_5c5e69708bae95 2416-2419
+  s_7a3d4268756f4c::t_8f6b811ce597bd 2231-2235
+  s_7a3d4268756f4c::t_14ec3e860c36cd 2223-2225
+  s_7a3d4268756f4c::t_d5111b51bd992d 2407-2415
+  s_7a3d4268756f4c::t_95ad27f92e128d 2406
+docs/wiki/workspace-run-lifecycle.zh-CN.md
+  s_7a3d4268756f4c::t_c35850e6ba2fc2 49-89
+bin/lib/workspace-server.mjs
+  s_7a3d4268756f4c::t_e55756f14fba5e 2015-2039,2124,8098,8106,8369-8397,8399-8403,8406,8408,8420,8429,8451-8454,8479-8482,8547,8646
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "8a129b019566b38478e1bbc6d0c0e12e9aefe3c2",
+  "prompts": {},
+  "logical_commit_id": "8a129b019566b38478e1bbc6d0c0e12e9aefe3c2",
+  "sessions": {
+    "s_7a3d4268756f4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7329e95-82e5-4abb-bcf4-0f6589ecb71a",
+        "model": "claude-opus-5"
+      },
+      "human_author": null,
+      "total_additions": 1020,
+      "total_deletions": 186
+    }
+  }
+}

@@ -1,0 +1,30 @@
+bin/lib/workspace-server.mjs
+  s_67ed3c57d7ffe6::t_376131e2a3c994 790,840
+test/repository-index.test.mjs
+  s_67ed3c57d7ffe6::t_376131e2a3c994 138-169
+package.json
+  s_67ed3c57d7ffe6::t_ac4e3263117aab 3
+bin/lib/repository-index.mjs
+  s_67ed3c57d7ffe6::t_376131e2a3c994 18,516-518,522,524
+package-lock.json
+  s_67ed3c57d7ffe6::t_0058983bae5735 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e6f9f85650ed7aa14bef8b67afbc6ee0b3361397",
+  "prompts": {},
+  "logical_commit_id": "e6f9f85650ed7aa14bef8b67afbc6ee0b3361397",
+  "sessions": {
+    "s_67ed3c57d7ffe6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05fd3-610d-73b2-80f5-4e93219a2745",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 41,
+      "total_deletions": 8
+    }
+  }
+}

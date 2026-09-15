@@ -1,0 +1,30 @@
+docs/wiki/flow-dsl.en.md
+  s_ad13d23010ed00::t_81691859872b02 183-197
+bin/lib/marketplace.mjs
+  s_ad13d23010ed00::t_e23cdd242f4602 104-114,116,129-131
+  s_ad13d23010ed00::t_ff7e29e9e4ac11 115,117-128,132-138,141
+test/marketplace-manifest-cache.test.mjs
+  s_ad13d23010ed00::t_120f1f6ef60a4a 1-75,77-83
+  s_ad13d23010ed00::t_1b243b516d1cc8 76
+docs/wiki/flow-dsl.zh-CN.md
+  s_ad13d23010ed00::t_81691859872b02 159-169
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "01ec26390360d9d1cd522b181e3c95d412372f64",
+  "prompts": {},
+  "logical_commit_id": "01ec26390360d9d1cd522b181e3c95d412372f64",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 8403,
+      "total_deletions": 541
+    }
+  }
+}

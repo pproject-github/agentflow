@@ -1,0 +1,176 @@
+.superpowers/sdd/2026-08-31-release-workflow-state-machine/task-4-report.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-46
+test/release-localization-agent-contract.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-55
+bin/lib/release-runtime.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-821
+test/release-workflow-config.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-236
+docs/superpowers/specs/2026-08-31-release-workflow-state-machine-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-188
+docs/plans/2026-09-03-release-operator-acl.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-184
+docs/superpowers/plans/2026-09-01-release-agent-composite-workflow.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-385
+package.json
+  s_60b2cacada554d::t_a6a8d38dfffcfb 55
+docs/superpowers/plans/2026-09-01-release-online-hardening.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-69
+bin/lib/workspace-run-controller.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 5-16,60,65,69,88-91,93,127-143,155-157
+docs/plans/2026-09-03-release-force-localization-download.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-42
+shared/release-deployment-config.js
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-518
+bin/lib/release-runtime-executor.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-1036
+shared/release-workflow-config.js
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-242
+docs/superpowers/specs/2026-08-28-release-runtime-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-110
+test/release-deployment-config.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-151
+test/release-operator-acl.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-125
+test/release-page-contract.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-21
+test/release-registry.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-39
+test/workspace-run-controller.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 5-10,94-112
+docs/superpowers/specs/2026-08-31-release-composite-workflows-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-68
+docs/plans/2026-09-03-release-operator-acl-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-93
+test/release-workflow-state-machine.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-221
+docs/plans/2026-09-03-release-stage-outcomes-artifacts-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-31
+docs/superpowers/plans/2026-08-27-workspace-release-tab.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-150
+builtin/web-ui/src/layout/Sidebar.jsx
+  s_60b2cacada554d::t_a6a8d38dfffcfb 12
+docs/release-local-processes.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-91
+skills/agentflow-cli/SKILL.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 3,459-496,505,515
+bin/lib/composer-agent.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 144-237,382-411,414,481-482
+bin/lib/release-registry.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-60
+test/cursor-composer-fallback.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 2-3,7-8,151-214,226,330-358,360,466,494-498
+scripts/release-flow-smoke-test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-255
+docs/plans/2026-09-03-release-stage-artifacts-artifacts-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-54
+bin/lib/ui-server.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 129,159,2305-2312,3062-3099,3105,3239-3265
+docs/plans/2026-09-03-release-hide-resume-inputs.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-9
+builtin/web-ui/src/pages/SettingsPage.jsx
+  s_60b2cacada554d::t_a6a8d38dfffcfb 299-307,473-545,646,675,1680-1818
+docs/superpowers/plans/2026-08-31-release-initialization-preparation.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-58
+docs/superpowers/plans/2026-08-28-release-runtime.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-203
+builtin/web-ui/src/App.jsx
+  s_60b2cacada554d::t_a6a8d38dfffcfb 20,22,78-94,142-143
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-1444
+test/release-runtime-catalog.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-408
+builtin/web-ui/src/pages/WorkspacesPage.jsx
+  s_60b2cacada554d::t_a6a8d38dfffcfb 348-359,363-404,406-419,421-422,425-433,436-437,439-483,485-486,488-511
+test/release-runtime-executor.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-575
+docs/superpowers/plans/2026-08-31-release-composite-workflows.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-92
+builtin/web-ui/src/index.css
+  s_60b2cacada554d::t_a6a8d38dfffcfb 127-159,3152-3198,3200-3205,30513-30533,30540-31125
+docs/superpowers/plans/2026-09-03-release-free-prompt-inspector.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-26
+builtin/web-ui/dist/index.html
+  s_60b2cacada554d::t_717e75fd387694 33-34
+docs/superpowers/specs/2026-08-27-workspace-release-tab-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-94
+builtin/web-ui/dist/assets/WorkflowAssistantThread-5-p0hfv-.js
+  s_60b2cacada554d::t_717e75fd387694 1
+bin/lib/workspace-routes.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 76,82-86,1162-1352,1360-1900,2911-2912,2928
+builtin/web-ui/src/components/ReleaseNodeInspector.jsx
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-615
+test/admin-release-projects.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-94
+docs/plans/2026-09-03-release-lean-agent-prompts-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-24
+test/release-node-inspector-contract.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-48
+builtin/web-ui/src/lib/releaseWorkflowModel.js
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-585
+docs/release-projects.example.json
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-36
+test/release-workflow-model.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-495
+builtin/web-ui/dist/assets/index-BK3XqeE6.css
+  s_60b2cacada554d::t_717e75fd387694 1
+skills/agentflow-cli/scripts/agentflow-cli.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 108-114,803-842,1627-1708
+builtin/web-ui/dist/assets/index-Deukx9My.js
+  s_60b2cacada554d::t_717e75fd387694 1,9,17,25,33-34,37-38,40-44,52,60,65-67,69-71,73,75,78-81,85-86,89,91,93,95,174,178,180,195,197,201-215,217-227,230-237,241-246,250,252,255,299-300,302,304,306-308,310-314,318-319,321-322,324,328,336,338,342,350-372,379,393,404-405,408,426,435,471,489,516,552,568,592,636,655,667,682,693,725,738,758,789,804,815,831,845,853,862,866,892
+docs/plans/2026-09-03-release-stage-outcomes-artifacts.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-279
+docs/plans/2026-09-03-release-force-localization-download-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-20
+test/release-workflow-panel-contract.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-272
+bin/lib/agent-runners.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 163-168,533-538,753-754,776,789-793,818
+test/release-runtime-integration.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-140
+bin/lib/admin-release-projects.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-118
+builtin/web-ui/src/lib/releaseWorkflowStateMachine.js
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-401
+builtin/web-ui/src/pages/ReleasePage.jsx
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-227
+bin/lib/release-runtime-store.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-349
+bin/lib/workspace-server.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 3937-3944,4373-4374,7206-7211,7224-7230,7257-7258,7302-7305,7311-7313
+builtin/web-ui/src/pages/ReleasesPage.jsx
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-249
+docs/release-online-deployment.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-93
+docs/superpowers/specs/2026-09-01-release-agent-composite-design.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-188
+docs/superpowers/plans/2026-08-31-release-workflow-state-machine.md
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-247
+test/release-runtime-api.test.mjs
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-590
+builtin/web-ui/src/lib/releaseNodeCatalog.js
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-457
+builtin/web-ui/src/lib/releaseStageOutcome.js
+  s_60b2cacada554d::t_a6a8d38dfffcfb 1-117
+builtin/web-ui/package-lock.json
+  s_60b2cacada554d::t_e249a4c0b6d754 127,157,177,219,3314,3526,3659,3891,3950,4466,5168,6990,7003,8190,8229,8433
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "96b6b349cf8dccc7a80f5d3097229823a5d9c169",
+  "prompts": {},
+  "logical_commit_id": "96b6b349cf8dccc7a80f5d3097229823a5d9c169",
+  "sessions": {
+    "s_60b2cacada554d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a079f5-6bbb-7ef1-93a8-9d4510b594c3",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 18080,
+      "total_deletions": 184
+    }
+  }
+}

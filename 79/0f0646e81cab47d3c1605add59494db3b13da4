@@ -1,0 +1,30 @@
+bin/lib/workspace-routes.mjs
+  s_ebfe2612cbb1e3::t_47164c50778dc3 1800-1805
+  s_ebfe2612cbb1e3::t_106a36a5c467cf 1885-1890
+  s_ebfe2612cbb1e3::t_13d38f7c473a57 1749-1754
+  s_ebfe2612cbb1e3::t_d979e6a99504f8 1755
+  s_ebfe2612cbb1e3::t_c4050a24f520c9 65
+test/release-failure-notify.test.mjs
+  s_ebfe2612cbb1e3::t_bd1392379c28c8 1-94
+bin/lib/release-failure-notify.mjs
+  s_ebfe2612cbb1e3::t_a63d6879da8046 1-113
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "790f0646e81cab47d3c1605add59494db3b13da4",
+  "prompts": {},
+  "logical_commit_id": "790f0646e81cab47d3c1605add59494db3b13da4",
+  "sessions": {
+    "s_ebfe2612cbb1e3": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f75e5b33bffeNTWiEJ109r0jgy",
+        "model": "gemini-3-pro-image"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 229,
+      "total_deletions": 2
+    }
+  }
+}

@@ -1,0 +1,23 @@
+test/workspace-named-output-slot.test.mjs
+  s_ad13d23010ed00::t_41d02eb99aea56 1-73
+bin/lib/workspace-server.mjs
+  s_ad13d23010ed00::t_060b55d674dd8c 2288,2294-2301,2661-2665,2673,2682,2686,2689,2696,2701,6077-6083,7246,7491
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "2ee8752cab8eacc5d06d13872d5248ce0b7770f6",
+  "prompts": {},
+  "logical_commit_id": "2ee8752cab8eacc5d06d13872d5248ce0b7770f6",
+  "sessions": {
+    "s_ad13d23010ed00": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "92b04cae-351c-4046-aa15-20a60c072cc6",
+        "model": "claude-opus-5"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 73
+    }
+  }
+}

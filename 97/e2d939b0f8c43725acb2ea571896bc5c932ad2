@@ -1,0 +1,34 @@
+bin/lib/auth.mjs
+  s_7a3d4268756f4c::t_d0dd69e2d7ccdc 184-200
+bin/lib/ui-server.mjs
+  s_7a3d4268756f4c::t_6a5b66393f3875 116-124,2506-2513,4381-4421,4424-4494,4497-4541
+test/wecom-binding.test.mjs
+  s_7a3d4268756f4c::t_b10af2ff9a156e 1-148,152-176
+  s_7a3d4268756f4c::t_ec946fd9e66e1d 149-151
+bin/lib/wecom-directory.mjs
+  s_7a3d4268756f4c::t_723eb63c1ffa17 1-164
+docs/wiki/wecom-user-binding.zh-CN.md
+  s_7a3d4268756f4c::t_9fa9133d379d32 1-60
+bin/lib/user-env.mjs
+  s_7a3d4268756f4c::t_3839bdf671c120 6
+  s_7a3d4268756f4c::t_256e34d5f2890e 120-123,128,131-133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "97e2d939b0f8c43725acb2ea571896bc5c932ad2",
+  "prompts": {},
+  "logical_commit_id": "97e2d939b0f8c43725acb2ea571896bc5c932ad2",
+  "sessions": {
+    "s_7a3d4268756f4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7329e95-82e5-4abb-bcf4-0f6589ecb71a",
+        "model": "claude-opus-5"
+      },
+      "human_author": null,
+      "total_additions": 1254,
+      "total_deletions": 187
+    }
+  }
+}

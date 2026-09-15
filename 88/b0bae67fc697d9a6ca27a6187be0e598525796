@@ -1,0 +1,32 @@
+test/display-html-no-flash.test.mjs
+  s_7a3d4268756f4c::t_a545886bdd8a25 18-22
+  s_7a3d4268756f4c::t_057006ffcfee1e 1-17,23-40
+bin/lib/ui-server.mjs
+  s_7a3d4268756f4c::t_f6fa7f8d9392d4 4530-4537
+docs/wiki/wecom-user-binding.zh-CN.md
+  s_7a3d4268756f4c::t_1037994ac36635 49,62-76
+builtin/web-ui/src/pages/WorkspacePage.jsx
+  s_7a3d4268756f4c::t_2b36c101b09e05 3810
+  s_7a3d4268756f4c::t_f36238b21ddd0d 3773,3779,3784,3787-3789,3792-3795,3802-3803
+  s_7a3d4268756f4c::t_a048d645c19226 3541-3543
+  s_7a3d4268756f4c::t_3c78ee3dc1d456 3496-3497,3504,3511-3512,3515-3518,3528-3529
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "88b0bae67fc697d9a6ca27a6187be0e598525796",
+  "prompts": {},
+  "logical_commit_id": "88b0bae67fc697d9a6ca27a6187be0e598525796",
+  "sessions": {
+    "s_7a3d4268756f4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7329e95-82e5-4abb-bcf4-0f6589ecb71a",
+        "model": "claude-opus-5"
+      },
+      "human_author": null,
+      "total_additions": 92,
+      "total_deletions": 11
+    }
+  }
+}

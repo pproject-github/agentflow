@@ -1,0 +1,33 @@
+test/release-runtime-executor.test.mjs
+  s_0dc6e255aa11c3::t_991c71c9cc2bfb 238,240-243,246-252,272-288,290-292,294-298
+  s_0dc6e255aa11c3::t_790bbfd36d3539 293
+  s_0dc6e255aa11c3::t_8f4d64b57f46f6 289
+  s_0dc6e255aa11c3::t_1bf9bba07b4766 237,239,244-245,253-271
+bin/lib/release-runtime-executor.mjs
+  s_0dc6e255aa11c3::t_f23344b96147e2 514
+  s_0dc6e255aa11c3::t_c9474d9877b929 515,519,1157,1160,1164
+  s_0dc6e255aa11c3::t_33f496fcb61bc7 513,516
+  s_0dc6e255aa11c3::t_f645bac07ef5a4 1158,1163,1165
+  s_0dc6e255aa11c3::t_69aee3a265deb9 465-466,488,518
+  s_0dc6e255aa11c3::t_64df515a0d567d 462,517,520
+  s_0dc6e255aa11c3::t_e820c81fc99adc 463-464
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "cf37fede2016017c64eb2360b9bd44d5f5df316d",
+  "prompts": {},
+  "logical_commit_id": "cf37fede2016017c64eb2360b9bd44d5f5df316d",
+  "sessions": {
+    "s_0dc6e255aa11c3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07f3b-081e-70d3-a285-dce1ee981095",
+        "model": "gpt-5.5"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 116,
+      "total_deletions": 36
+    }
+  }
+}

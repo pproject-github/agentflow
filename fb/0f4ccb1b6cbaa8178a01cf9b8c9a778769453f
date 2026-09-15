@@ -1,0 +1,32 @@
+bin/lib/workspace-server.mjs
+  s_67ed3c57d7ffe6::t_53b4e56402a10e 5802-5805
+package.json
+  s_67ed3c57d7ffe6::t_6089cb1c814c2b 3
+test/workspace-scheduled-cursor-permissions.test.mjs
+  s_67ed3c57d7ffe6::t_53b4e56402a10e 36,117
+skills/agentflow-cli/runtime/bin/lib/skill-runtime.mjs
+  s_67ed3c57d7ffe6::t_76e05c54c9a45c 1
+skills/agentflow-cli/runtime/package.json
+  s_67ed3c57d7ffe6::t_31534b4095a5ff 3
+package-lock.json
+  s_67ed3c57d7ffe6::t_9b8de0c8c9ad34 3,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "fb0f4ccb1b6cbaa8178a01cf9b8c9a778769453f",
+  "prompts": {},
+  "logical_commit_id": "fb0f4ccb1b6cbaa8178a01cf9b8c9a778769453f",
+  "sessions": {
+    "s_67ed3c57d7ffe6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05fd3-610d-73b2-80f5-4e93219a2745",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 1794,
+      "total_deletions": 11
+    }
+  }
+}

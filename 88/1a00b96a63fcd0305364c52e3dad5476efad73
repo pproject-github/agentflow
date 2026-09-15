@@ -1,0 +1,40 @@
+.superpowers/sdd/2026-08-27-workspace-release-tab/task-2-report.md
+  s_c491bf42c7dfb1::t_d2071c209802df 7-8
+  s_c491bf42c7dfb1::t_32f24cb8702bf5 9-10
+  s_c491bf42c7dfb1::t_883bd33edfdff8 11-12
+  s_c491bf42c7dfb1::t_a576bb50bca93a 1-4
+  s_c491bf42c7dfb1::t_10851a9a5c00a5 5-6,13
+builtin/web-ui/src/components/ReleaseWorkflowPanel.jsx
+  s_c491bf42c7dfb1::t_fc29c4945adf9d 209-216
+  s_c491bf42c7dfb1::t_b1a7bd5b49bb50 60-61,66
+  s_c491bf42c7dfb1::t_fbe0c5fd7b98b0 165
+  s_c491bf42c7dfb1::t_6465115b1cb140 234
+  s_c491bf42c7dfb1::t_66fcc9663aa480 59,75-79,92-95
+  s_c491bf42c7dfb1::t_72b7dcc0200707 208
+  s_c491bf42c7dfb1::t_8efea1e0c0436f 84-87,89-90,106-109,136
+  s_c491bf42c7dfb1::t_7a594ceb30a875 63
+  s_c491bf42c7dfb1::t_2a03e952cf6543 1-58,64-65,67-74,80-83,91,96-105,110-113,120-122,128-129,137-141,146,148-154,159,161-164,166-168,170,172-174,176,178-179,181-207,217-233,235-237
+  s_c491bf42c7dfb1::t_109febc87a3c1f 88,118-119,124,127,130-135
+  s_c491bf42c7dfb1::t_9e2ba524aac646 62,143-145
+  s_c491bf42c7dfb1::t_52f4394500aa87 114-117,123,125-126
+  s_c491bf42c7dfb1::t_3751d2ec0ba5c3 142,147,155-158,160,169,171,175,177,180
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "881a00b96a63fcd0305364c52e3dad5476efad73",
+  "prompts": {},
+  "logical_commit_id": "d179fecf9787e7f7b372c5d172d8e693b90666fe",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 871,
+      "total_deletions": 40
+    }
+  }
+}

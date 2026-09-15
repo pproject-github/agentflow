@@ -1,0 +1,25 @@
+builtin/web-ui/src/lib/releaseNodeCatalog.js
+  s_c491bf42c7dfb1::t_e7a43a31abfe28 1-175,177-232
+  s_c491bf42c7dfb1::t_9ed0e33f93533c 176
+.superpowers/sdd/2026-08-27-workspace-release-tab/task-1-report.md
+  s_c491bf42c7dfb1::t_3015fb92c88aee 1-19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "ff60f1fedfefb022a1d235296d3736d451521a44",
+  "prompts": {},
+  "logical_commit_id": "ff60f1fedfefb022a1d235296d3736d451521a44",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-luna"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 403,
+      "total_deletions": 1
+    }
+  }
+}

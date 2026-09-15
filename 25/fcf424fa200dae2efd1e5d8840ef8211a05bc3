@@ -1,0 +1,38 @@
+docs/superpowers/specs/2026-08-31-release-workflow-state-machine-design.md
+  s_3d3b0fff602cca::t_1f4614c9e87095 81-86
+  s_c491bf42c7dfb1::t_541636b6dabe00 71-75,77,80
+  s_c491bf42c7dfb1::t_2fb85fc69d153e 60-63,68-69
+  s_c491bf42c7dfb1::t_48e044e525b15a 5,32,34-59,156-167,173,185
+  s_c491bf42c7dfb1::t_c391a0ea99e388 78-79
+  s_c491bf42c7dfb1::t_f523f2fbfdca10 76
+  s_c491bf42c7dfb1::t_aaea84b198d471 70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "25fcf424fa200dae2efd1e5d8840ef8211a05bc3",
+  "prompts": {},
+  "logical_commit_id": "25fcf424fa200dae2efd1e5d8840ef8211a05bc3",
+  "sessions": {
+    "s_3d3b0fff602cca": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fffd7-fa6c-7572-bc05-6bbf52feb6a6",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 1400,
+      "total_deletions": 108
+    },
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 21114,
+      "total_deletions": 2310
+    }
+  }
+}

@@ -1,0 +1,24 @@
+test/release-runtime-executor.test.mjs
+  s_c491bf42c7dfb1::t_ac662fd877be59 88-104
+bin/lib/release-runtime-executor.mjs
+  s_c491bf42c7dfb1::t_80f9e5f3a4eb1c 111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e6767201469e919ea0539d261fc4797576566bf6",
+  "prompts": {},
+  "logical_commit_id": "e6767201469e919ea0539d261fc4797576566bf6",
+  "sessions": {
+    "s_c491bf42c7dfb1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0414c-222c-7502-8671-3241d6530a6c",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>",
+      "total_additions": 25752,
+      "total_deletions": 3098
+    }
+  }
+}

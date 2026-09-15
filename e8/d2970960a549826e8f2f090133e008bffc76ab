@@ -1,0 +1,24 @@
+bin/lib/schedule-alerts.mjs
+  s_7a3d4268756f4c::t_2ea8fb5e8190fe 125-134
+test/schedule-alerts.test.mjs
+  s_7a3d4268756f4c::t_2ea8fb5e8190fe 177-190
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "e8d2970960a549826e8f2f090133e008bffc76ab",
+  "prompts": {},
+  "logical_commit_id": "e8d2970960a549826e8f2f090133e008bffc76ab",
+  "sessions": {
+    "s_7a3d4268756f4c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c7329e95-82e5-4abb-bcf4-0f6589ecb71a",
+        "model": "unknown"
+      },
+      "human_author": "FieldWang <wangfang1@bigo.sg>",
+      "total_additions": 24,
+      "total_deletions": 1
+    }
+  }
+}

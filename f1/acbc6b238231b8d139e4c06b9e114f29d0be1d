@@ -1,0 +1,20 @@
+test/release-registry.test.mjs
+  s_65c049f229c758::t_d8afb0e30e4f2d 1-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f1acbc6b238231b8d139e4c06b9e114f29d0be1d",
+  "prompts": {},
+  "logical_commit_id": "f1acbc6b238231b8d139e4c06b9e114f29d0be1d",
+  "sessions": {
+    "s_65c049f229c758": {
+      "agent_id": {
+        "tool": "cursor",
+        "id": "554e7a30-87d9-42dd-8249-9e863b0a1b8d",
+        "model": "unknown"
+      },
+      "human_author": "duanfengyuan <duanfengyuan@bigo.sg>"
+    }
+  }
+}
