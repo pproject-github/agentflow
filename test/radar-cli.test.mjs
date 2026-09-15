@@ -456,3 +456,83 @@ test("驳回不写值，但在变更流里留一条", async () => {
     assert.equal(radar.readRadarShard("b", "f").rows[0].state, "risk", "驳回之后值不变");
   });
 });
+
+// ── track plan check ──────────────────────────────────────────────────
+// 这几条都是实跑 radar-plan 流程时踩出来的，不是想出来的
+
+test("plan check：模型先给示例再给真计划，挑真的那份", async () => {
+  await withTrackHome(async ({ cli, tempRoot }) => {
+    const out = (name) => path.join(tempRoot, name);
+    await runTrack(cli, ["plan", "check",
+      `--raw=举个例子：\n\`\`\`json\n{"summary":"示例"}\n\`\`\`\n真正的计划：\n\`\`\`json\n{"summary":"真的","items":[{"id":"a-one","title":"甲"}],"flows":[{"action":"create","flowId":"watch","owns":["a-one"]}]}\n\`\`\``,
+      `--ok=${out("ok")}`, `--report=${out("rep.md")}`, `--plan=${out("plan.json")}`,
+    ]);
+    assert.equal(fs.readFileSync(out("ok"), "utf-8"), "true");
+    const plan = JSON.parse(fs.readFileSync(out("plan.json"), "utf-8"));
+    assert.equal(plan.summary, "真的");
+  });
+});
+
+/**
+ * 运行时把超过阈值的输入物化成 `inputs/<槽>/<槽>.json`，值就变成路径——短的时候还是原文。
+ * 不认这一层，校验节点会拿着一行路径去解析 JSON，然后把运行时的行为诬赖给模型。
+ */
+test("plan check：槽值是路径时读文件，不是把路径当 JSON 解析", async () => {
+  await withTrackHome(async ({ cli, tempRoot }) => {
+    const out = (name) => path.join(tempRoot, name);
+    const mounted = path.join(tempRoot, "inputs", "raw", "raw.json");
+    fs.mkdirSync(path.dirname(mounted), { recursive: true });
+    fs.writeFileSync(mounted, '{"summary":"从文件读到的","items":[],"flows":[{"action":"create","flowId":"watch","owns":["*"]}]}', "utf-8");
+    const previousCwd = process.cwd();
+    process.chdir(tempRoot);
+    try {
+      await runTrack(cli, ["plan", "check", "--raw=inputs/raw/raw.json",
+        `--ok=${out("ok")}`, `--report=${out("rep.md")}`, `--plan=${out("plan.json")}`,
+      ]);
+    } finally {
+      process.chdir(previousCwd);
+    }
+    assert.equal(fs.readFileSync(out("ok"), "utf-8"), "true");
+    assert.equal(JSON.parse(fs.readFileSync(out("plan.json"), "utf-8")).summary, "从文件读到的");
+  });
+});
+
+// 解析不出来不是这一步失败，是下一步该让它重发——和 `new` 流程里的 lint 节点同一个契约
+test("plan check：解析不出来写 false 而不是抛，报告里带上原文", async () => {
+  await withTrackHome(async ({ cli, tempRoot }) => {
+    const out = (name) => path.join(tempRoot, name);
+    const code = await runTrack(cli, ["plan", "check", "--raw=我想了想，还是写成文字吧",
+      `--ok=${out("ok")}`, `--report=${out("rep.md")}`, `--plan=${out("plan.json")}`,
+    ]);
+    assert.match(code, /计划未通过/);
+    assert.equal(fs.readFileSync(out("ok"), "utf-8"), "false");
+    assert.match(fs.readFileSync(out("rep.md"), "utf-8"), /我想了想/);
+  });
+});
+
+// 一次运行一份，不是「最新那份」：并行规划时人会拿到别人那份计划，而且看不出来
+test("plan check：结果按 runId 存进雷达数据目录，服务端照 runId 取", async () => {
+  await withTrackHome(async ({ cli, radar, tempRoot }) => {
+    const out = (name) => path.join(tempRoot, name);
+    await runTrack(cli, ["plan", "check", "--run-id=run-abc",
+      '--raw={"summary":"s","items":[],"flows":[{"action":"create","flowId":"watch","owns":["*"]}]}',
+      `--ok=${out("ok")}`, `--report=${out("rep.md")}`, `--plan=${out("plan.json")}`,
+    ]);
+    const saved = JSON.parse(fs.readFileSync(radar.radarPlanFile("run-abc"), "utf-8"));
+    assert.equal(saved.runId, "run-abc");
+    assert.equal(saved.ok, true);
+    assert.equal(saved.plan.flows[0].flowId, "watch");
+    // 别人那次的 runId 不该也指到这份上
+    assert.equal(fs.existsSync(radar.radarPlanFile("run-xyz")), false);
+  });
+});
+
+test("plan prompt：新板时写出的提示词里要有 board 那一段", async () => {
+  await withTrackHome(async ({ cli, tempRoot }) => {
+    const outPath = path.join(tempRoot, "prompt.md");
+    await runTrack(cli, ["plan", "prompt", `--out=${outPath}`, "--ask=盯三方 SDK 合规"]);
+    const prompt = fs.readFileSync(outPath, "utf-8");
+    assert.match(prompt, /盯三方 SDK 合规/);
+    assert.match(prompt, /"board": \{ "title"/);
+  });
+});

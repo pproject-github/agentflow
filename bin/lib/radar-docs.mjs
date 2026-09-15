@@ -48,7 +48,16 @@ export function splitDoc(text = "") {
     const parsed = yaml.load(match[1]);
     meta = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
   } catch (e) {
-    return { error: `frontmatter 不是合法 YAML：${(e && e.message) || e}` };
+    /**
+     * 实测里最常见的一种坏法：agent 把带冒号的证据直接写成裸值
+     * （`current: targetSdk 34: 不达标`），YAML 当成嵌套映射然后报错。
+     * 一份坏文件会让整个目录一条都不写（这是有意的），所以报错必须直接说出怎么修，
+     * 否则下一轮 agent 只会换个说法再犯一次。
+     */
+    return {
+      error: `frontmatter 不是合法 YAML：${(e && e.message) || e}\n`
+        + `    值里有冒号、井号或引号时要整体加引号，例如 current: "targetSdk 34: 不达标"`,
+    };
   }
   return { meta, body: String(match[2] || "").trim() };
 }
@@ -61,8 +70,13 @@ export function splitDoc(text = "") {
  */
 export function readTrackerDocs(dir) {
   let names = [];
+  let strays = [];
   try {
-    names = fs.readdirSync(dir).filter((name) => name.endsWith(".md")).sort();
+    const all = fs.readdirSync(dir);
+    names = all.filter((name) => name.endsWith(".md")).sort();
+    // agent 实测最常见的一种写法错误：文件名照着 id 写，忘了 .md。
+    // 只报「目录下没有带 frontmatter 的 .md」的话，它下一轮还会照错的方式再写一遍
+    strays = all.filter((name) => !name.endsWith(".md") && !name.startsWith("."));
   } catch (e) {
     return { rows: [], errors: [`读不到目录 ${dir}：${(e && e.message) || e}`] };
   }
@@ -94,6 +108,12 @@ export function readTrackerDocs(dir) {
     row.doc = name;
     if (split.body) row.docLines = split.body.split(/\r?\n/).length;
     rows.push(row);
+  }
+  if (!rows.length && strays.length) {
+    errors.push(
+      `${dir} 下有 ${strays.length} 个文件不是 .md（${strays.slice(0, 3).join("、")}${strays.length > 3 ? " …" : ""}）。`
+      + `追踪项的文件名必须是 <id>.md`,
+    );
   }
   return { rows, errors, notes };
 }

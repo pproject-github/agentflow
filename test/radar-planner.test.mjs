@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   buildRadarPlanPrompt,
+  buildRadarPlanRepairPrompt,
   describeBoardState,
   normalizeRadarItems,
   normalizeRadarPlan,
@@ -158,8 +159,8 @@ test("updates 只留认识的字段，别让模型发明字段", () => {
   assert.deepEqual(result.flows[0].updates, ["state", "evidence"]);
 });
 
-// 路由守卫：这两条是在花钱调模型**之前**就该拦掉的，所以单独钉住
-test("规划接口先挡住坏输入，再谈调模型", async () => {
+// 路由守卫：这两条是在装流程、起 run **之前**就该拦掉的，所以单独钉住
+test("规划接口先挡住坏输入，再谈装流程", async () => {
   const tempRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "agentflow-radar-plan-")));
   const previousHome = process.env.AGENTFLOW_HOME;
   process.env.AGENTFLOW_HOME = path.join(tempRoot, "data");
@@ -180,7 +181,7 @@ test("规划接口先挡住坏输入，再谈调模型", async () => {
     });
     const base = `http://127.0.0.1:${server.address().port}`;
     const post = async (body) => {
-      const res = await fetch(`${base}/api/radar/plan`, {
+      const res = await fetch(`${base}/api/radar/plan/prepare`, {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${user.token}` },
         body: JSON.stringify(body),
@@ -258,4 +259,97 @@ test("流程可以认领这一轮新提的条目，不算引用不存在", () =>
   }, null);
   assert.equal(result.items.length, 1);
   assert.equal(result.warnings.some((w) => /声称负责 brand-new/.test(w)), false);
+});
+
+// 人只该回答「要盯什么」。板叫什么是规划的产出，问他等于把内部字段摊在他脸上
+test("新板时提示词要求规划自己给板名和板 id", () => {
+  const prompt = buildRadarPlanPrompt({ board: null, ask: "盯三方 SDK 合规" });
+  assert.match(prompt, /"board": \{ "title"/);
+  assert.match(prompt, /id 会进深链/);
+});
+
+test("板已经存在时不再问板名——id 定了就不改", () => {
+  const prompt = buildRadarPlanPrompt({ board: boardFixture(), ask: "再加一条" });
+  assert.equal(/"board": \{ "title"/.test(prompt), false);
+  assert.match(prompt, /板 id 是 compliance/);
+});
+
+test("收下规划取的板名和板 id", () => {
+  const result = normalizeRadarPlan({
+    board: { title: "三方 SDK 合规", id: "SDK-Compliance" },
+    items: [{ id: "privacy-manifest", title: "隐私清单" }],
+    flows: [{ action: "create", flowId: "watch", owns: ["privacy-manifest"] }],
+  }, null);
+  assert.equal(result.board.title, "三方 SDK 合规");
+  // 大小写不该成为建板失败的理由，但落盘前必须归一
+  assert.equal(result.board.id, "sdk-compliance");
+});
+
+// 板 id 会进文件名、深链和 `--board=`，拿一个带斜杠的进去就是路径穿越
+test("板 id 不合法就丢掉并点名，不静默改写", () => {
+  const result = normalizeRadarPlan({
+    board: { title: "坏板", id: "../etc/passwd" },
+    items: [{ id: "x-one", title: "一条" }],
+    flows: [{ action: "create", flowId: "watch", owns: ["x-one"] }],
+  }, null);
+  assert.equal(result.board.id, "");
+  assert.ok(result.warnings.some((w) => /板 id 不合法/.test(w)));
+});
+
+test("规划没给 board 时不炸，给空字符串让面板自己兜底", () => {
+  const result = normalizeRadarPlan({ items: [], flows: [] }, null);
+  assert.deepEqual(result.board, { title: "", id: "" });
+});
+
+// ── 解析容错 ──────────────────────────────────────────────────────────
+// 规划一次要跑一两分钟。为了一个尾逗号让人从头再来，比多写几十行解析贵得多
+
+test("尾逗号不该让一份计划作废", () => {
+  const result = parseRadarPlan('{"summary":"a","items":[],}');
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.summary, "a");
+});
+
+// 「第一个 { 到最后一个 }」会被 JSON 后面那句带括号的话切歪
+test("JSON 后面还有话时，只取那段 JSON", () => {
+  const result = parseRadarPlan('{"summary":"x","flows":[{"flowId":"watch"}]} 备注：{待确认}');
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.summary, "x");
+});
+
+test("模型先给示例再给真计划时，挑更像计划的那份", () => {
+  const result = parseRadarPlan([
+    "举个例子：", "```json", '{"summary":"示例"}', "```",
+    "真正的计划：", "```json",
+    '{"summary":"真的","items":[{"id":"a"}],"flows":[{"flowId":"watch"}]}', "```",
+  ].join("\n"));
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.summary, "真的");
+});
+
+test("整行 // 注释也收", () => {
+  const result = parseRadarPlan('{\n  // 这条先不加\n  "summary":"y","items":[]\n}');
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.summary, "y");
+});
+
+// 字符串里的括号不算边界，不然一句带 { 的文案就把结构切断了
+test("字符串里的大括号不当成结构", () => {
+  const result = parseRadarPlan('{"summary":"见附录 { 三 }","items":[]}');
+  assert.equal(result.ok, true);
+  assert.equal(result.plan.summary, "见附录 { 三 }");
+});
+
+test("真的没有 JSON 时照样报错，不编一份出来", () => {
+  const result = parseRadarPlan("我想了想，还是写成文字吧");
+  assert.equal(result.ok, false);
+  assert.match(result.error, /不是可解析的 JSON/);
+});
+
+// 第二轮看不到第一轮的上下文，只说「重发」的结果是它凭印象重编一份
+test("重发提示词要把原任务整段带上", () => {
+  const prompt = buildRadarPlanRepairPrompt("原来的任务正文", "上一轮乱七八糟的输出");
+  assert.match(prompt, /原来的任务正文/);
+  assert.match(prompt, /上一轮乱七八糟的输出/);
+  assert.match(prompt, /只是重新输出，不是重新规划/);
 });

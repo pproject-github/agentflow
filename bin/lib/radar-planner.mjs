@@ -73,10 +73,20 @@ export function describeBoardState(board) {
  */
 export function buildRadarPlanPrompt({ board, ask, boardId }) {
   const target = board?.board || boardId || "";
+  // 空板是从零排，已经在跑的板是**改**。同一句「想盯什么」在这两种情形下要的东西完全不同：
+  // 前者要一份完整清单，后者要的是增量——把不变的照原样留住，只说改哪儿
+  const tuning = Array.isArray(board?.rows) && board.rows.length > 0;
   return [
     "你在为一块「雷达板」做编排规划。雷达板是一组被长期追踪的事项，每条有截止日、状态和负责人，",
     "由若干条定时流程各写各的一片，合并成一块板。",
     "",
+    ...(tuning ? [
+      "**这块板已经在跑了，你是在调整它，不是重建。**",
+      "没被要求改的条目和流程原样留住（流程用 `keep`，条目照抄现有 id），只把用户说的那部分改掉。",
+      "把一条现有条目拆细时，新条目的 parent 指回它；不要凭空重排整块板——人看到的会是一次全量替换，",
+      "而板上攒的状态、认领和人工标记都挂在原来那些 id 上。",
+      "",
+    ] : []),
     "## 现状",
     describeBoardState(board),
     "",
@@ -95,11 +105,17 @@ export function buildRadarPlanPrompt({ board, ask, boardId }) {
     "6. **`items` 是要盯的具体事项，一条一个。** 它们的初始 state 一律留空——这一刻你还没扫过，",
     "   写任何值都是编的。`tasks` 拆成人能直接照着做的步骤，`unknowns` 写你查不到、需要人补的。",
     "7. `flows[].owns` 里的 id 必须来自 `items` 或板上已有的条目，不能凭空出现。",
+    "8. **`vocab` 是这块板的词典，由你定。** 状态在这块板上怎么念（合规板说「已满足」，",
+    "   线上问题板说「已恢复」，争议板说「已定论」）、分几个大组、横切标签用哪几个。",
+    "   它是数据不是代码：流程从板上读它，页面照它渲染，改词表不用改任何源码。",
+    "   大组按**人会怎么分块看这块板**来定，三到六个，别按流程分——流程是谁去查，大组是查的是哪一类。",
     "",
     "## 只输出一段 JSON，不要别的",
     "```json",
     "{",
     '  "summary": "一两句话说清楚这块板打算怎么组织",',
+    // 新板的名字和 id 也归规划——让人先取名再描述需求，是把内部字段当成了提问
+    target ? "" : '  "board": { "title": "这块板叫什么，四到八个字的中文名", "id": "英文小写、连字符分隔，比如 sdk-compliance" },',
     '  "flows": [',
     "    {",
     '      "action": "create|update|keep",',
@@ -113,6 +129,15 @@ export function buildRadarPlanPrompt({ board, ask, boardId }) {
     '      "why": "这条流程为什么存在"',
     "    }",
     "  ],",
+    // 词典也归规划：状态怎么念、分几个大组、标签用哪几个——这些是**这块板的业务**，
+    // 不是内核。不让规划定的话，它们只会散进各条流程的提示词里，
+    // 改一个大组要去编辑流程源码，而两条流程各抄一份就会拼出两个同名的组
+    '  "vocab": {',
+    '    "states": { "ok": "已满足", "warn": "进行中", "risk": "未开始", "idle": "无状态" },',
+    '    "themes": [{ "key": "英文小写key", "label": "给人看的组名，比如 Android 16 适配" }],',
+    '    "tags": ["跨条目的横切标签，英文小写，五到八个"],',
+    '    "fields": { "current": "现状", "evidence": "依据", "required": "要求" }',
+    "  },",
     '  "items": [',
     "    {",
     '      "id": "英文小写、连字符分隔、稳定不变，比如 play-target-api-36",',
@@ -128,28 +153,120 @@ export function buildRadarPlanPrompt({ board, ask, boardId }) {
     '  "notes": ["需要人确认的事，比如某个条目现在没人负责"]',
     "}",
     "```",
-    target ? `板 id 是 ${target}，流程写入时用它。` : "",
+    target
+      ? `板 id 是 ${target}，流程写入时用它。`
+      : "这块板还不存在，`board.title` 和 `board.id` 由你定：title 给人看，id 会进深链、也是流程里 --board= 的值，定下就不再改。",
   ].filter(Boolean).join("\n");
 }
 
-/** 从模型回复里抠出那段 JSON。它经常会裹一层 ``` 或者前后带解释 */
+/**
+ * 扫出每一段大括号平衡的片段。
+ *
+ * 不能用「第一个 `{` 到最后一个 `}`」：模型在 JSON 后面补一句带括号的解释，那一刀就切歪了。
+ * 字符串里的括号也不算——`"required": "{ 见附录 }"` 会把边界带偏。
+ */
+function* jsonObjects(text) {
+  const s = String(text || "");
+  if (s.length > 400_000) return;
+  for (let i = 0; i < s.length; i += 1) {
+    if (s[i] !== "{") continue;
+    let depth = 0;
+    let inStr = false;
+    let esc = false;
+    for (let j = i; j < s.length; j += 1) {
+      const ch = s[j];
+      if (esc) { esc = false; continue; }
+      if (ch === "\\") { if (inStr) esc = true; continue; }
+      if (ch === '"') { inStr = !inStr; continue; }
+      if (inStr) continue;
+      if (ch === "{") depth += 1;
+      else if (ch === "}") {
+        depth -= 1;
+        if (depth === 0) { yield s.slice(i, j + 1); i = j; break; }
+      }
+    }
+  }
+}
+
+/**
+ * 先按原样解析，不行再做两处保守修补：尾逗号、整行 `//` 注释。
+ *
+ * 只修这两样。再往下就是猜模型想写什么了——一份猜出来的计划比解析失败更糟，
+ * 因为它会静默地少掉几个条目。
+ */
+function tryParseObject(chunk) {
+  const noTrailingComma = chunk.replace(/,(\s*[}\]])/g, "$1");
+  const attempts = [chunk, noTrailingComma, noTrailingComma.replace(/^\s*\/\/.*$/gm, "")];
+  for (const attempt of attempts) {
+    try {
+      const value = JSON.parse(attempt);
+      if (value && typeof value === "object" && !Array.isArray(value)) return value;
+    } catch {
+      // 换下一种修补再试
+    }
+  }
+  return null;
+}
+
+/** 一份回复里可能同时有示例和真计划。认这几个键，谁更像计划挑谁 */
+function planScore(plan) {
+  let score = 0;
+  if (Array.isArray(plan?.flows)) score += 4 + Math.min(plan.flows.length, 4);
+  if (Array.isArray(plan?.items)) score += 4 + Math.min(plan.items.length, 4);
+  if (plan?.board && typeof plan.board === "object") score += 2;
+  if (String(plan?.summary || "").trim()) score += 1;
+  return score;
+}
+
+/**
+ * 从模型回复里抠出那段 JSON 计划。
+ *
+ * 宽容不是纵容：一次规划要跑一两分钟，为了一个尾逗号让人从头再来，比多写几十行解析贵得多。
+ * 但宽容只到「把结构抠出来」为止——抠出来的东西照样要过 normalizeRadarPlan 的校验，
+ * 那里才是真正决定什么能落盘的地方。
+ */
 export function parseRadarPlan(text) {
   const raw = String(text || "").trim();
   if (!raw) return { ok: false, error: "模型没有返回内容" };
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-  const candidates = [fenced ? fenced[1] : "", raw].filter(Boolean);
+
+  // 所有围栏块，不只第一个：模型常常先给一段示例再给真的
+  const candidates = [...raw.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)].map((m) => m[1]);
+  candidates.push(raw);
+
+  const seen = new Set();
+  const plans = [];
   for (const candidate of candidates) {
-    const start = candidate.indexOf("{");
-    const end = candidate.lastIndexOf("}");
-    if (start < 0 || end <= start) continue;
-    try {
-      const parsed = JSON.parse(candidate.slice(start, end + 1));
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return { ok: true, plan: parsed };
-    } catch {
-      // 换下一个候选再试
+    for (const chunk of jsonObjects(candidate)) {
+      if (seen.has(chunk)) continue;
+      seen.add(chunk);
+      const parsed = tryParseObject(chunk);
+      if (parsed) plans.push(parsed);
     }
   }
-  return { ok: false, error: "模型返回的不是可解析的 JSON 计划" };
+  if (!plans.length) return { ok: false, error: "模型返回的不是可解析的 JSON 计划" };
+  plans.sort((a, b) => planScore(b) - planScore(a));
+  return { ok: true, plan: plans[0] };
+}
+
+/**
+ * 解析不出来时，让它只重发一遍 JSON。
+ *
+ * 把原任务整段带上，而不是只说「重发」：模型第二轮看不到第一轮的上下文，
+ * 只说重发的结果是它凭印象重编一份，条目和第一轮对不上。
+ */
+export function buildRadarPlanRepairPrompt(prompt, raw) {
+  return [
+    "上一轮的回复里没有可解析的 JSON 计划。",
+    "",
+    "**只输出那一段 JSON**：不要解释、不要示例、不要第二段 JSON、不要在 JSON 之后再补话。",
+    "内容和上一轮应当一致——这一轮只是重新输出，不是重新规划。",
+    "",
+    "## 原任务",
+    String(prompt || ""),
+    "",
+    "## 你上一轮的输出（截断）",
+    String(raw || "").slice(0, 4000),
+  ].join("\n");
 }
 
 /**
@@ -198,6 +315,11 @@ export function normalizeRadarItems(raw = [], existingIds = new Set()) {
 
 export function normalizeRadarPlan(plan, board) {
   const warnings = [];
+  // 板 id 和条目 id 一个形状：都会进文件名、进深链、进 `--board=`
+  const proposedId = String(plan?.board?.id || "").trim().toLowerCase();
+  if (plan?.board?.id && !ITEM_ID.test(proposedId)) {
+    warnings.push(`板 id 不合法，已丢掉：${plan.board.id}`);
+  }
   const existing = new Set((board?.rows || []).map((row) => String(row.id || row.title || "")).filter(Boolean));
   // 这一轮新提的条目也算「已知」：流程认领它们是正常的，不该被当成引用了不存在的条目
   const { items, warnings: itemWarnings } = normalizeRadarItems(plan?.items, existing);
@@ -264,6 +386,10 @@ export function normalizeRadarPlan(plan, board) {
 
   return {
     summary: String(plan?.summary || ""),
+    board: {
+      title: String(plan?.board?.title || "").trim(),
+      id: ITEM_ID.test(proposedId) ? proposedId : "",
+    },
     items,
     flows,
     notes: (Array.isArray(plan?.notes) ? plan.notes : []).map((note) => String(note || "")).filter(Boolean),

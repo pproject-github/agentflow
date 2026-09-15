@@ -27,7 +27,7 @@ import { autoCommit, readTrackerDocs, writeTrackerDoc } from "./radar-docs.mjs";
 import { applyGate } from "./radar-gate.mjs";
 import { writeWorkspaceGraph } from "./workspace-server.mjs";
 import { materializeFlow, planToPending } from "./radar-plan-apply.mjs";
-import { normalizeRadarPlan, parseRadarPlan } from "./radar-planner.mjs";
+import { buildRadarPlanPrompt, normalizeRadarPlan, parseRadarPlan } from "./radar-planner.mjs";
 import {
   RADAR_STATES,
   appendRadarEvent,
@@ -37,7 +37,9 @@ import {
   isValidShardId,
   listRadarBoardIds,
   listRadarBoards,
+  ownsViolations,
   radarBoardDir,
+  radarPlanFile,
   PENDING_PLAN_KEY,
   readRadarPending,
   writeRadarPending,
@@ -47,6 +49,7 @@ import {
   readRadarShard,
   rmRadarBoard,
   rmRadarShard,
+  writeRadarBoardMeta,
   writeRadarShard,
 } from "./radar.mjs";
 
@@ -259,6 +262,19 @@ export function diffRows(previous = null, next = []) {
   return events;
 }
 
+/**
+ * `--owns=a,b` / `--apps=x,y` 这类逗号列表。
+ *
+ * 没传返回 null 而不是空数组：空数组在 commitTrack 里意味着「没有契约」，
+ * 而没传的语义是「沿用上一片声明过的」。两者混起来会让一次忘带 --owns 的手工 commit
+ * 悄悄把契约卸掉。
+ */
+function parseOwns(value) {
+  if (value === undefined || value === null || value === true) return null;
+  const list = String(value).split(",").map((item) => item.trim()).filter(Boolean);
+  return list.length ? list : null;
+}
+
 function readRowsFile(filePath) {
   let text = "";
   try {
@@ -296,6 +312,8 @@ export function commitTrack({
   now = Date.now(),
   gate = false,
   humanFields = new Set(),
+  owns = null,
+  covers = null,
 } = {}) {
   if (!isValidBoardId(board)) throw fail(`board 不合法：${board}`);
   if (!isValidShardId(flowId)) throw fail(`flow 不合法：${flowId}`);
@@ -304,6 +322,32 @@ export function commitTrack({
   if (errors.length) throw fail(`条目有 ${errors.length} 处问题，一条都没写：\n  - ${errors.join("\n  - ")}`);
 
   const previous = readRadarShard(board, flowId);
+
+  /**
+   * owns 契约：这一片只能写自己声明负责的 id。
+   *
+   * 这一层挡的不是「判断错了」——那是门禁的活。它挡的是**越权**：模型把 Likee 的结论
+   * 写到 BigoLive 的条目上时，行 id 完全合法、状态也合法，事后只能靠板上标红发现，
+   * 而那时两片已经在互相覆盖了。
+   *
+   * 没传就沿用上一片声明过的。否则一次忘了带 --owns 的手工 commit 会把契约悄悄卸掉，
+   * 而卸掉契约恰恰不会有任何报错——最危险的那种默认值。
+   */
+  const declaredOwns = Array.isArray(owns) && owns.length
+    ? owns.map((pattern) => String(pattern).trim()).filter(Boolean)
+    : (Array.isArray(previous?.owns) ? previous.owns.map(String) : []);
+  // covers 和 owns 一样，不传就沿用上一片声明过的
+  const declaredCovers = Array.isArray(covers) && covers.length
+    ? covers.map((pattern) => String(pattern).trim()).filter(Boolean)
+    : (Array.isArray(previous?.covers) ? previous.covers.map(String) : []);
+  const trespass = ownsViolations(rows, declaredOwns);
+  if (trespass.length) {
+    throw fail(
+      `${trespass.length} 条越界，整次没写：\n  - ${trespass.join("\n  - ")}\n` +
+      `这一片声明只负责 ${declaredOwns.join(" / ")}。\n` +
+      `别的条目由别的流程认领——写进来就是重复认领，板上会开始自相矛盾。`,
+    );
+  }
   const owner = String(previous?.writtenBy || "").trim();
   const me = String(actor || "").trim();
   // 两边都知道是谁、而且不是同一个人，才算冲突。手工跑 CLI 时没有 AGENTFLOW_USER_ID，
@@ -354,13 +398,18 @@ export function commitTrack({
     fetchFailures: failures,
     ...(Number(staleAfterMs) > 0 ? { staleAfterMs: Number(staleAfterMs) } : {}),
     ...(flow ? { flow } : {}),
+    ...(declaredOwns.length ? { owns: declaredOwns } : {}),
+    ...(declaredCovers.length ? { covers: declaredCovers } : {}),
     ...(me ? { writtenBy: me } : owner ? { writtenBy: owner } : {}),
   });
   if (!written.ok) throw fail(written.error || "写入失败");
 
   for (const event of events) appendRadarEvent(board, { ...event, flowId, by: me || "flow" });
 
-  return { ok: true, board, flowId, path: written.path, rows: finalWrite.length, events, held: gated.held, salvaged: Boolean(salvaged) };
+  return {
+    ok: true, board, flowId, path: written.path, rows: finalWrite.length,
+    events, held: gated.held, salvaged: Boolean(salvaged), owns: declaredOwns, covers: declaredCovers,
+  };
 }
 
 function printBoards(includeArchived = false) {
@@ -410,9 +459,11 @@ export async function runTrackCommand(argv = []) {
       "",
       "  commit --board=<板> --flow=<流程> --rows=<json文件>   写一片（流程里用）",
       "         [--fetch-failures=N] [--stale-after-ms=N] [--force]",
+      "         [--owns=<glob,glob>] [--covers=<glob,glob>]   owns=只准写这些 id；covers=替哪些父项作答（缺席靠它判）",
       "  create <板> [--title=<标题>]                          建一块空板",
       "  sync --board --flow --dir=<trackers 目录> [--gate]    从 trackers/*.md 同步（agent 改文件，这里校验）",
-      "       [--flow-ref=<跑它的流程 id>]                      分片名和流程不同名时要带上",
+      "       [--flow-ref=<流程 id>] [--owns=<..>] [--covers=<..>] 分片名和流程不同名时要带 flow-ref",
+      "  trains --board [--scope=<分片>] --file=<json>        刷新版本车（只写板级元信息，不认领条目）",
       "  export --board --flow --dir=<trackers 目录>          把一条流程那一片导成 trackers/*.md",
       "  list [--archived]                                    列出所有板",
       "  archive <板> [--undo]                                归档 / 取消归档（不是删除）",
@@ -420,6 +471,9 @@ export async function runTrackCommand(argv = []) {
       "  approve --board --flow [--id=<条目>]                  批准并写入",
       "  reject  --board --flow [--id=<条目>]                  驳回（不写，但记一条事件）",
       "  plan apply --board --plan=<plan.md> --workspace=<板目录>  把指挥官的计划提案成待审批",
+      "  plan prompt --out=<路径> [--board=<板>] [--ask=<一句话>]  组装规划提示词（radar-plan 流程里用）",
+      "  plan check --ok=<路径> --report=<路径> --plan=<路径>     校验模型给的计划（radar-plan 流程里用）",
+      "             [--run-id=<id>]                             结果按 runId 存一份给服务端取回",
       "  show <板> [--json]                                   看一块板的条目",
       "  events <板> [--limit=N]                              看变更流",
       "  rm <板> [--flow=<流程>]                              删一块板，或只删一片",
@@ -440,6 +494,8 @@ export async function runTrackCommand(argv = []) {
       force: flags.force === true || flags.force === "true",
       fetchFailures: flags["fetch-failures"] ?? flags.fetchFailures ?? 0,
       staleAfterMs: flags["stale-after-ms"] ?? flags.staleAfterMs ?? 0,
+      owns: parseOwns(flags.owns),
+      covers: parseOwns(flags.covers),
       flow: String(flags["flow-ref"] || "").trim()
         ? { flowId: String(flags["flow-ref"]).trim(), flowSource: String(flags["flow-source"] || "user") }
         : null,
@@ -480,6 +536,66 @@ export async function runTrackCommand(argv = []) {
   }
 
   /**
+   * 刷新某个 app 的版本车。
+   *
+   * 单独一个入口，因为它**一条条目都不认领**：版本车是板级事实（哪个版本什么时候封包），
+   * 不属于任何一条政策。让排期流程走 commit 的话，它得先声明 owns、再写一批假条目，
+   * 然后这些假条目会跟真的政策条目一起出现在板上。
+   *
+   * 只替换这个 app 名下的车，别的 app 和通用车原样留着——两个 app 的排期流程各跑各的，
+   * 不该互相清空。
+   */
+  if (action === "trains") {
+    const board = String(flags.board || "");
+    // 限定到某一片：写这些条目的那条流程有自己的发版节奏。
+    // 不是「哪个 app」——板不认识业务，只认识分片
+    const scope = String(flags.scope || "").trim();
+    const file = String(flags.file || flags.rows || "");
+    if (!board || !file) throw fail("trains 需要 --board 和 --file");
+    if (!isValidBoardId(board)) throw fail(`board 不合法：${board}`);
+    const parsed = readRowsFile(file);
+    const incoming = (Array.isArray(parsed) ? parsed : Array.isArray(parsed?.trains) ? parsed.trains : null);
+    if (!incoming) throw fail("版本车文件要是数组，或是带 trains 数组的对象");
+    const next = [];
+    const bad = [];
+    incoming.forEach((item, index) => {
+      const version = String(item?.version || "").trim();
+      const cutoff = String(item?.cutoff || "").trim();
+      if (!version || !cutoff) { bad.push(`第 ${index + 1} 班缺 version 或 cutoff`); return; }
+      if (!Number.isFinite(Date.parse(/^\d{4}-\d{2}-\d{2}$/.test(cutoff) ? `${cutoff}T00:00:00` : cutoff))) {
+        bad.push(`第 ${index + 1} 班（${version}）cutoff 不是日期：${cutoff}`);
+        return;
+      }
+      next.push({ version, cutoff, ...(scope ? { scope } : {}) });
+    });
+    if (bad.length) throw fail(`版本车有 ${bad.length} 处问题，一班都没写：\n  - ${bad.join("\n  - ")}`);
+
+    const loaded = readRadarBoard(board, { scope: "all" });
+    if (!loaded) throw fail(`没有这块板：${board}`);
+    const kept = (loaded.trains || []).filter((train) => {
+      const owner = String(train?.scope || "").trim();
+      return scope ? owner !== scope : Boolean(owner);
+    });
+    const written = writeRadarBoardMeta(board, {
+      title: loaded.title,
+      icon: loaded.icon,
+      ...(loaded.archived ? { archived: true } : {}),
+      spec: loaded.spec,
+      trains: [...kept, ...next],
+    });
+    if (!written.ok) throw fail(written.error || "写不进板级元信息");
+    appendRadarEvent(board, {
+      kind: "trains",
+      id: scope || "*",
+      title: `${scope || "通用"} 版本车 ${next.length} 班`,
+      by: String(process.env.AGENTFLOW_USER_ID || "flow"),
+    });
+    console.log(`已更新 ${board} 的版本车（${scope || "通用"}）：${next.length} 班，保留其它 ${kept.length} 班`);
+    for (const train of next) console.log(`  ${train.version.padEnd(12)} 封包 ${train.cutoff}`);
+    return 0;
+  }
+
+  /**
    * 从 `trackers/*.md` 同步到板。
    *
    * 和 `commit` 的区别只在入口：commit 吞一份 agent 直接产出的 JSON，sync 读一个目录。
@@ -505,6 +621,8 @@ export async function runTrackCommand(argv = []) {
       fetchFailures: flags["fetch-failures"] ?? 0,
       staleAfterMs: flags["stale-after-ms"] ?? 0,
       gate: flags.gate === true || flags.gate === "true",
+      owns: parseOwns(flags.owns),
+      covers: parseOwns(flags.covers),
       humanFields: humanEditedFields(dir),
       // 分片名可以和跑它的那条流程不同名。不记下来的话，协作视图和定时归属
       // 都会按分片名去找流程，找不到就显示「从没跑过」
@@ -579,7 +697,127 @@ export async function runTrackCommand(argv = []) {
    */
   if (action === "plan") {
     const sub = String(positional[1] || "").trim();
-    if (sub !== "apply") throw fail("只支持 `track plan apply`");
+
+    /**
+     * 槽值可能是内容，也可能是路径。
+     *
+     * 运行时把超过阈值的输入物化成 `inputs/<槽>/<槽>.json`，**值就变成了相对路径**；
+     * 没超过阈值的还是原文。于是同一个槽短的时候是内容、长的时候是路径——
+     * 不认这一层的话，校验节点会拿着一行 `inputs/raw/raw.json` 去解析 JSON，
+     * 然后报「模型返回的不是可解析的 JSON」，把运行时的行为诬赖给模型。
+     */
+    const slotText = (value) => {
+      const text = String(value ?? "");
+      const oneLine = text.trim();
+      if (oneLine && !oneLine.includes("\n") && oneLine.length < 400) {
+        try {
+          const candidate = path.resolve(process.cwd(), oneLine);
+          if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+            return fs.readFileSync(candidate, "utf-8");
+          }
+        } catch {
+          // 当成普通文本
+        }
+      }
+      return text;
+    };
+
+    /**
+     * 组装规划提示词。规划跑在 `radar-plan` 流程里，提示词得由一个节点算出来——
+     * 板的现状（有几条流程、哪些条目没人认领、谁哑了）每次都不一样，写死在图里就永远是旧的。
+     */
+    if (sub === "prompt") {
+      const board = String(flags.board || "").trim();
+      const outPath = String(flags.out || "");
+      if (!outPath) throw fail("plan prompt 需要 --out");
+      if (board && !isValidBoardId(board)) throw fail(`board 不合法：${board}`);
+      const ask = slotText(flags.ask || process.env.AGENTFLOW_RADAR_ASK || "").trim();
+      if (!ask) throw fail("plan prompt 需要 --ask（或环境变量 AGENTFLOW_RADAR_ASK）");
+      const loaded = board ? readRadarBoard(board, { scope: "all" }) : null;
+      fs.writeFileSync(outPath, buildRadarPlanPrompt({ board: loaded, ask, boardId: board }), "utf-8");
+      console.log(board ? `已按 ${board} 的现状组装提示词` : "已组装提示词（新板，从零规划）");
+      return 0;
+    }
+
+    /**
+     * 校验模型给的计划，拆成三个槽。
+     *
+     * **本节点总是 exit 0**：解析不出来不是这一步失败，是下一步要让它重发的事。
+     * 真正的失败只有「文件写不出去」。和 `new` 流程里的 lint 节点同一个契约。
+     */
+    if (sub === "check") {
+      const okPath = String(flags.ok || "");
+      const reportPath = String(flags.report || "");
+      const planPath = String(flags.plan || "");
+      if (!okPath || !reportPath || !planPath) throw fail("plan check 需要 --ok、--report、--plan");
+      const board = String(flags.board || "").trim();
+      if (board && !isValidBoardId(board)) throw fail(`board 不合法：${board}`);
+
+      // 大段 JSON 不走命令行：`${slot}` 会把整份计划内联进 shell
+      let raw = String(flags.raw || "");
+      if (!raw) {
+        try {
+          const inputs = JSON.parse(String(process.env.AGENTFLOW_INPUTS_JSON || "{}"));
+          raw = String(inputs.raw || inputs.result || Object.values(inputs).find((v) => typeof v === "string" && v.trim()) || "");
+        } catch { raw = ""; }
+      }
+      raw = slotText(raw);
+
+      /**
+       * 把结果留一份到雷达自己的数据目录，服务端按 runId 取回。
+       *
+       * 一次运行一份，不是「最新那份」：两次规划并行时，后跑完的会盖掉前一个，
+       * 于是人拿到的是别人那份计划——而且看不出来。
+       */
+      const runId = String(flags["run-id"] || flags.runId || process.env.AGENTFLOW_RUN_ID || "");
+      const recordPlan = (data) => {
+        const file = radarPlanFile(runId);
+        if (!file) return;
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, JSON.stringify({
+          runId, at: new Date().toISOString(), board, ...data,
+        }, null, 2), "utf-8");
+      };
+
+      const parsed = parseRadarPlan(raw);
+      if (!parsed.ok) {
+        fs.writeFileSync(okPath, "false", "utf-8");
+        fs.writeFileSync(reportPath, [
+          `# 计划没解析出来`, "",
+          parsed.error, "",
+          "## 它上一轮的输出（截断）", "",
+          "```", String(raw || "(空)").slice(0, 4000), "```", "",
+        ].join("\n"), "utf-8");
+        fs.writeFileSync(planPath, "{}", "utf-8");
+        recordPlan({ ok: false, error: parsed.error, report: fs.readFileSync(reportPath, "utf-8") });
+        console.log(`计划未通过：${parsed.error}，交给下游重发`);
+        return 0;
+      }
+
+      const loaded = board ? readRadarBoard(board, { scope: "all" }) : null;
+      const normalized = normalizeRadarPlan(parsed.plan, loaded);
+      const usable = normalized.flows.length > 0;
+      fs.writeFileSync(planPath, JSON.stringify(normalized, null, 2), "utf-8");
+      fs.writeFileSync(okPath, usable ? "true" : "false", "utf-8");
+      fs.writeFileSync(reportPath, [
+        usable ? `# 计划已就绪` : `# 计划解析出来了，但没有一条可用的流程`, "",
+        normalized.summary || "(没有摘要)", "",
+        `- 追踪项 ${normalized.items.length} 条`,
+        `- 流程 ${normalized.flows.length} 条`,
+        normalized.board?.title ? `- 板名：${normalized.board.title}（id ${normalized.board.id || "未定"}）` : null,
+        "",
+        ...(normalized.warnings.length ? ["## 校验提醒", "", ...normalized.warnings.map((w) => `- ${w}`), ""] : []),
+      ].filter((line) => line !== null).join("\n"), "utf-8");
+      recordPlan(usable
+        ? { ok: true, plan: normalized }
+        : { ok: false, error: "计划里没有一条可用的流程", report: fs.readFileSync(reportPath, "utf-8") });
+      console.log(usable
+        ? `计划通过：${normalized.items.length} 条追踪项 / ${normalized.flows.length} 条流程`
+        : "计划里没有一条可用的流程，交给下游重来");
+      return 0;
+    }
+
+    if (sub !== "apply") throw fail("只支持 `track plan apply` / `plan prompt` / `plan check`");
     const board = String(flags.board || "");
     const planPath = String(flags.plan || "");
     const workspacePath = String(flags.workspace || flags.dir || "");

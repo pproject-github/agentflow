@@ -1765,6 +1765,55 @@ function scriptFromMarketplaceRuntime(def) {
   return command;
 }
 
+/**
+ * 「流程」面板里两类东西共用一份渲染：画布上框选另存的**片段**，和流程仓库里发布出来的**整条流程**。
+ * id 各取各的命名空间，key 必须带类型前缀，否则同名的片段和流程会互相覆盖。
+ */
+function flowResourceKind(entry) {
+  return String(entry?.resourceType || "") === "flow" ? "flow" : "snippet";
+}
+
+function flowResourceKey(entry) {
+  return `${flowResourceKind(entry)}:${entry?.id || ""}@${entry?.version || ""}`;
+}
+
+/** 入口节点（Run / 定时 Run）。一条流程整体插进别人的图里时，它们必须留在门外 */
+const WORKSPACE_ENTRY_DEFINITION_IDS = new Set(["workspace_run", "workspace_scheduled_run"]);
+
+/**
+ * 仓库里的流程带着自己的入口节点。原样铺进当前画布就是一张图两个入口——跑起来无从判断从哪开始，
+ * 而且 workspace_scheduled_run 会把别人的定时配置一并带进来。插入前一律摘掉，
+ * 接哪个入口由插进来的人自己连。
+ */
+function stripWorkspaceEntryNodes(graph) {
+  const instances = graph?.instances && typeof graph.instances === "object" ? graph.instances : {};
+  const dropped = Object.keys(instances)
+    .filter((id) => WORKSPACE_ENTRY_DEFINITION_IDS.has(String(instances[id]?.definitionId || "")));
+  if (!dropped.length) return { graph, dropped: 0 };
+  const droppedSet = new Set(dropped);
+  const keptInstances = {};
+  for (const [id, instance] of Object.entries(instances)) {
+    if (!droppedSet.has(id)) keptInstances[id] = instance;
+  }
+  const pickKept = (map) => Object.fromEntries(
+    Object.entries(map && typeof map === "object" ? map : {}).filter(([id]) => !droppedSet.has(id)),
+  );
+  return {
+    graph: {
+      ...graph,
+      instances: keptInstances,
+      edges: (Array.isArray(graph?.edges) ? graph.edges : [])
+        .filter((edge) => !droppedSet.has(edge?.source) && !droppedSet.has(edge?.target)),
+      ui: {
+        ...(graph?.ui || {}),
+        nodePositions: pickKept(graph?.ui?.nodePositions),
+        nodeSizes: pickKept(graph?.ui?.nodeSizes),
+      },
+    },
+    dropped: dropped.length,
+  };
+}
+
 function paletteCategory(node) {
   const id = String(runtimeDefinitionIdForPalette(node) || node?.id || "");
   if (id === "workspace_run" || id === "workspace_scheduled_run") return "CONTROL";
@@ -9698,14 +9747,29 @@ function WorkspacePageInner() {
     }
   }, [flowParams, workspaceReleaseEntryId]);
 
+  /**
+   * 「流程」面板一次搜两处：本地片段（flow-snippets）和流程仓库里发布的整条流程（kind=flow）。
+   * 早先只读前者，仓库里的流程在画布上一条都搜不到——只能从仓库页跳进来，反向没有入口。
+   * 仓库那边只取清单，图等到真要插入时再按 id@version 拉，避免把每条流程的完整图都塞进列表响应。
+   */
   const loadFlowSnippets = useCallback(async () => {
     setFlowSnippetsLoading(true);
     setFlowSnippetsError("");
     try {
-      const res = await fetch("/api/marketplace/flow-snippets");
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(json.error || "读取流程片段失败");
-      setFlowSnippets(Array.isArray(json.snippets) ? json.snippets : []);
+      const [snippetRes, flowRes] = await Promise.all([
+        fetch("/api/marketplace/flow-snippets"),
+        fetch("/api/marketplace/resources?kind=flow&scope=all&limit=100"),
+      ]);
+      const snippetJson = await snippetRes.json().catch(() => ({}));
+      if (!snippetRes.ok) throw new Error(snippetJson.error || "读取流程片段失败");
+      const flowJson = await flowRes.json().catch(() => ({}));
+      if (!flowRes.ok) throw new Error(flowJson.error || "读取流程仓库失败");
+      setFlowSnippets([
+        ...(Array.isArray(snippetJson.snippets) ? snippetJson.snippets : [])
+          .map((item) => ({ ...item, resourceType: "flow-snippet" })),
+        ...(Array.isArray(flowJson.items) ? flowJson.items : [])
+          .map((item) => ({ ...item, resourceType: "flow" })),
+      ]);
     } catch (e) {
       setFlowSnippetsError(String(e.message || e));
       setFlowSnippets([]);
@@ -14144,8 +14208,14 @@ function WorkspacePageInner() {
     ]);
     setSelectedNodeId("");
     setSelectedDisplayNodeIds([]);
-    setStatus(`已添加流程片段：${snippetEntry.displayName || snippetEntry.id}（已选中 ${insertedNodeIds.length} 个节点）`);
-    if (snippetEntry?.id && snippetEntry?.version) {
+    const droppedEntries = Number(snippetEntry?.entryNodesDropped || 0);
+    setStatus(
+      `已添加${flowResourceKind(snippetEntry) === "flow" ? "流程" : "流程片段"}：`
+      + `${snippetEntry.displayName || snippetEntry.id}（已选中 ${insertedNodeIds.length} 个节点`
+      + `${droppedEntries ? `，${droppedEntries} 个入口节点未插入` : ""}）`,
+    );
+    // 用量只记片段：仓库流程的 id 不在 flow-snippets 里，报过去只会拿到 404
+    if (flowResourceKind(snippetEntry) === "snippet" && snippetEntry?.id && snippetEntry?.version) {
       const insertionId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       void fetch("/api/marketplace/flow-snippets/use", {
         method: "POST",
@@ -14155,12 +14225,41 @@ function WorkspacePageInner() {
     }
   }, [makeUniqueSnippetNodeId, palette, reactFlow, setEdges, setNodes, workspaceWritable]);
 
+  /**
+   * 仓库流程的图不在列表里，插入前按 id@version 现拉。版本对不上时后端返回 409，
+   * 照它的话去刷新仓库，不要拿着旧图硬插。
+   */
+  const insertFlowResource = useCallback(async (entry, position) => {
+    if (!entry) return;
+    if (flowResourceKind(entry) !== "flow") {
+      insertFlowSnippet(entry, position);
+      return;
+    }
+    const title = entry.displayName || entry.id;
+    try {
+      setStatus(`正在读取流程：${title}`);
+      const params = new URLSearchParams({ id: entry.id, version: entry.version, projectFlow: "1" });
+      const res = await fetch(`/api/marketplace/flows/preview?${params}`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `读取流程失败（HTTP ${res.status}）`);
+      const { graph, dropped } = stripWorkspaceEntryNodes(body.graph || {});
+      if (!Object.keys(graph?.instances || {}).length) {
+        setStatus(`「${title}」除入口节点外没有可插入的节点`);
+        return;
+      }
+      insertFlowSnippet({ ...entry, snippet: graph, entryNodesDropped: dropped }, position);
+    } catch (e) {
+      setStatus(String(e.message || e));
+    }
+  }, [insertFlowSnippet]);
+
   useEffect(() => {
     const pending = pendingMarketplaceSnippetRef.current;
     if (!pending.id || pending.handled || flowSnippetsLoading || !loadedRef.current || !workspaceWritable) return;
     pending.handled = true;
     const snippet = flowSnippets.find((item) => (
-      String(item.id || "") === pending.id
+      flowResourceKind(item) === "snippet"
+      && String(item.id || "") === pending.id
       && (!pending.version || String(item.version || "") === pending.version)
     ));
     const url = new URL(window.location.href);
@@ -15345,10 +15444,10 @@ function WorkspacePageInner() {
 
   const addQuickFlowSnippet = useCallback((snippet) => {
     if (!snippet) return;
-    insertFlowSnippet(snippet, quickAddNodePosition());
+    void insertFlowResource(snippet, quickAddNodePosition());
     setQuickAddOpen(false);
     setQuickAddSearch("");
-  }, [insertFlowSnippet, quickAddNodePosition]);
+  }, [insertFlowResource, quickAddNodePosition]);
 
   const focusWorkspaceCanvasForShortcuts = useCallback((event) => {
     if (isDisplayMode || isWorkflowMode) return;
@@ -15616,11 +15715,14 @@ function WorkspacePageInner() {
 
     const snippetKey = event.dataTransfer.getData("application/agentflow-snippet");
     if (snippetKey) {
-      const snippet = flowSnippets.find((item) => `${item.id}@${item.version}` === snippetKey);
+      // 老格式 `id@version` 还认：拖拽数据可能来自刷新前渲染的卡片
+      const snippet = flowSnippets.find((item) => (
+        flowResourceKey(item) === snippetKey || `${item.id}@${item.version}` === snippetKey
+      ));
       if (!snippet) return;
       event.preventDefault();
       const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-      insertFlowSnippet(snippet, position);
+      void insertFlowResource(snippet, position);
       return;
     }
 
@@ -15631,7 +15733,7 @@ function WorkspacePageInner() {
     event.preventDefault();
     const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
     addNodeFromDefinition(def, { position });
-  }, [addDisplayFromFile, addNodeFromDefinition, flowSnippets, insertFlowSnippet, palette, reactFlow, workspaceWritable]);
+  }, [addDisplayFromFile, addNodeFromDefinition, flowSnippets, insertFlowResource, palette, reactFlow, workspaceWritable]);
 
   const handleWorkspaceDragOver = useCallback((event) => {
     if (!workspaceWritable) return;
@@ -16310,7 +16412,7 @@ function WorkspacePageInner() {
                   className="af-palette-search-input"
                   value={paletteSearch}
                   onChange={(e) => setPaletteSearch(e.target.value)}
-                  placeholder={paletteMode === "flows" ? "搜索流程片段..." : "搜索节点..."}
+                  placeholder={paletteMode === "flows" ? "搜索流程与片段..." : "搜索节点..."}
                   aria-label={paletteMode === "flows" ? "搜索流程片段" : "搜索节点"}
                 />
               </label>
@@ -16359,13 +16461,14 @@ function WorkspacePageInner() {
                   </section>
                   {flowSnippetsError ? <p className="af-err af-palette-list-err">{flowSnippetsError}</p> : null}
                   {flowSnippetsLoading ? (
-                    <p className="af-palette-empty">正在加载流程片段...</p>
+                    <p className="af-palette-empty">正在加载流程...</p>
                   ) : filteredFlowSnippets.length > 0 ? (
                     <section className="af-palette-section af-flow-palette-section--snippets">
-                      <h3 className="af-palette-cat">FLOW SNIPPETS</h3>
+                      <h3 className="af-palette-cat">FLOWS &amp; SNIPPETS</h3>
                       <div className="af-palette-cards">
                         {filteredFlowSnippets.map((snippet) => {
-                          const key = `${snippet.id}@${snippet.version}`;
+                          const key = flowResourceKey(snippet);
+                          const isFlow = flowResourceKind(snippet) === "flow";
                           const title = snippet.displayName || snippet.name || snippet.id;
                           const desc = snippet.description || `${snippet.nodeCount || 0} 个节点，${snippet.edgeCount || 0} 条连线`;
                           return (
@@ -16379,12 +16482,12 @@ function WorkspacePageInner() {
                                 event.dataTransfer.setData("application/agentflow-snippet", key);
                                 event.dataTransfer.setData("text/plain", key);
                               }}
-                              onClick={() => insertFlowSnippet(snippet)}
-                              title={desc}
+                              onClick={() => void insertFlowResource(snippet)}
+                              title={isFlow ? `${desc}（来自流程仓库，入口节点不会插入）` : desc}
                             >
                               <span className="af-palette-card-head">
                                 <span className="af-palette-card-icon" aria-hidden>
-                                  <span className="material-symbols-outlined">account_tree</span>
+                                  <span className="material-symbols-outlined">{isFlow ? "schema" : "account_tree"}</span>
                                 </span>
                                 <span className="af-palette-card-main">
                                   <span className="af-palette-card-label">{title}</span>
@@ -16393,6 +16496,9 @@ function WorkspacePageInner() {
                               </span>
                               {desc ? <span className="af-palette-card-desc">{desc}</span> : null}
                               <span className="af-flow-snippet-meta" aria-hidden>
+                                <span className={`af-flow-origin af-flow-origin--${isFlow ? "flow" : "snippet"}`}>
+                                  {isFlow ? "流程仓库" : "本地片段"}
+                                </span>
                                 <span>{snippet.nodeCount || 0} nodes</span>
                                 <span>{snippet.edgeCount || 0} edges</span>
                               </span>
@@ -16403,7 +16509,7 @@ function WorkspacePageInner() {
                     </section>
                   ) : (
                     <p className="af-palette-empty">
-                      {paletteSearch.trim() ? "没有匹配的流程片段" : "暂无流程片段。选择多个节点后发布。"}
+                      {paletteSearch.trim() ? "没有匹配的流程或片段" : "还没有可用的流程。选择多个节点后可发布成片段。"}
                     </p>
                   )}
                 </>
@@ -18202,7 +18308,7 @@ function WorkspacePageInner() {
                       }
                     }
                   }}
-                  placeholder={quickAddMode === "flows" ? "搜索流程片段..." : "搜索节点..."}
+                  placeholder={quickAddMode === "flows" ? "搜索流程与片段..." : "搜索节点..."}
                   aria-label={quickAddMode === "flows" ? "搜索流程片段" : "搜索节点"}
                 />
               </div>
@@ -18210,7 +18316,7 @@ function WorkspacePageInner() {
                 {quickAddMode === "flows" ? (
                   quickAddFlowItems.length === 0 ? (
                     <div className="af-workspace-quick-add__empty">
-                      {flowSnippetsLoading ? "正在加载流程片段..." : flowSnippetsError || "没有匹配的流程片段"}
+                      {flowSnippetsLoading ? "正在加载流程..." : flowSnippetsError || "没有匹配的流程或片段"}
                     </div>
                   ) : quickAddFlowItems.map((snippet, index) => {
                     const label = snippet.displayName || snippet.name || snippet.id;
@@ -18220,19 +18326,23 @@ function WorkspacePageInner() {
                     const edgeCount = Number.isFinite(Number(snippet.edgeCount)) ? Number(snippet.edgeCount) : (Array.isArray(edges) ? edges.length : 0);
                     return (
                       <button
-                        key={`${snippet.id}@${snippet.version}`}
+                        key={flowResourceKey(snippet)}
                         type="button"
                         className={"af-workspace-quick-add__item" + (index === quickAddActiveIndex ? " af-workspace-quick-add__item--active" : "")}
                         onMouseEnter={() => setQuickAddActiveIndex(index)}
                         onClick={() => addQuickFlowSnippet(snippet)}
                       >
-                        <span className="af-workspace-quick-add__icon material-symbols-outlined" aria-hidden>schema</span>
+                        <span className="af-workspace-quick-add__icon material-symbols-outlined" aria-hidden>
+                          {flowResourceKind(snippet) === "flow" ? "schema" : "account_tree"}
+                        </span>
                         <span className="af-workspace-quick-add__main">
                           <span className="af-workspace-quick-add__label">{label}</span>
                           <span className="af-workspace-quick-add__meta">{snippet.id}{snippet.version ? ` · v${snippet.version}` : ""}</span>
                           <span className="af-workspace-quick-add__desc">{snippet.description || `${nodeCount} 节点 / ${edgeCount} 连线`}</span>
                         </span>
-                        <span className="af-workspace-quick-add__cat">FLOW</span>
+                        <span className="af-workspace-quick-add__cat">
+                          {flowResourceKind(snippet) === "flow" ? "FLOW" : "SNIPPET"}
+                        </span>
                       </button>
                     );
                   })

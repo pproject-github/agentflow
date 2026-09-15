@@ -2,6 +2,12 @@
   box-sizing: border-box;
 }
 
+/* 任何一条 `display:` 的类规则都比浏览器默认的 `[hidden]{display:none}` 强，
+   于是 hidden={...} 在 flex/grid 元素上会静默失效。这里钉死它。 */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   --af-surface: #131313;
   --af-surface-low: #1c1b1b;
@@ -16813,6 +16819,17 @@ button.af-project-card {
   font-size: 0.52rem;
 }
 
+/* 来源标记：仓库流程用 primary，本地片段用 tertiary——两类东西同列一张单子，颜色是唯一的分辨依据 */
+.af-flow-snippet-meta span.af-flow-origin--flow {
+  background: color-mix(in srgb, var(--af-primary-container) 26%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+}
+
+.af-flow-snippet-meta span.af-flow-origin--snippet {
+  background: color-mix(in srgb, var(--af-tertiary, #00e475) 16%, transparent);
+  color: var(--af-tertiary, #00e475);
+}
+
 .af-flow-snippet-toast {
   position: fixed;
   z-index: 12000;
@@ -18626,7 +18643,7 @@ button.af-project-card {
   gap: 0.5rem;
   padding: 0.5rem 0.75rem;
   border-radius: 1rem;
-  background: var(--af-surface-container-highest);
+  background: var(--af-surface-container-highest, #353534);
   backdrop-filter: blur(8px);
 }
 
@@ -31171,14 +31188,6 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 
 .af-radar-page .af-settings-inner { max-width: 1180px; }
 
-.af-radar-empty code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: var(--af-surface-lowest);
-  padding: 2px 7px;
-  border-radius: 6px;
-  color: var(--af-primary);
-}
-
 /* 板切换：tab 就是标题，不另开列表页 */
 .af-radar-tabs {
   display: flex;
@@ -31239,7 +31248,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   gap: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.72rem;
-  color: var(--af-outline-variant);
+  color: var(--af-r-dim, #97929f);
   background: var(--af-surface-low);
   border-radius: 999px;
   padding: 5px 14px;
@@ -31248,7 +31257,14 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-health b { color: var(--af-tertiary); font-weight: 500; }
 .af-radar-health b.af-radar-bad { color: var(--af-error); }
 
-.af-radar-dot, .af-radar-dot-bad {
+/*
+ * 页顶那颗「还在跑」的灯。
+ *
+ * 它原来叫 `.af-radar-dot`，和行上的**状态点**重名——于是每一行的状态点都跟着呼吸，
+ * 十七行一起闪，连「已满足」都在闪。呼吸是「正在进行」的信号，
+ * 一个已经满足的结论没有任何理由动。一个类名一个意思，所以它改名了。
+ */
+.af-radar-live, .af-radar-live-bad {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -31256,11 +31272,11 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   flex: none;
 }
 
-.af-radar-dot-bad { background: var(--af-error); }
+.af-radar-live-bad { background: var(--af-error); }
 
 @media (prefers-reduced-motion: no-preference) {
   /* 运行态用呼吸，不用转圈 */
-  .af-radar-dot { animation: af-radar-breathe 2s ease-in-out infinite; }
+  .af-radar-live { animation: af-radar-breathe 2s ease-in-out infinite; }
   @keyframes af-radar-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 }
 
@@ -31480,7 +31496,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   display: block;
   margin-top: 4px;
   font-size: 0.65rem;
-  color: var(--af-outline-variant);
+  color: var(--af-r-dim, #97929f);
 }
 
 .af-radar-flow-stale { font-style: normal; color: var(--af-error); margin-left: 6px; }
@@ -31489,36 +31505,57 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 /* AI 编排：走右侧抽屉，过程摊开给人看 */
 .af-radar-plan-drawer { width: min(520px, 100%); }
 
-.af-radar-plan-log {
-  background: var(--af-surface-lowest);
-  border-radius: 12px;
-  padding: 11px 13px;
-  margin-top: 12px;
-  max-height: 240px;
-  overflow-y: auto;
-}
 
-.af-radar-plan-log p {
-  margin: 0 0 7px;
-  font-size: 0.74rem;
-  line-height: 1.55;
-  color: var(--af-on-surface-variant);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
 
-.af-radar-plan-log p:last-child { margin-bottom: 0; }
 
-.af-radar-plan-log-live {
+
+
+/* 规划流程的节点进度。它是一次真运行，节点走到哪该看得见 */
+.af-radar-plan-run { display: flex; flex-direction: column; gap: 10px; margin: 10px 0 14px; }
+
+.af-radar-plan-steps {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 10px 0 0;
-  font-size: 0.74rem;
-  color: var(--af-primary);
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.72rem;
+  color: var(--af-on-surface-variant);
 }
 
-.af-radar-plan-log-live .af-radar-dot { background: var(--af-primary); }
+.af-radar-plan-steps li { display: inline-flex; align-items: center; gap: 6px; }
+
+.af-radar-plan-steps i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--af-outline-variant);
+}
+
+.af-radar-plan-step--running { color: var(--af-primary); }
+.af-radar-plan-step--running i { background: var(--af-primary); animation: af-radar-pulse 2s ease-in-out infinite; }
+.af-radar-plan-step--done { color: var(--af-on-surface); }
+.af-radar-plan-step--done i { background: var(--af-tertiary, #00e475); }
+.af-radar-plan-step--skipped { opacity: 0.5; }
+
+@keyframes af-radar-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+/* 规划给板取的名字。是结果不是问句，所以低调——够人看见、能否决就行 */
+.af-radar-setup-name {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  color: var(--af-on-surface-variant);
+}
+
+.af-radar-setup-name b {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--af-on-surface);
+}
 
 .af-radar-plan-summary {
   margin: 0 0 12px;
@@ -31545,14 +31582,14 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 
 .af-radar-plan-act--create { background: rgba(124, 77, 255, 0.24); color: var(--af-primary); }
 .af-radar-plan-act--update { background: rgba(255, 202, 106, 0.16); color: var(--af-caution); }
-.af-radar-plan-act--keep { background: var(--af-surface-high); color: var(--af-outline-variant); }
+.af-radar-plan-act--keep { background: var(--af-surface-high); color: var(--af-r-dim, #97929f); }
 
 .af-radar-plan-why { margin: 0 0 5px; font-size: 0.76rem; line-height: 1.55; color: var(--af-on-surface-variant); }
 
 .af-radar-plan-meta {
   margin: 0 0 3px;
   font-size: 0.68rem;
-  color: var(--af-outline-variant);
+  color: var(--af-r-dim, #97929f);
   line-height: 1.5;
 }
 
@@ -31599,7 +31636,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   padding-left: 16px;
   font-size: 0.72rem;
   line-height: 1.6;
-  color: var(--af-outline-variant);
+  color: var(--af-r-dim, #97929f);
 }
 
 /* 改状态：人的判断优先，但脚本观测留在上面，两者矛盾时当面说 */
@@ -31639,7 +31676,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 
 .af-radar-setstate button.af-radar-setstate--reset {
   background: transparent;
-  color: var(--af-outline-variant);
+  color: var(--af-r-dim, #97929f);
   box-shadow: inset 0 0 0 1px var(--af-surface-bright);
 }
 
@@ -31647,7 +31684,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   margin: 9px 0 0;
   font-size: 0.68rem;
   line-height: 1.55;
-  color: var(--af-outline-variant);
+  color: var(--af-r-dim, #97929f);
 }
 
 .af-radar-setstate-hint b { color: var(--af-on-surface-variant); font-weight: 600; }
@@ -31679,11 +31716,92 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 }
 
 /* 跑道 */
-.af-radar-runway { background: var(--af-surface-high); border-radius: 1.5rem; overflow: hidden; }
+/*
+ * 跑道横向可滚。时间轴原来是百分比的——永远铺满容器，所以 12 个月和 3 个月画出来一样宽，
+ * 条的长度跨板不可比，也看不到 12 个月以外。现在给轨道一个最小宽度让它撑出去，
+ * 左边标题列和右边「剩余」列 sticky 住，滚的时候始终知道在看哪一行、还剩几天。
+ *
+ * 代价是 sticky 的格子必须有不透明背景，所以行不能再是 transparent —— 底色改成和
+ * 跑道地一样的 surface_high，视觉上没有任何差别，但 hover / 过期 / 分面那几档
+ * 各自的底色能被 sticky 格子 inherit 到。
+ */
+.af-radar-runway {
+  background: var(--af-surface-high);
+  border-radius: 1.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+/* 轨道的最小宽度就是「能滚多远」。一年视窗下每月约 90px，够画区间也够读刻度。
+   列宽写成变量，是因为浮层要按同一组数算出自己的左右边界——两处各写一遍迟早会分家 */
+.af-radar-runway {
+  --af-radar-track-min: 1080px;
+  --af-radar-label-w: 280px;
+  --af-radar-tail-w: 96px;
+  --af-radar-gap: 14px;
+  --af-radar-pad-l: 20px;
+  --af-radar-axis-h: 34px;
+}
+/* 内层撑到内容宽度。浮层挂在滚动容器上只有视口那么宽，右半边就没有刻度了 */
+.af-radar-sheet {
+  position: relative;
+  min-width: calc(
+    var(--af-radar-pad-l) + var(--af-radar-label-w) + var(--af-radar-gap)
+    + var(--af-radar-track-min) + var(--af-radar-gap) + var(--af-radar-tail-w)
+  );
+}
+/* 月刻度和「今天」一根到底。行各画一段的话，行间距会把线截成虚的，
+   而「当前时间」这条线的意义全在贯穿——谁在它左边，谁在右边 */
+.af-radar-overlay {
+  position: absolute;
+  top: var(--af-radar-axis-h); bottom: 0;
+  left: calc(var(--af-radar-pad-l) + var(--af-radar-label-w) + var(--af-radar-gap));
+  right: calc(var(--af-radar-tail-w) + var(--af-radar-gap));
+  pointer-events: none;
+  z-index: 1;
+}
 
-.af-radar-axis { background: var(--af-surface-highest); height: 34px; position: relative; }
+.af-radar-axis {
+  background: var(--af-surface-highest);
+  height: 34px;
+  /* 和行同一套列宽，所以滚动时刻度和条永远对齐 */
+  display: grid;
+  grid-template-columns: var(--af-radar-label-w) minmax(0, 1fr) var(--af-radar-tail-w);
+  column-gap: 14px;
+  align-items: end;
+  padding-left: 20px;
+}
 
 .af-radar-track { position: absolute; inset: 0 96px 0 250px; }
+.af-radar-axis > .af-radar-track {
+  grid-column: 2;
+  /* 必须钉行：DOM 顺序是 head(1) / tail(3) / track(2)，自动放置的游标走过 3 之后
+     再遇到 2 就换行了——轨道会掉进一条只有 6px 的隐式第二行 */
+  grid-row: 1;
+  position: relative; inset: auto;
+  /* 必须 stretch，不能 height:100%：外面是 auto 行高的 grid，百分比高度绕不开这个循环，
+     会退化成内容高度——而这里的内容全是 absolute，于是轨道塌成 6px，
+     「今天」那个标签就掉到轴外面被下面的分组抬头切掉了 */
+  align-self: stretch; min-width: var(--af-radar-track-min);
+}
+/* 行里的跑道是 grid 的第二格：随行长高，刻度线跟着变成通栏的竖线 */
+.af-radar-row > .af-radar-track {
+  position: relative; inset: auto; align-self: stretch;
+  min-height: 52px; min-width: var(--af-radar-track-min);
+}
+/* 两侧的格子吸住。背景 inherit 自行，所以 hover 和过期的底色跟着走 */
+.af-radar-row > .af-radar-label {
+  position: sticky; left: 0; z-index: 2;
+  /* 必须撑满行高：只有内容那么高的话，条会从它下面滑过去露出来 */
+  align-self: stretch;
+  background: inherit;
+  padding-left: 20px; margin-left: -20px;
+}
+.af-radar-row > .af-radar-value {
+  position: sticky; right: 0; z-index: 2;
+  align-self: stretch;
+  background: inherit;
+  text-align: right; padding-right: 18px;
+}
 
 .af-radar-tick { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--af-surface-bright); }
 
@@ -31704,29 +31822,292 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   white-space: nowrap;
 }
 
-.af-radar-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--af-primary-container); }
-
-.af-radar-now b {
-  position: absolute; top: 4px; left: 6px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.6rem; color: var(--af-primary);
-  white-space: nowrap;
+/* 任务自己的那段时间：start → end。这是跑道上唯一的「区间」，
+   别的都是时刻——所以它有厚度、有圆角，一眼和竖线分得开 */
+.af-radar-span {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  height: 10px; min-width: 4px; border-radius: 999px;
+  background: var(--af-outline-variant, #6d6a68);
 }
+.af-radar-span--ok { background: color-mix(in srgb, var(--af-tertiary, #00e475) 70%, transparent); }
+.af-radar-span--warn { background: color-mix(in srgb, #f2c14e 78%, transparent); }
+.af-radar-span--risk { background: color-mix(in srgb, var(--af-error, #ff8d7e) 72%, transparent); }
+.af-radar-span--idle { background: color-mix(in srgb, var(--af-on-surface-variant) 38%, transparent); }
+/* 跨出窗口的那头切平并加一道齿：不标的话跨年的任务看着像正好今年做完 */
+.af-radar-span--cut-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.af-radar-span--cut-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.af-radar-span--cut-left::before,
+.af-radar-span--cut-right::after {
+  content: ""; position: absolute; top: 0; bottom: 0; width: 4px;
+  background: repeating-linear-gradient(135deg, transparent 0 2px, var(--af-surface-high) 2px 4px);
+}
+.af-radar-span--cut-left::before { left: 0; }
+.af-radar-span--cut-right::after { right: 0; }
+
+/* 三种时刻三种样式。同一种点画三件事的话，人只看得到「三个点」 */
+.af-radar-mark { position: absolute; top: 50%; transform: translate(-50%, -50%); }
+/* 截止：竖标，最重。它是唯一一个「过了就出事」的时刻 */
+.af-radar-mark--due {
+  width: 3px; height: 22px; border-radius: 2px; transform: translate(-50%, -50%);
+  background: var(--af-on-surface-variant);
+}
+.af-radar-mark--due.af-radar-mark--ok { background: var(--af-tertiary, #00e475); }
+.af-radar-mark--due.af-radar-mark--warn { background: #f2c14e; }
+.af-radar-mark--due.af-radar-mark--risk { background: var(--af-error, #ff8d7e); }
+/* 政策要求的那天：虚的，因为父行的实际截止是子行汇总出来的 */
+.af-radar-mark--policy {
+  width: 0; height: 22px; border-left: 2px dashed var(--af-outline-variant, #6d6a68); opacity: 0.75;
+}
+/* 入库：空心，表示「那天它进来了」，不是一个要做的事 */
+.af-radar-mark--born {
+  width: 9px; height: 9px; border-radius: 50%;
+  border: 1.5px solid var(--af-outline-variant, #6d6a68); background: transparent;
+}
+/* 最近写入：实心小点，流程的心跳 */
+.af-radar-mark--seen {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--af-secondary, #9ecaff); opacity: 0.85;
+}
+
+.af-radar-now { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--af-primary-container); }
+/* 和刻度、版本车一样脱流定位。不脱流的话它是 2px 盒子里的一行行内文字，
+   跟着盒子底边跑到轴外，只露出半个字 */
+.af-radar-now b {
+  position: absolute; bottom: 5px; left: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem; font-weight: 600; color: var(--af-primary-fixed, #e8deff);
+}
+/* 定位元素只有 2px 宽，不锁 nowrap 的话「今天」会被挤成竖排 */
+.af-radar-now b, .af-radar-train b { white-space: nowrap; }
+.af-radar-ghost--on { color: var(--af-on-surface); background: color-mix(in srgb, var(--af-primary-container) 30%, transparent); }
+/* 父行画政策截止日，不画车：它的日期是子行汇总出来的，画谁的车都不对 */
+.af-radar-policy { position: absolute; top: 0; bottom: 0; border-left: 2px dashed var(--af-outline-variant, #6d6a68); opacity: 0.7; }
+
+/* 折叠三角。整行点击是打开详情，所以它得自己接事件、自己有焦点态 */
+.af-radar-caret {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 18px; flex: none; margin-left: -16px;
+  border-radius: 6px; color: var(--af-on-surface-variant); cursor: pointer;
+  transition: transform 120ms ease;
+}
+.af-radar-caret .material-symbols-outlined { font-size: 17px; }
+.af-radar-caret:hover { background: var(--af-surface-bright); color: var(--af-on-surface); }
+.af-radar-caret:focus-visible { outline: 2px solid var(--af-primary-container); outline-offset: 1px; }
+.af-radar-caret--on { transform: rotate(90deg); }
+
+/* 分面行的结论：满足没有、不满足要做什么。这一行存在的全部理由就是它 */
+/* 排成一段，整段夹两行。三个块各占一行的话，跑道上的一条会长成一张卡片 */
+.af-radar-verdict {
+  flex: 1 0 100%; margin-top: 4px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  font-size: 0.7rem; line-height: 1.5;
+}
+.af-radar-verdict-state {
+  display: inline-block; margin-right: 6px;
+  font-family: var(--af-mono); font-size: 0.66rem; font-weight: 400;
+  padding: 1px 8px; border-radius: 999px;
+}
+.af-radar-verdict-state--ok { color: var(--af-tertiary, #00e475); background: color-mix(in srgb, var(--af-tertiary, #00e475) 14%, transparent); }
+.af-radar-verdict-state--warn { color: #f2c14e; background: rgba(242, 193, 78, 0.15); }
+.af-radar-verdict-state--risk { color: var(--af-error, #ff8d7e); background: color-mix(in srgb, var(--af-error, #ff8d7e) 15%, transparent); }
+.af-radar-verdict-state--idle { color: var(--af-on-surface-variant); background: rgba(202, 195, 216, 0.1); }
+/* 「查出来了但等你点头」和「没查出来」长得完全不一样，不能都显示成待确认 */
+.af-radar-verdict-held {
+  font-style: normal; font-size: 0.66rem; margin-right: 6px;
+  color: var(--af-primary-fixed, #e8deff);
+}
+.af-radar-verdict-why { color: var(--af-on-surface-variant); }
+
+/* 来源分片：用蓝（secondary，这套色里代表「流」）和标签的紫分开——
+   标签是分类，来源是「谁写的这一行」，同色系会被当成又一个标签 */
+.af-radar-badges i.af-radar-badge--src, .af-radar-slabel > i.af-radar-badge--src {
+  font-family: var(--af-mono);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  background: color-mix(in srgb, var(--af-secondary, #9ecaff) 18%, transparent);
+  color: var(--af-secondary, #9ecaff);
+}
+
+/* 标签：多值维度，能点着筛选。用 primary_fixed 的淡紫，和状态色分开——
+   标签是分类，不是状态，撞色会让人以为绿标签是「已满足」 */
+.af-radar-badges i.af-radar-badge--tag, .af-radar-slabel > i.af-radar-badge--tag {
+  background: color-mix(in srgb, var(--af-primary-container) 22%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+  cursor: pointer;
+}
+.af-radar-badges i.af-radar-badge--tag:hover, .af-radar-slabel > i.af-radar-badge--tag:hover { background: color-mix(in srgb, var(--af-primary-container) 40%, transparent); }
+.af-radar-badges i.af-radar-badge--tag-on, .af-radar-slabel > i.af-radar-badge--tag-on {
+  background: var(--af-primary-container);
+  color: #fff;
+}
+.af-radar-tagfilter {
+  border: 0; cursor: pointer; font: inherit; font-size: 0.76rem;
+  padding: 4px 12px; border-radius: 999px;
+  color: var(--af-primary-fixed, #e8deff);
+  background: color-mix(in srgb, var(--af-primary-container) 34%, transparent);
+}
+.af-radar-tagfilter b { font-weight: 600; }
+.af-radar-tagfilter:hover { background: color-mix(in srgb, var(--af-primary-container) 52%, transparent); }
+
+/* 抽屉里的标签编辑 */
+.af-radar-owner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.af-radar-ghost--tiny { font-size: 0.68rem; padding: 2px 10px; }
+.af-radar-tagbox { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.af-radar-tagbox--known { opacity: 0.75; }
+.af-radar-tag {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--af-mono); font-size: 0.7rem;
+  padding: 3px 10px; border-radius: 999px; border: 0;
+  background: color-mix(in srgb, var(--af-primary-container) 22%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+}
+.af-radar-tag button {
+  border: 0; background: none; cursor: pointer; padding: 0;
+  color: inherit; opacity: 0.6; font-size: 0.85rem; line-height: 1;
+}
+.af-radar-tag button:hover { opacity: 1; }
+.af-radar-tag--add { cursor: pointer; background: transparent; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--af-primary-container) 34%, transparent); }
+.af-radar-tag--add:hover { background: color-mix(in srgb, var(--af-primary-container) 24%, transparent); }
+.af-radar-tagadd input {
+  width: 100%; padding: 7px 12px; border: 0; border-radius: 10px;
+  background: var(--af-surface-container-lowest, #0e0e0e);
+  color: var(--af-on-surface); font: inherit; font-size: 0.78rem;
+}
+.af-radar-tagadd input:focus { outline: none; box-shadow: 0 0 0 2px color-mix(in srgb, var(--af-primary-container) 55%, transparent); }
+
+/* 状态点：过期和无期限的行画不出条，状态只能靠它 */
+.af-radar-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none;
+  margin: 5px 6px 0 0;
+}
+/*
+ * 状态页的角标不在 .af-radar-badges 容器里，上面那组选择器全部落空——
+ * 标签本来该是能点的胶囊，实际渲染成了标题后面一串裸斜体，读起来像正文被截断了。
+ * 这里把同一套底子补给状态页。
+ */
+.af-radar-slabel > i[class*="af-radar-badge--"] {
+  font-style: normal;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.6rem;
+  background: var(--af-surface-lowest);
+  color: var(--af-on-surface-variant);
+  padding: 1px 6px;
+  border-radius: 5px;
+}
+/* 一行能挂三四个标签。全铺紫底就是四块紫在标题后面抢戏——
+   平时中性，选中那个才亮，让「筛选中」这件事自己跳出来 */
+.af-radar-slabel > i.af-radar-badge--tag {
+  background: var(--af-surface-lowest);
+  color: var(--af-r-dim, #97929f);
+}
+.af-radar-slabel > i.af-radar-badge--tag:hover {
+  background: color-mix(in srgb, var(--af-primary-container) 26%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+}
+.af-radar-slabel > i.af-radar-badge--tag-on {
+  background: var(--af-primary-container);
+  color: #fff;
+}
+
+.af-radar-dot--ok { background: var(--af-r-ok, #5aa97f); }
+.af-radar-dot--warn { background: var(--af-r-warn, #e0ad4c); }
+.af-radar-dot--risk { background: var(--af-r-risk, #ef7566); }
+.af-radar-dot--idle { background: var(--af-r-idle, rgba(202, 195, 216, 0.3)); }
+
+/* 分面行：缩进 + 沉一层色，不画分隔线 */
+/* 缩进要一眼看出是子项，靠层次色和缩进而不是画线。
+   必须带上 .af-radar-runway 提特异性：这条规则写在 .af-radar-row 之前，
+   而后者用的是 padding 简写，同特异性下后来者赢，单靠 padding-left 会被静默盖掉 */
+/*
+ * 缩进做在**吸住的那一格里面**，不做在行上。
+ *
+ * 做在行上要两笔账：padding-left 加多少、第一列就得减多少，否则轨道起点和父行差一截，
+ * 时间轴对不上。更要命的是横向一滚，label 吸到左边缘、行的 padding 留在原地，
+ * 缩进当场消失——父行子行齐刷刷贴边，层级全没了。
+ * 挪进 label 之后网格对所有行完全一致，缩进跟着吸住的格子一起走。
+ */
+.af-radar-runway .af-radar-row--facet > .af-radar-label { padding-left: 76px; }
+/*
+ * 一道竖轨把子行串起来。
+ *
+ * 光靠缩进不够：子行本来就比父行高（多一段结论、多一排标签），一屏里缩进 46px
+ * 完全淹没在换行里，看起来就是「又一条平级的东西」——「怎么收起来还漏了一条」
+ * 说的就是这个。有了这道轨，属于谁一眼可见。
+ */
+/* 竖轨落在父行圆点那一列，和 label 一起吸住。
+   定位基准用 label 自己的 sticky——**不能**在这里补一句 position: relative，
+   那会把 `.af-radar-row > .af-radar-label` 的 sticky 顶掉（0,3,0 > 0,2,0），
+   横向一滚子行的整列就跟着内容跑出去了。sticky 本来就是定位元素，够用 */
+.af-radar-runway .af-radar-row--facet > .af-radar-label::before {
+  content: "";
+  position: absolute;
+  /* 负 left 是要落回父行圆点那一列——读起来就是「挂在上面那条下面」。
+     上下各撑出行内边距，相邻两个子行的轨才连得成一条，否则是一截一截的 */
+  left: 56px; top: -10px; bottom: -12px;
+  width: 2px; border-radius: 2px;
+  background: color-mix(in srgb, var(--af-primary-container) 60%, transparent);
+}
+/* 结论 chip 挪进详情之后，圆点是子行**唯一**的状态信号了，得留着。
+   （它当初被藏起来，理由正是「chip 已经把状态说了」——那个理由现在不成立） */
+.af-radar-badges i.af-radar-badge--held, .af-radar-slabel > i.af-radar-badge--held {
+  background: color-mix(in srgb, var(--af-primary-container) 34%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+}
+/* 标题也降一档：父行是「要求」，子行是「我们做到哪了」，后者不该和前者一样重 */
+.af-radar-row--facet .af-radar-name {
+  -webkit-line-clamp: 2;
+  font-size: 0.78rem; font-weight: 400;
+  color: var(--af-on-surface-variant);
+}
+
+/* 父行有几个分面，不展开也说出来 */
+.af-radar-badges i.af-radar-kidcount, .af-radar-kidcount {
+  flex: none; align-self: flex-start;
+  font-style: normal; font-family: var(--af-mono); font-size: 0.6rem;
+  padding: 1px 7px; border-radius: 999px; margin-left: 2px;
+  background: color-mix(in srgb, var(--af-primary-container) 22%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+}
+/* 表头上的「收起全部」。只在真的有展开时出现，平时不占位置 */
+.af-radar-collapseall {
+  border: 0; cursor: pointer; font: inherit; font-size: 0.62rem; letter-spacing: 0;
+  padding: 2px 8px; border-radius: 999px; margin-right: 4px;
+  background: color-mix(in srgb, var(--af-primary-container) 26%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+}
+.af-radar-collapseall:hover { background: var(--af-primary-container); color: #fff; }
+/* 子项要往**下沉**，不能比父行亮。
+   原来用 surface_container_high 叠在跑道底色上反而更亮，一块比父行亮的色带
+   读起来是「另一段内容」，不是「父行的子项」——这是那个「怎么有两行」的来源 */
+.af-radar-row--facet { background: color-mix(in srgb, var(--af-surface-container-lowest, #0e0e0e) 55%, var(--af-surface-high)); }
+
+.af-radar-badges i.af-radar-badge--absent, .af-radar-slabel > i.af-radar-badge--absent {
+  background: rgba(158, 202, 255, 0.14);
+  color: var(--af-secondary);
+}
+
+.af-radar-axis-sub { font-size: 0.62rem; color: var(--af-on-surface-variant); font-style: normal; font-weight: 400; opacity: 0.8; }
 
 .af-radar-row {
   position: relative;
-  display: block;
   width: 100%;
-  /*
-   * 标签和跑道都是绝对定位的——它们撑不起行高。真实的政策标题经常折到两行
-   * （「Android 16 边到边强制生效（targetSdk 36 不可关闭）」），加上徽章要 74px；
-   * 留在 56px 的话内容会溢出行外，最后一行直接被容器裁掉。
-   * 标题最多两行，行高固定，跑道条也就始终对齐。
-   */
   min-height: 74px;
-  background: transparent;
+  /*
+   * 原来标签、跑道、剩余三块全是绝对定位——好处是行高恒定、条永远对齐，
+   * 代价是**内容再多也撑不高这一行**，多出来的部分直接盖到下一条上。
+   * 分面行要写结论（满足没有、差什么），一行放不下，于是这个代价变成了 bug。
+   *
+   * 改成 grid：三个格子静态排布，列宽照抄原来的绝对定位数值（20 + 216 + 14 = 250 是
+   * 跑道左边缘，右边留 96），所以顶部那根仍然绝对定位的时间轴照样对得齐。
+   */
+  display: grid;
+  grid-template-columns: var(--af-radar-label-w) minmax(0, 1fr) var(--af-radar-tail-w);
+  column-gap: 14px;
+  align-items: start;
+  /* 不能再 transparent：sticky 的格子要 inherit 一个实色，否则滚动时下面的条会透上来 */
+  background: var(--af-surface-high);
   border: 0;
-  padding: 0;
+  padding: 10px 0 12px 20px;
   text-align: left;
   cursor: pointer;
   color: var(--af-on-surface);
@@ -31740,26 +32121,35 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 /* 过期未完成是最该被看见的一种，所以它比别的行更重，而不是更轻 */
 .af-radar-row--overdue {
   opacity: 1;
-  background: rgba(255, 180, 171, 0.07);
+  background: color-mix(in srgb, rgba(255, 180, 171, 1) 7%, var(--af-surface-high));
   box-shadow: inset 3px 0 0 var(--af-error), inset 0 1px 0 rgba(255, 255, 255, 0.045);
 }
 
-.af-radar-row--overdue:hover { background: rgba(255, 180, 171, 0.12); }
+.af-radar-row--overdue:hover { background: color-mix(in srgb, rgba(255, 180, 171, 1) 12%, var(--af-surface-high)); }
 
-.af-radar-badges i.af-radar-badge--settled { background: var(--af-surface-high); color: var(--af-outline-variant); }
-.af-radar-badges i.af-radar-badge--stale { background: rgba(255, 202, 106, 0.16); color: var(--af-caution); }
-.af-radar-badges i.af-radar-badge--override { background: rgba(124, 77, 255, 0.2); color: var(--af-primary); }
+.af-radar-badges i.af-radar-badge--settled, .af-radar-slabel > i.af-radar-badge--settled { background: var(--af-surface-high); color: var(--af-r-dim, #97929f); }
+.af-radar-badges i.af-radar-badge--stale, .af-radar-slabel > i.af-radar-badge--stale { background: rgba(255, 202, 106, 0.16); color: var(--af-caution); }
+.af-radar-badges i.af-radar-badge--override, .af-radar-slabel > i.af-radar-badge--override { background: rgba(124, 77, 255, 0.2); color: var(--af-primary); }
 
 .af-radar-value--overdue { color: var(--af-error); font-weight: 600; }
 
-.af-radar-label { position: absolute; left: 20px; top: 10px; width: 216px; }
+/* 三角和标题必须在同一行：label 是绝对定位的，撑不起行高，
+   多占一行就会溢出 74px 的行、盖到下一条上去。
+   标题必须 flex-basis: 0——用 auto 的话它的假想尺寸是**整行不折行**的标题宽度，
+   而换行判定发生在收缩之前：浏览器先认定这一行放不下，把标题甩到第二行，
+   flex-shrink 根本没机会起作用。这正是三角独占一行的原因。 */
+.af-radar-label {
+  display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 2px;
+}
+.af-radar-label > .af-radar-name { flex: 1 1 0; min-width: 0; }
+.af-radar-label > .af-radar-badges { flex: 1 0 100%; }
 .af-radar-name {
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   font-size: 0.82rem;
-  font-weight: 500;
+  font-weight: 600;
   line-height: 1.32;
 }
 .af-radar-badges { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }
@@ -31774,7 +32164,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   border-radius: 5px;
 }
 
-.af-radar-badges i.af-radar-badge--none { background: rgba(255, 180, 171, 0.14); color: var(--af-error); }
+.af-radar-badges i.af-radar-badge--none, .af-radar-slabel > i.af-radar-badge--none { background: rgba(255, 180, 171, 0.14); color: var(--af-error); }
 
 .af-radar-bar { position: absolute; top: 21px; left: 0; height: 13px; border-radius: 4px; }
 .af-radar-bar--ok { background: var(--af-tertiary); }
@@ -31803,6 +32193,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   right: 18px;
   white-space: nowrap;
   top: 19px;
+  padding-top: 9px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.72rem;
   font-weight: 500;
@@ -31827,7 +32218,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-col-head--risk { color: var(--af-error); }
 .af-radar-col-head--warn { color: var(--af-caution); }
 .af-radar-col-head--ok { color: var(--af-tertiary); }
-.af-radar-col-empty { color: var(--af-outline-variant); font-size: 0.75rem; margin: 0; }
+.af-radar-col-empty { color: var(--af-r-dim, #97929f); font-size: 0.75rem; margin: 0; }
 
 .af-radar-card {
   display: block; width: 100%; text-align: left; cursor: pointer;
@@ -31840,7 +32231,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-card-meta {
   display: block; margin-top: 5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.65rem; color: var(--af-outline-variant);
+  font-size: 0.65rem; color: var(--af-r-dim, #97929f);
 }
 
 /* 表格：没有终点日期的数据退回这里，比硬凑一根条诚实 */
@@ -31851,7 +32242,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   text-align: left; padding: 11px 16px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.65rem; letter-spacing: 0.05em;
-  color: var(--af-outline-variant); background: var(--af-surface-highest);
+  color: var(--af-r-dim, #97929f); background: var(--af-surface-highest);
 }
 
 .af-radar-table td { padding: 10px 16px; color: var(--af-on-surface-variant); }
@@ -31870,7 +32261,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 
 .af-radar-events time {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.65rem; color: var(--af-outline-variant);
+  font-size: 0.65rem; color: var(--af-r-dim, #97929f);
 }
 
 .af-radar-events p { margin: 0; font-size: 0.85rem; line-height: 1.55; color: var(--af-on-surface); }
@@ -31878,7 +32269,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-event-item {
   display: inline-block; margin-top: 5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.62rem; color: var(--af-outline-variant);
+  font-size: 0.62rem; color: var(--af-r-dim, #97929f);
   background: var(--af-surface-high); padding: 1px 7px; border-radius: 5px;
 }
 
@@ -31892,8 +32283,8 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-kind--better { background: rgba(0, 228, 117, 0.14); color: var(--af-tertiary); }
 .af-radar-kind--new { background: rgba(124, 77, 255, 0.18); color: var(--af-primary); }
 
-.af-radar-drawer-lead { color: var(--af-outline-variant); font-size: 0.78rem; margin: 0 0 6px; }
-.af-radar-note { color: var(--af-outline-variant); }
+.af-radar-drawer-lead { color: var(--af-r-dim, #97929f); font-size: 0.78rem; margin: 0 0 6px; }
+.af-radar-note { color: var(--af-r-dim, #97929f); }
 .af-radar-bad { color: var(--af-error); }
 
 /* 抽屉：主图放不下的维度全沉到这里 */
@@ -31906,6 +32297,455 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   box-shadow: -20px 0 50px -20px rgba(0, 0, 0, 0.85);
 }
 
+/* 条目详情：不是抽屉是弹框。
+   一条分面要审的东西太多（结论、依据的文件行号、十几条原始字段），
+   460px 宽里每行折三折，读不下来。居中、两栏、能撑满整屏 */
+.af-radar-modal {
+  position: fixed;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  width: min(940px, 94vw);
+  max-height: 86vh;
+  display: flex; flex-direction: column;
+  background: var(--af-surface-low);
+  border-radius: 1.5rem;
+  z-index: 41;
+  overflow: hidden;
+  box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.9);
+}
+/* 全屏留 12px 的边：完全贴死的话遮罩看不见，人就不知道点外面能关 */
+.af-radar-modal--full {
+  inset: 12px; top: 12px; left: 12px;
+  transform: none; width: auto; max-height: none;
+}
+.af-radar-modal:focus { outline: none; }
+
+.af-radar-modal-head {
+  flex: none;
+  display: flex; align-items: flex-start; gap: 16px;
+  padding: 20px 20px 16px 26px;
+  background: var(--af-surface-high);
+}
+.af-radar-modal-title { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.af-radar-modal-title h3 { font-family: var(--af-headline); font-size: 1.12rem; margin: 0; }
+.af-radar-modal-acts { flex: none; display: flex; gap: 6px; }
+.af-radar-modal-acts button {
+  width: 32px; height: 32px; border: 0; border-radius: 10px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--af-surface-highest, #353534); color: var(--af-on-surface-variant);
+}
+.af-radar-modal-acts button:hover { color: var(--af-on-surface); }
+.af-radar-modal-acts .material-symbols-outlined { font-size: 18px; }
+
+/* 一个滚动容器、两栏并排：两栏一起滚，左边改状态、右边看依据，不用来回翻 */
+.af-radar-modal-body {
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 0 34px; align-items: start;
+  padding: 0 26px 32px;
+}
+@media (max-width: 760px) {
+  .af-radar-modal-body { grid-template-columns: minmax(0, 1fr); }
+}
+/* 两栏并排时，每栏第一个小标题不画分隔线：栏顶本来就是边界，再画一条像内容被截断了。
+   窄屏塌成一栏之后两栏首尾相接，那条线反而是需要的，所以只在宽屏去掉 */
+@media (min-width: 761px) {
+  .af-radar-modal-col > :first-child { margin-top: 18px; padding-top: 0; box-shadow: none; }
+}
+
+.af-radar-dl--verdict dd { font-size: 0.8rem; line-height: 1.6; white-space: pre-wrap; }
+
+/* 多值字段：`tasks`、`unknowns`、`children` 这些原来是一行 JSON，读不动 */
+.af-radar-vlist { margin: 0; padding-left: 16px; display: flex; flex-direction: column; gap: 4px; }
+.af-radar-vlist li::marker { color: var(--af-r-dim, #97929f); }
+
+/* 网址就该能点。留下下划线是因为在一堆等宽灰字里，只靠颜色区分不出来 */
+a.af-radar-link { color: var(--af-secondary, #9ecaff); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+a.af-radar-link:hover { color: var(--af-primary-fixed, #e8deff); }
+
+/* 改标题：平时是个只在 hover 时才现身的小铅笔，别抢标题的位置 */
+.af-radar-editbtn {
+  border: 0; background: transparent; cursor: pointer; padding: 2px; border-radius: 8px;
+  color: var(--af-r-dim, #97929f); opacity: 0; transition: opacity 120ms ease;
+}
+.af-radar-modal-head:hover .af-radar-editbtn, .af-radar-editbtn:focus-visible { opacity: 1; }
+.af-radar-editbtn:hover { color: var(--af-on-surface); background: var(--af-surface-highest, #353534); }
+.af-radar-editbtn .material-symbols-outlined { font-size: 16px; display: block; }
+.af-radar-titleedit {
+  flex: 1 1 260px; min-width: 0;
+  font-family: var(--af-headline); font-size: 1.12rem; color: var(--af-on-surface);
+  background: var(--af-surface-container-lowest, #0e0e0e); border: 0; border-radius: 10px;
+  padding: 6px 10px;
+}
+.af-radar-titleedit:focus { outline: 2px solid var(--af-primary-container); outline-offset: 1px; }
+
+/* 可改的日期。原生 date 控件在深色下默认是白底黑字，得整块压下去 */
+.af-radar-dateedit { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.af-radar-dateedit input {
+  font: inherit; font-size: 0.8rem; color: var(--af-on-surface);
+  background: var(--af-surface-container-lowest, #0e0e0e); border: 0; border-radius: 8px;
+  padding: 3px 8px; color-scheme: dark;
+}
+.af-radar-dateedit input:focus { outline: 2px solid var(--af-primary-container); outline-offset: 1px; }
+.af-radar-dateedit input:disabled { opacity: 0.5; }
+.af-radar-dateedit .af-radar-note { font-size: 0.68rem; }
+
+/* 条目自己的页面：同一份详情，没有弹框那层壳，也没有遮罩 */
+.af-radar-itempage {
+  max-width: 1040px;
+  margin: 0 auto;
+  background: var(--af-surface-low);
+  border-radius: 1.5rem;
+  overflow: hidden;
+}
+.af-radar-itempage .af-radar-modal-head { position: sticky; top: 0; z-index: 2; }
+.af-radar-itempage .af-radar-modal-body { max-height: none; overflow: visible; }
+/* 独立页的页面底：没有侧栏、没有页头，这一层就是整个视口 */
+.af-radar-solo {
+  min-height: 100vh;
+  padding: 28px 20px 64px;
+  background: var(--af-surface);
+  overflow-y: auto;
+}
+.af-radar-solo-miss {
+  max-width: 1040px; margin: 0 auto;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+}
+
+/* ── 状态页 ─────────────────────────────────────────
+   跑道把时间当主轴，这块板大多数条目没有截止日，时间轴上是一片空。
+   状态页换成：变了什么（简报 + 状态条）、还差多少（覆盖度 + 任务条）、
+   现在满足没有（点 + 一个词）。三样各一种控件，谁都不兼职。 */
+/*
+ * 雷达的三个信号色，单独一套。
+ *
+ * 之前直接借画布的 --af-tertiary (#00e475)：那是「布尔/逻辑」的引脚色，纯色高彩度。
+ * 借来当「已满足」的结果是——一屏里最不需要管的那行，是整页最亮的像素。
+ * 轻重排反了。现在按「该看的顺序」定彩度：危险 > 临近 > 满足。
+ *
+ * 只挂在 .af-radar-page 上，不动全局 token，免得改一次雷达把画布也改了。
+ */
+.af-radar-page {
+  --af-r-risk: #ef7566;
+  --af-r-warn: #e0ad4c;
+  --af-r-ok: #5aa97f;
+  --af-r-idle: rgba(202, 195, 216, 0.3);
+  /*
+   * 次要文字。原来直接用了 --af-outline-variant (#494455)——那是**描边**色，
+   * 给 1px 分隔线用的。拿它写正文，在 #2a2a2a 上对比度 1.53:1，
+   * 等于把「为什么是这个状态」这句话写成隐形墨水：每一条的证据行、
+   * 简报的落款、标签胶囊，全都要凑到屏幕前才看得清。这里给一个真的文字灰，
+   * 4.7:1——比标题弱一档，但读得出来。
+   */
+  --af-r-dim: #97929f;
+}
+
+/*
+ * 状态页是**一摞块**，不是一张长卡片。
+ *
+ * 之前整页共用一张 surface-high 的大卡片，政策与政策之间只隔着一道
+ * `inset 0 1px 0 rgba(255,255,255,.05)` 的高光——在 #2a2a2a 上那道线几乎不存在，
+ * 十七行连成一片，读不出「这几行属于同一条政策」。
+ *
+ * 这套设计不画分隔线（Orchestral Logic：tonal depth over lines），
+ * 所以分区交给**面**和**间距**：面板退成底，一条政策连同它下面的端和任务是一张卡。
+ */
+.af-radar-status { display: flex; flex-direction: column; gap: 10px; }
+
+/* 简报。大多数天这块板什么都没动——把「没动」说出来，比让人自己扫一遍便宜 */
+.af-radar-digest {
+  padding: 18px 22px 16px;
+  border-radius: 1.5rem;
+  /* 原来这里压了一层 secondary 蓝。简报是中性信息，蓝在这套色里代表「流」——
+     挂在这儿只是多一个没有含义的色相。改用亮一档的中性面，靠色阶分层 */
+  background: linear-gradient(180deg, var(--af-surface-highest), var(--af-surface-high));
+}
+.af-radar-digest-hd { display: flex; align-items: baseline; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+/* 没有变化时它只剩一行，别再占一整块 */
+.af-radar-digest--quiet { padding: 14px 22px 12px; background: var(--af-surface-high); border-radius: 1.5rem; }
+.af-radar-digest--quiet .af-radar-digest-hd { margin-bottom: 0; }
+.af-radar-digest--quiet .af-radar-digest-hd b { font-weight: 500; color: var(--af-on-surface-variant); }
+.af-radar-digest-hd b { font-family: var(--af-headline); font-size: 0.92rem; }
+.af-radar-digest-hd em {
+  font-style: normal; font-family: var(--af-mono); font-size: 0.68rem; color: var(--af-r-dim, #97929f);
+}
+.af-radar-devent { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; padding: 6px 0; }
+.af-radar-devent + .af-radar-devent { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05); }
+.af-radar-dfrom {
+  font-family: var(--af-mono); font-size: 0.7rem; white-space: nowrap;
+  align-self: start; padding-top: 2px; color: var(--af-on-surface-variant);
+}
+.af-radar-dfrom--ok { color: var(--af-r-ok); }
+.af-radar-dfrom--warn { color: var(--af-r-warn); }
+.af-radar-dfrom--risk { color: var(--af-r-risk); }
+.af-radar-dtitle { font-size: 0.85rem; font-weight: 500; }
+.af-radar-dwhy { grid-column: 2; font-size: 0.78rem; color: var(--af-on-surface-variant); max-width: 72ch; }
+.af-radar-dquiet { margin: 8px 0 0; font-size: 0.76rem; color: var(--af-r-dim, #97929f); }
+
+.af-radar-sgroup {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 14px 4px 2px;
+  font-family: var(--af-headline); font-size: 0.68rem; font-weight: 600;
+  /* 大写 + 字距已经足够说明「这是分区标题」，不用再借一个色相 */
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--af-on-surface-variant);
+  position: sticky; left: 0;
+}
+.af-radar-sgroup i {
+  font-style: normal; font-family: var(--af-mono); font-size: 0.62rem;
+  letter-spacing: 0; color: var(--af-r-dim, #97929f);
+}
+
+/*
+ * 一条政策的块。
+ *
+ * 卡片是 surface_container_high，抬头那行再抬一层到 highest——就是这套设计里
+ * 节点的长相（节点体 high、头部 highest、中间不画线）。于是「哪几行是一条政策」
+ * 不用读字就看得出来。
+ */
+.af-radar-block {
+  position: relative;
+  border-radius: 1.25rem;
+  background: var(--af-surface-high);
+  overflow: hidden;
+}
+/* 抬头条。圆角由块的 overflow 裁出来 */
+.af-radar-block > .af-radar-srow--d0 {
+  background: var(--af-surface-highest);
+  padding-top: 13px;
+  padding-bottom: 14px;
+}
+.af-radar-block > .af-radar-srow--d0:hover { background: var(--af-surface-bright); }
+/* 最后一条任务不要贴着卡片底边 */
+.af-radar-block > .af-radar-srow:last-child { padding-bottom: 15px; }
+
+/*
+ * 重音贯穿**整块**，不是只标抬头那一行。
+ * 它说的是「这条政策要管」；标在一行上，读起来是「这一行要管」。
+ */
+.af-radar-block::before {
+  content: "";
+  position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: transparent;
+  /* 抬头那行是 position:relative 且有实底色，会盖住父元素的伪元素——
+     不抬 z-index 的话重音条从抬头下面才开始，看着像没对齐 */
+  z-index: 1;
+}
+.af-radar-block--risk::before { background: var(--af-r-risk); }
+.af-radar-block--warn::before { background: var(--af-r-warn); }
+/* 已满足的整块退后一档：不需要它出声，但也别淡到读不了 */
+.af-radar-block--ok { opacity: 0.78; }
+.af-radar-block--ok:hover { opacity: 1; }
+
+.af-radar-srow {
+  display: grid;
+  /*
+   * 文字列吃掉所有富余宽度。
+   *
+   * 这里一度写成 minmax(0, 46rem)，想把右边那个状态词拉近一点。没用——
+   * 按 Grid 规范 §12.8，剩下的宽度会**平分给 auto 轨道**，于是 46rem 之外的
+   * 八百多像素全灌进了中间那条空的状态条轨道里：状态词照样贴在最右边，
+   * 证据行反而在 736px 处被提前打了省略号，中间空一大片。空隙没关掉，只是换了个地方待着。
+   *
+   * 1fr 先把富余吃干净，auto 轨道就没得可撑了。
+   */
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 2px 16px; align-items: baseline;
+  width: 100%; padding: 9px 22px 10px;
+  border: 0; background: transparent; cursor: pointer; text-align: left;
+  color: var(--af-on-surface); font: inherit;
+  position: relative;
+}
+.af-radar-srow:hover { background: var(--af-surface-bright); }
+.af-radar-srow--overdue { background: color-mix(in srgb, var(--af-r-risk) 7%, transparent); }
+.af-radar-srow--settled { opacity: 0.45; }
+
+/*
+ * 层级只靠缩进和字级。
+ *
+ * 原来每行还画一道 1px 竖轨兜底，但轨是**逐行**画的：行与行之间有内边距，
+ * 轨就断成一节一节，左边缘成了一串对不齐的短线头——比没有更糟。
+ * 块的边界已经说清了归属，轨可以拆了。
+ */
+.af-radar-srow--d1 { padding-left: 44px; }
+.af-radar-srow--d2 { padding-left: 68px; }
+
+.af-radar-slabel { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+/* 三级各一档，眼睛才分得出这是「要求 / 谁的结论 / 要做的事」 */
+.af-radar-sname { font-size: 0.95rem; font-weight: 600; letter-spacing: -0.01em; }
+.af-radar-srow--d1 .af-radar-sname { font-size: 0.86rem; font-weight: 500; color: #d6d2d0; }
+.af-radar-srow--d2 .af-radar-sname { font-size: 0.82rem; font-weight: 400; color: var(--af-on-surface-variant); }
+/* 任务前面一个小方块：它是「要做的一件事」，不是又一条状态 */
+.af-radar-srow--d2 .af-radar-dot {
+  width: 6px; height: 6px; border-radius: 2px;
+}
+/* 证据是佐证，不是内容：压到一行，要看全文点开详情。
+ *
+ * 这里原来还挂了 max-width: 72ch。72ch 是**段落**的易读行宽——多行文字超过这个宽度
+ * 眼睛回不到下一行的行首。但这行被 line-clamp 钉死在一行，根本不会换行，
+ * 于是那条宽度限制唯一的作用就是：在 ~440px 处提前打省略号，把列里剩下的
+ * 三百像素白白空着。列宽（46rem）本身就是上限，不需要第二道。 */
+.af-radar-swhy {
+  grid-column: 1; font-size: 0.76rem; line-height: 1.5;
+  color: var(--af-r-dim, #97929f); margin-top: 1px; min-width: 0;
+  display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden;
+}
+.af-radar-sval {
+  font-size: 0.8rem; white-space: nowrap; text-align: right; min-width: 66px;
+  color: var(--af-on-surface-variant);
+}
+/* 只有「时间本身已经是警报」才上色：过了期限、或者两周内。
+   「无期限」「138 天」「进行中」都是中性的事实，中性地写 */
+.af-radar-sval--soon { color: var(--af-r-warn); }
+.af-radar-sval--past { color: var(--af-r-risk); font-weight: 500; }
+.af-radar-caret--ghost { visibility: hidden; }
+
+/* 状态条：一天一格，最右是今天。
+   时间轴在这里回答的是「什么时候变的」，不是「离 deadline 还有多久」 */
+.af-radar-strip { display: flex; gap: 2px; align-items: flex-end; height: 16px; flex: none; }
+/* 占位但不画：条太短时留住列宽，右边那一列的数字才不会随行跳动 */
+.af-radar-strip--empty { width: 84px; }
+/* 同样的撞车：表格视图的 .af-radar-cell--ok/warn/risk 是**文字色** */
+.af-radar-scell { display: block; width: 5px; border-radius: 1px; }
+.af-radar-scell--ok { height: 16px; background: color-mix(in srgb, var(--af-r-ok) 70%, transparent); }
+.af-radar-scell--warn { height: 12px; background: color-mix(in srgb, var(--af-r-warn) 75%, transparent); }
+.af-radar-scell--risk { height: 16px; background: color-mix(in srgb, var(--af-r-risk) 75%, transparent); }
+.af-radar-scell--idle { height: 7px; background: var(--af-surface-bright); }
+/* 那天它还不存在——留空，不要画成「无状态」，两件事不一样 */
+.af-radar-scell--void { height: 3px; background: color-mix(in srgb, var(--af-outline-variant) 34%, transparent); }
+
+/* 覆盖度：几个端满足。政策行不给结论给这个——一个端说 ok、另一个没查，不能显示已满足 */
+.af-radar-cover {
+  font-style: normal; font-family: var(--af-mono); font-size: 0.64rem; white-space: nowrap;
+  padding: 1.5px 8px; border-radius: 999px;
+}
+.af-radar-cover--ok { background: color-mix(in srgb, var(--af-r-ok) 16%, transparent); color: var(--af-r-ok); }
+.af-radar-cover--part { background: color-mix(in srgb, var(--af-r-warn) 16%, transparent); color: var(--af-r-warn); }
+.af-radar-cover--gap { background: color-mix(in srgb, var(--af-r-risk) 16%, transparent); color: var(--af-r-risk); }
+
+/* 任务进度：小横条。和覆盖度那个分数**故意长得不一样**——
+   都叫进度，但一个问「几个端答了」，一个问「这个端还剩几件事」 */
+/*
+ * 状态页的任务进度条。
+ *
+ * 这里原来叫 .af-radar-bar——**跑道**上那根时间条也叫这个，而且是
+ * `position: absolute; top: 21px; left: 0`。两条规则特异性相同，后写的赢了
+ * display/width/height，却没盖住 position——于是进度条被绝对定位到行的最左边，
+ * 在每个端结论左侧变成一根对不上任何东西的短横线。和当初状态点继承页顶
+ * 呼吸动画是同一类事故：类名撞车。状态页统一用 s 前缀。
+ */
+.af-radar-sbar {
+  display: block; width: 46px; height: 4px; flex: none;
+  border-radius: 999px; background: var(--af-surface-bright); overflow: hidden;
+}
+.af-radar-sbar > i { display: block; height: 100%; border-radius: 999px; background: var(--af-r-warn); }
+.af-radar-mini {
+  font-style: normal; font-family: var(--af-mono); font-size: 0.62rem;
+  color: var(--af-on-surface-variant);
+}
+
+/* 归档：从板上拿走，不是删除。按钮压在最后一档，和改状态那几个分开 */
+.af-radar-setstate--archive {
+  margin-left: auto;
+  color: var(--af-on-surface-variant);
+}
+.af-radar-setstate--archive:hover { color: var(--af-on-surface); }
+
+/* 已归档页。归档掉的东西没有「还剩几天」，所以不画跑道，就是一张清单 */
+/* 列表末尾的归档入口。放在这里就得长得像脚注：不抢眼，翻到底自然撞上 */
+.af-radar-foot {
+  display: flex;
+  justify-content: center;
+  padding: 28px 0 8px;
+}
+.af-radar-foot-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--af-on-surface-variant);
+  font-size: 0.78rem;
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 0.15s ease, background 0.15s ease;
+}
+.af-radar-foot-link:hover {
+  opacity: 1;
+  background: var(--af-surface-low);
+}
+.af-radar-foot-link .material-symbols-outlined { font-size: 1rem; }
+.af-radar-foot-link i {
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.7;
+}
+
+.af-radar-archive { display: flex; flex-direction: column; gap: 2px; }
+.af-radar-archive-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 18px 12px 20px;
+  background: var(--af-surface-high);
+  /* 归档的东西整体压暗一档：它不是当前要干的活 */
+  opacity: 0.72;
+}
+.af-radar-archive-row:hover { opacity: 1; background: var(--af-surface-bright); }
+.af-radar-archive-row:first-child { border-radius: 1.5rem 1.5rem 0 0; }
+.af-radar-archive-row:last-child { border-radius: 0 0 1.5rem 1.5rem; }
+.af-radar-archive-row:only-child { border-radius: 1.5rem; }
+.af-radar-archive-main {
+  flex: 1 1 auto; min-width: 0;
+  display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+  border: 0; background: transparent; cursor: pointer; text-align: left;
+  color: var(--af-on-surface); font: inherit;
+}
+.af-radar-archive-title { font-size: 0.82rem; font-weight: 500; }
+.af-radar-archive-main .af-radar-badges { margin-top: 0; }
+
+/* 指派负责人：一个浮层，搜索 + 命中列表。
+   原来是裸的 <input>，浏览器默认的白边框方框在这套深色里像个 bug */
+.af-radar-ownerpick { position: relative; display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.af-radar-ownerpick-now { color: var(--af-on-surface); }
+.af-radar-ownerpop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 5;
+  width: 236px; padding: 8px;
+  background: var(--af-surface-highest, #353534);
+  border-radius: 14px;
+  box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.9);
+  display: flex; flex-direction: column; gap: 6px;
+}
+.af-radar-ownerpop input {
+  font: inherit; font-size: 0.78rem; color: var(--af-on-surface);
+  background: var(--af-surface-container-lowest, #0e0e0e);
+  border: 0; border-radius: 9px; padding: 6px 10px; width: 100%;
+}
+.af-radar-ownerpop input:focus { outline: 2px solid var(--af-primary-container); outline-offset: 1px; }
+.af-radar-ownerlist { display: flex; flex-direction: column; max-height: 200px; overflow-y: auto; }
+.af-radar-ownerlist .af-radar-note { margin: 6px 4px; font-size: 0.72rem; }
+.af-radar-ownerhit {
+  border: 0; background: transparent; cursor: pointer; text-align: left;
+  font: inherit; font-size: 0.78rem; color: var(--af-on-surface);
+  padding: 6px 10px; border-radius: 9px;
+}
+.af-radar-ownerhit:hover { background: var(--af-surface-bright); }
+.af-radar-ownerhit--on { color: var(--af-primary-fixed, #e8deff); background: color-mix(in srgb, var(--af-primary-container) 24%, transparent); }
+.af-radar-ownerfoot { display: flex; gap: 6px; padding-top: 2px; }
+.af-radar-ownerfoot button {
+  flex: 1; border: 0; cursor: pointer; font: inherit; font-size: 0.72rem;
+  padding: 5px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--af-primary-container) 24%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+}
+.af-radar-ownerfoot button:hover { background: var(--af-primary-container); color: #fff; }
+
+/* 条目里那句给 AI 的话 */
+.af-radar-itemask {
+  width: 100%; resize: vertical; font: inherit; font-size: 0.8rem; line-height: 1.5;
+  color: var(--af-on-surface); background: var(--af-surface-container-lowest, #0e0e0e);
+  border: 0; border-radius: 12px; padding: 10px 12px;
+}
+.af-radar-itemask:focus { outline: 2px solid var(--af-primary-container); outline-offset: 1px; }
+
 .af-radar-drawer-close {
   position: sticky; top: 0; float: right;
   background: var(--af-surface-high); border: 0; color: var(--af-on-surface-variant);
@@ -31916,13 +32756,13 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 
 .af-radar-drawer h4 {
   font-family: var(--af-headline); font-size: 0.68rem; font-weight: 600;
-  letter-spacing: 0.07em; text-transform: uppercase; color: var(--af-outline-variant);
+  letter-spacing: 0.07em; text-transform: uppercase; color: var(--af-r-dim, #97929f);
   margin: 20px 0 8px; padding-top: 14px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .af-radar-dl { display: grid; grid-template-columns: 92px 1fr; gap: 7px 14px; margin: 0; font-size: 0.82rem; }
-.af-radar-dl dt { color: var(--af-outline-variant); font-size: 0.72rem; }
+.af-radar-dl dt { color: var(--af-r-dim, #97929f); font-size: 0.72rem; }
 .af-radar-dl dd { margin: 0; color: var(--af-on-surface); word-break: break-word; }
 
 .af-radar-dl--raw dd {
@@ -31937,7 +32777,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-pill--idle { background: rgba(203, 195, 216, 0.12); color: var(--af-on-surface-variant); }
 
 .af-radar-error { color: var(--af-error); font-size: 0.85rem; }
-.af-radar-none { color: var(--af-outline-variant); font-size: 0.88rem; padding: 26px 0; }
+.af-radar-none { color: var(--af-r-dim, #97929f); font-size: 0.88rem; padding: 26px 0; }
 
 @media (max-width: 900px) {
   .af-radar-kanban { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -31951,24 +32791,8 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   .af-radar-events li { grid-template-columns: 1fr; gap: 3px; }
 }
 
-/* 空状态里的那行命令。人要能整行选中复制，所以用 pre 而不是拼在段落里 */
-.af-radar-empty-cmd {
-  margin: 12px 0;
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--af-surface-container-lowest, #0e0e0e);
-  color: var(--af-on-surface);
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  overflow-x: auto;
-  white-space: pre;
-}
-
 
 /* ── 板的增删（归档）：全部就地展开，不开弹框 ───────────── */
-
-.af-radar-empty-actions { margin: 18px 0 26px; display: flex; gap: 10px; }
 
 .af-radar-primary {
   display: inline-flex;
@@ -32066,7 +32890,6 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   outline: none;
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--af-primary-container) 55%, transparent);
 }
-.af-radar-field--mono input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
 
 /* 确认行说「留什么」，不问「确定吗」——人犹豫的是会不会把半年的记录删掉 */
 .af-radar-confirm {
@@ -32118,9 +32941,15 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 
 /* 跑道表头：左边条目列、右边剩余列。位置和 .af-radar-label / .af-radar-value 对齐 */
 .af-radar-axis-head {
-  position: absolute;
-  left: 20px;
-  bottom: 6px;
+  grid-column: 1;
+  grid-row: 1;
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: var(--af-surface-highest);
+  padding: 0 0 6px 20px;
+  margin-left: -20px;
+  align-self: end;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -32141,8 +32970,15 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   opacity: 0.9;
 }
 .af-radar-axis-tail {
-  position: absolute;
-  right: 18px;
+  grid-column: 3;
+  grid-row: 1;
+  position: sticky;
+  right: 0;
+  z-index: 3;
+  background: var(--af-surface-highest);
+  padding-right: 18px;
+  align-self: end;
+  text-align: right;
   bottom: 6px;
   font-size: 0.68rem;
   font-weight: 600;
@@ -32156,6 +32992,11 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   display: flex;
   align-items: center;
   gap: 8px;
+  /* 分组名吸在左边：滚到右边还得知道现在这一段属于哪个分组 */
+  position: sticky;
+  left: 0;
+  width: fit-content;
+  min-width: 100%;
   padding: 9px 20px 7px;
   background: var(--af-surface-container-low, #1c1b1b);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.045);
@@ -32200,6 +33041,9 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 
 /* 和跑道共用 .af-radar-runway / .af-radar-row / .af-radar-track，只补差异 */
 .af-radar-agents .af-radar-row { min-height: 64px; }
+/* 这条轴的「此刻」钉在右端（left:100%），标签只能往左长——
+   往右会顶到吸住的「上次」那一列底下，被它的不透明底盖掉 */
+.af-radar-agents .af-radar-now b { left: auto; right: 5px; }
 .af-radar-agent-row { padding-right: 44px; }
 
 /* 每次运行一个点。位置是开跑时刻，颜色是结果 */
@@ -32222,7 +33066,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-run--manual.af-radar-run--ok { color: var(--af-tertiary); }
 .af-radar-run--manual.af-radar-run--bad { color: var(--af-error); }
 .af-radar-run--manual.af-radar-run--wait { color: var(--af-caution, #ffca6a); }
-.af-radar-run--manual.af-radar-run--idle { color: var(--af-outline-variant); }
+.af-radar-run--manual.af-radar-run--idle { color: var(--af-r-dim, #97929f); }
 
 .af-radar-run-empty {
   position: absolute;
@@ -32253,7 +33097,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-agent-canvas:hover { background: var(--af-surface-container-highest, #353534); color: var(--af-on-surface); }
 .af-radar-agent-canvas .material-symbols-outlined { font-size: 17px; }
 
-.af-radar-badges i.af-radar-badge--fail {
+.af-radar-badges i.af-radar-badge--fail, .af-radar-slabel > i.af-radar-badge--fail {
   background: rgba(255, 180, 171, 0.16);
   color: var(--af-error);
 }
@@ -32270,9 +33114,15 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-agent-note b { color: var(--af-on-surface); }
 .af-radar-agent-note .af-radar-link { margin: 0 4px; font-size: 0.74rem; }
 
-/* 协作行右边多一个画布按钮，「上次」得给它让位，否则两个叠在一起 */
-.af-radar-agent-row .af-radar-value { right: 46px; }
-.af-radar-agents .af-radar-track { inset: 0 124px 0 250px; }
+/* 协作行右边多一个画布按钮，「上次」得给它让位，否则两个叠在一起。
+   行改成 grid 之后 `right: 46px` / `inset:` 这套绝对定位的写法全是错的：
+   value 现在是 sticky，right 改的是吸附阈值不是位置；track 是 relative，
+   inset 会把它整块往右推 250px。改成加宽第三列 + 给它留内边距 */
+.af-radar-agents .af-radar-row,
+.af-radar-agents .af-radar-axis { grid-template-columns: 280px minmax(0, 1fr) 124px; }
+.af-radar-agents .af-radar-row > .af-radar-value { padding-right: 46px; }
+/* 表头跟着让位，否则「上次」和它下面的时间差 28px，看着像两列 */
+.af-radar-agents .af-radar-axis-tail { padding-right: 46px; }
 
 /* ── 待审批 ─────────────────────────────────────────── */
 
@@ -32312,6 +33162,85 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   opacity: 0.7;
   margin-bottom: 6px;
 }
+/* 「编排」在多片时的分流浮层。玻璃感 + 大圆角，不画 1px 边 */
+.af-radar-flowpick {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 300px;
+  max-width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px;
+  border-radius: 18px;
+  /* --af-surface-container-highest 这个 token 根本不存在（真名是 --af-surface-highest），
+     color-mix 拿到 invalid 就整条声明作废——面板一直没有底色，只剩模糊和阴影，
+     看着像一块洗白的灰板。这就是它跟整页格格不入的原因 */
+  background: color-mix(in srgb, var(--af-surface-highest) 92%, transparent);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+.af-radar-flowpick-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 2px 6px 8px;
+  font-size: 0.74rem;
+  color: var(--af-on-surface-variant);
+}
+.af-radar-flowpick-item {
+  display: flex; flex-direction: column; gap: 3px; text-align: left;
+  padding: 9px 12px; border: 0; border-radius: 12px; cursor: pointer;
+  background: transparent; color: inherit; font: inherit;
+}
+.af-radar-flowpick-item:hover:not(:disabled) { background: var(--af-surface-bright); }
+.af-radar-flowpick-item:disabled { opacity: 0.45; cursor: not-allowed; }
+.af-radar-flowpick-item:focus-visible { outline: 2px solid var(--af-primary-container); outline-offset: -2px; }
+.af-radar-flowpick-name {
+  display: flex; align-items: center; gap: 8px;
+  font-family: var(--af-mono); font-size: 0.8rem; color: var(--af-on-surface);
+}
+.af-radar-flowpick-stale {
+  font-style: normal; font-size: 0.62rem; padding: 1px 6px; border-radius: 999px;
+  color: var(--af-r-warn, #e0ad4c); background: color-mix(in srgb, var(--af-r-warn, #e0ad4c) 15%, transparent);
+}
+.af-radar-flowpick-meta { font-size: 0.7rem; color: var(--af-on-surface-variant); }
+/* 关闭：.af-radar-x 在两处用过，但一条样式都没写——渲染出来是浏览器默认按钮，
+   一个带边框的灰方块压在圆角玻璃面板上 */
+.af-radar-x {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; flex: none;
+  border: 0; border-radius: 999px;
+  background: transparent; color: var(--af-on-surface-variant);
+  font-size: 1rem; line-height: 1; cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.af-radar-x:hover { background: var(--af-surface-bright); color: var(--af-on-surface); }
+
+/* 加流程：名单末尾的动作，和上面几条「打开哪一条」分开一档 */
+.af-radar-flowpick-add {
+  display: flex; align-items: center; gap: 6px;
+  margin-top: 6px; padding: 9px 12px;
+  border: 0; border-radius: 12px; cursor: pointer;
+  background: color-mix(in srgb, var(--af-primary-container) 20%, transparent);
+  color: var(--af-primary-fixed, #e8deff);
+  font: inherit; font-size: 0.76rem; text-align: left;
+}
+.af-radar-flowpick-add:hover { background: color-mix(in srgb, var(--af-primary-container) 40%, transparent); }
+.af-radar-flowpick-add .material-symbols-outlined { font-size: 1.05rem; }
+
+/* 待审批：改动本身要能读，依据要在场——只有 id 和 unknown→ok 的话人只能闭眼点批准 */
+.af-radar-pending-change { display: block; font-size: 0.78rem; color: var(--af-on-surface); }
+.af-radar-pending-change em { font-style: normal; color: var(--af-primary-fixed, #e8deff); }
+.af-radar-pending-evidence { display: block; font-size: 0.76rem; color: var(--af-on-surface-variant); line-height: 1.6; }
+.af-radar-pending-src {
+  display: block; font-family: var(--af-mono); font-size: 0.66rem;
+  color: var(--af-secondary); background: var(--af-surface-container-lowest);
+  padding: 3px 8px; border-radius: 8px; overflow-wrap: anywhere;
+}
+.af-radar-pending-id { display: block; font-family: var(--af-mono); font-size: 0.62rem; color: var(--af-on-surface-variant); opacity: 0.65; }
+.af-radar-pending-why i { display: block; font-style: normal; margin-top: 4px; opacity: 0.75; }
+
 .af-radar-pending-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -32322,7 +33251,7 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   border-radius: 12px;
   background: var(--af-surface-container-high, #2a2a2a);
 }
-.af-radar-pending-what { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; font-size: 0.78rem; }
+.af-radar-pending-what { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; font-size: 0.78rem; }
 .af-radar-pending-what code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.68rem;
@@ -32358,6 +33287,15 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--af-primary-container) 26%, transparent);
 }
 
+/* 空页面上它就是整页，不用再拿卡片把自己框起来 */
+.af-radar-setup--bare {
+  margin: 0;
+  padding: 0;
+  background: none;
+  box-shadow: none;
+}
+.af-radar-setup--bare .af-radar-steps { margin-top: 4px; }
+
 /* 四步就在眼前，人知道自己在哪一步、还有几步——藏起来的话人不知道点了会发生什么 */
 .af-radar-steps {
   display: flex;
@@ -32383,7 +33321,6 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 .af-radar-steps li.af-radar-step--on i { background: var(--af-primary-container); color: #fff; }
 
 .af-radar-setup-ask, .af-radar-setup-body { display: flex; flex-direction: column; gap: 12px; }
-.af-radar-setup-names { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 10px; }
 .af-radar-field textarea {
   width: 100%;
   padding: 9px 12px;
@@ -32447,5 +33384,4 @@ button.af-release-row { appearance:none; border-left:0; border-right:0; border-b
 }
 
 @media (max-width: 640px) {
-  .af-radar-setup-names { grid-template-columns: 1fr; }
 }

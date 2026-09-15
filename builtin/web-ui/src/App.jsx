@@ -148,6 +148,8 @@ function RoutedContent({ authUser }) {
   if (path === "/mcps") return <McpPage />;
   if (path === "/schedules") return <SchedulesPage />;
   if (path === "/radar") return <RadarPage />;
+  // 一条一页，自己有地址，能直接发给别人；渲染的是同一个 RadarPage，只是只露详情
+  if (path === "/radar/item") return <RadarPage />;
   if (path === "/node-studio") return <NodeStudioPage />;
   if (path === "/flow") return <RedirectFlowToWorkspace />;
   if (path === "/workspace") return <WorkspacePage />;
@@ -319,11 +321,13 @@ function AuthGate({ children }) {
 function AppShell({ authUser, onLogout }) {
   const { path } = useRoute();
   const workflowReportStandalone = path === "/workflow-report";
+  // 一条一页是发给别人看的地址：不挂侧栏，对方打开就是这一条本身
+  const radarItemStandalone = path === "/radar/item";
   const pipelineFullBleed = path === "/flow" || path === "/workspace" || path === "/workflow-checklist";
-  const fullBleed = pipelineFullBleed || workflowReportStandalone;
+  const fullBleed = pipelineFullBleed || workflowReportStandalone || radarItemStandalone;
   return (
     <div className="af-app">
-      {path !== "/settings" && path !== "/radar" && !workflowReportStandalone ? <OnboardingTour page={pipelineFullBleed ? "flow" : "projects"} /> : null}
+      {path !== "/settings" && path !== "/radar" && !workflowReportStandalone && !radarItemStandalone ? <OnboardingTour page={pipelineFullBleed ? "flow" : "projects"} /> : null}
       {!fullBleed ? <Sidebar authUser={authUser} onLogout={onLogout} /> : null}
       <div className={fullBleed ? "af-main af-main--pipeline" : "af-main"}>
         <RoutedContent authUser={authUser} />

@@ -66,6 +66,18 @@ function eventsDir() {
 }
 
 /**
+ * 规划跑完留下的计划，一次运行一份。
+ *
+ * 不写进流程目录：`${flowDir}` 下按约定放的是随流程发布的文件，运行产物混进去，
+ * 下一个人就分不清哪些是源码。按 runId 分文件也顺手解决了并发规划互相覆盖。
+ */
+export function radarPlanFile(runId) {
+  const safe = String(runId || "").replace(/[^A-Za-z0-9_.-]/g, "").slice(0, 120);
+  if (!safe) return "";
+  return path.join(radarRoot(), "plans", `${safe}.json`);
+}
+
+/**
  * 板绑定的编排：点「编排」跳回画布配它的定时任务时要用。
  *
  * 只认这几个字段，其余一律丢掉——这份数据会直接拼进跳转地址，不能让写板的人塞进任意东西。
@@ -205,6 +217,200 @@ export function effectiveCutoff(due, trains = [], now = Date.now()) {
   return { at: wall, train: "", reason: "no_train_in_reach" };
 }
 
+/**
+ * 分片声明的 owns 匹配。
+ *
+ * 只认一个通配符 `*`，因为条目 id 本身只允许字母数字和 `-_.@`——再多的语法只会
+ * 让人写出自己也说不准会匹配到什么的表达式，而这是一条**授权**规则。
+ *
+ * 没声明 owns 的分片不受限制：老板子上的流程没有这个字段，突然开始拒收等于把
+ * 已经在跑的监控全部打断。约束是新流程主动戴上的，不是旧流程被动获得的。
+ */
+function globToRegExp(pattern) {
+  const escaped = String(pattern).replace(/[.*+?^${}()|[\]\\]/g, (ch) => (ch === "*" ? "\u0000" : `\\${ch}`));
+  return new RegExp(`^${escaped.split("\u0000").join(".*")}$`);
+}
+
+export function matchesOwns(id, owns) {
+  if (!Array.isArray(owns) || !owns.length) return true;
+  const text = String(id || "");
+  return owns.some((pattern) => globToRegExp(pattern).test(text));
+}
+
+/**
+ * 这一批条目里，哪些落在 owns 之外。
+ *
+ * 返回越界的 id 而不是布尔：拒收时要能告诉写的人**具体是哪几条**，
+ * 只说「有条目越界了」，作者得自己拿 glob 去比对一遍。
+ */
+export function ownsViolations(rows = [], owns = []) {
+  if (!Array.isArray(owns) || !owns.length) return [];
+  return rows
+    .map((row) => String(row?.id || "").trim())
+    .filter((id) => id && !matchesOwns(id, owns));
+}
+
+/** risk 最差、ok 最好。RADAR_STATES 本身就是这个顺序 */
+const STATE_RANK = new Map(RADAR_STATES.map((state, index) => [state, index]));
+
+function worstState(states = []) {
+  let worst = "";
+  for (const value of states) {
+    const state = normalizeState(value);
+    if (!worst || (STATE_RANK.get(state) ?? 99) < (STATE_RANK.get(worst) ?? 99)) worst = state;
+  }
+  return worst;
+}
+
+/**
+ * 父行由子行推出来。
+ *
+ * 父行（政策）自己不写状态——写了就意味着某条流程要替所有 app 下结论，而它只认领政策本身。
+ * 所以状态取子行里**最差**的那个，截止日取**最早**的那个封包日。
+ *
+ * 为什么不能让父行画自己的政策截止日：跑道上条的长度就是紧迫度（`Runway` 里 width 直接由
+ * effectiveDue 换算）。政策 2027-01-31 到期、而 Likee 只能赶 2026-12-03 那班车时，
+ * 按政策日画出来的条比真正最紧的子行长一倍，读出来是「还早」。原值留在 policyDue 上，
+ * 页面照样能把它画成一条虚线。
+ *
+ * 人工覆盖过的父行不推：那是人看过子行之后下的结论，推导不该把它盖回去。
+ */
+/**
+ * 把父行的归档状态传给它下面的分面。
+ *
+ * 链路可能不止一层，所以顺着 parent 一路往上找，中间只要有一条归档了就算。
+ * 环（数据写坏时可能出现）靠 `seen` 挡住，否则这里会挂死整个接口。
+ */
+function cascadeArchive(rows = []) {
+  const byId = new Map(rows.map((row) => [String(row?.id || ""), row]));
+  for (const row of rows) {
+    if (row.archived) continue;
+    const seen = new Set([String(row.id || "")]);
+    let cursor = byId.get(String(row.parent || "").trim());
+    while (cursor && !seen.has(String(cursor.id || ""))) {
+      seen.add(String(cursor.id || ""));
+      if (cursor.archived) {
+        row.archived = true;
+        row.archivedBy = String(cursor.id || "");
+        break;
+      }
+      cursor = byId.get(String(cursor.parent || "").trim());
+    }
+  }
+  return rows;
+}
+
+function rollupFacets(rows = [], shards = []) {
+  const byId = new Map(rows.map((row) => [String(row?.id || ""), row]));
+  const children = new Map();
+  for (const row of rows) {
+    const parent = String(row?.parent || "").trim();
+    if (!parent) continue;
+    if (!byId.has(parent)) { row.orphan = true; continue; }
+    // 归档掉的子行不参与汇总：它已经翻篇了，还让它把父行拖成「未开始」就是在报假警
+    if (row.archived) continue;
+    const list = children.get(parent) || [];
+    list.push(row);
+    children.set(parent, list);
+  }
+  /**
+   * 缺席由**分片的契约**反推，不靠板上声明业务维度。
+   *
+   * 一条流程用 `covers` 声明「这些父项由我回答」。父项落在它的 covers 里、
+   * 而它一条子项都没写 —— 那就是没人查过。「查过了没问题」和「根本没人查」
+   * 长得完全不一样，后者才是最该看见的。
+   *
+   * 早先这里读的是板级的 `apps`，那等于让内核认识「app」这个业务概念：
+   * 换成证书到期板、AB 实验板，这段代码一个字都用不上。分片和 owns 是通用的，
+   * 业务维度（哪个 app / 哪个端 / 哪个团队）只是分片的名字。
+   */
+  const answerers = (Array.isArray(shards) ? shards : [])
+    .filter((shard) => Array.isArray(shard.covers) && shard.covers.length);
+
+  // 父项要先认全，缺席才判得准 —— 一条流程没写任何子项时，它不会出现在 children 里
+  for (const row of rows) {
+    if (String(row?.parent || "").trim()) continue;
+    const id = String(row?.id || "");
+    const owed = answerers.filter((shard) => shard.covers.some((pattern) => matchesOwns(id, [pattern])));
+    if (!owed.length) continue;
+    const kids = children.get(id) || [];
+    const covered = new Set(kids.map((kid) => String(kid.flowId || "")));
+    const missing = owed.map((shard) => shard.flowId).filter((flowId) => !covered.has(flowId));
+    if (missing.length) row.missingFacets = missing;
+    /**
+     * 覆盖度：几个端该答、几个真答了、其中几个说满足。
+     *
+     * 政策行不是一件「做完了」的事，它是一条**要求**——「满足没有」得看几个端在答。
+     * 只给一个汇总状态的话，一个端说 ok、另一个端压根没查，父行照样绿，
+     * 而这正是这块板最不能出的错：绿得越笃定，越没人去看那个没查的端。
+     */
+    row.coverage = {
+      expected: owed.length,
+      answered: owed.length - missing.length,
+      // 按**端**数，不是按行数：一条流程可能给同一条政策写好几行，
+      // 数行的话会出现「2/1 满足」这种读不通的分数。一个端算满足，
+      // 当且仅当它写的每一行都满足
+      ok: owed.filter((shard) => {
+        const mine = kids.filter((kid) => String(kid.flowId || "") === shard.flowId);
+        return mine.length > 0 && worstState(mine.map((kid) => kid.state)) === "ok";
+      }).length,
+    };
+  }
+
+  for (const [parentId, kids] of children.entries()) {
+    const parent = byId.get(parentId);
+    if (!parent) continue;
+    parent.children = kids.map((kid) => String(kid.id));
+    parent.facetCount = kids.length;
+    if (parent.override && parent.override.state) continue;
+    /**
+     * 缺席的端按「无状态」参与汇总，所以父行**永远不会**在有人没查的情况下显示已满足。
+     * 缺席不算 risk：一条流程刚声明 covers 还没跑过就把整块板刷红，是另一种噪音。
+     * 真正的告警交给覆盖度那个角标——它说得出「1/2」，颜色说不出。
+     */
+    const missingCount = (parent.missingFacets || []).length;
+    const rolled = worstState([...kids.map((kid) => kid.state), ...Array(missingCount).fill("idle")]);
+    if (rolled) {
+      parent.observedState = normalizeState(parent.state);
+      parent.state = rolled;
+    }
+    const dues = kids
+      .map((kid) => toTime(kid.due))
+      .filter((time) => Number.isFinite(time));
+    // 人手给父行定过截止日就不推导了：推导会把他刚填的那天顶掉，
+    // 界面上看起来像没保存成功
+    if (dues.length && !String(parent.override?.due || "").trim()) {
+      // 原来的政策截止日留着：页面要在跑道上把它画成虚线，人得看得见「政策要求的是哪天」
+      if (parent.due && !parent.policyDue) parent.policyDue = parent.due;
+      parent.due = new Date(Math.min(...dues)).toISOString();
+    }
+    parent.rolledUp = true;
+  }
+  return rows;
+}
+
+/**
+ * tag 归一成数组。
+ *
+ * agent 写 frontmatter 时给的可能是 `tags: aep, android16` 这种逗号串，也可能是
+ * YAML 数组。两种都收——为了一个书写格式的差异让整条目落不了盘，不值得。
+ * 但**不接受**空串和重复：它们会在分组下拉里变成一个看不见的空组。
+ */
+export function normalizeTags(value) {
+  const list = Array.isArray(value)
+    ? value
+    : String(value ?? "").split(/[,，]/);
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const tag = String(item ?? "").trim();
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    out.push(tag);
+  }
+  return out;
+}
+
 function normalizeState(value) {
   const state = String(value || "").trim();
   return RADAR_STATES.includes(state) ? state : "idle";
@@ -216,13 +422,30 @@ function normalizeState(value) {
 export function decorateRow(row = {}, trains = [], now = Date.now(), options = {}) {
   const due = row.due ?? row.deadline ?? "";
   const wall = toTime(due);
-  const effective = effectiveCutoff(due, trains, now);
+  /**
+   * 版本车按**分片**限定：写这一行的那条流程有自己的发版节奏，别的流程的封包日
+   * 不该算进来。`scope` 是分片名，不是业务字段——板不需要知道「app」是什么。
+   * 不带 scope 的车是通用车，对谁都算。
+   */
+  const owner = String(row.flowId || "").trim();
+  const usable = (Array.isArray(trains) ? trains : []).filter((train) => {
+    const scope = String(train?.scope || "").trim();
+    return !scope || (owner && scope === owner);
+  });
+  const effective = effectiveCutoff(due, usable, now);
   const state = normalizeState(row.state);
   const at = Number.isFinite(effective.at) ? effective.at : wall;
   // 「定了就不用再盯了」：不再期待更新，也就不该因为陈旧而报警。
   // 但**不是删除**——政策改期后还要能重新亮起来，所以条目留着，只是不催
   const settled = row.settled === true;
   const lastSeenAt = toTime(row.lastSeenAt);
+  const firstSeenAt = toTime(row.firstSeenAt);
+  /**
+   * 任务自己的起止。和 `due` 是两回事：`due` 是外面要求的最后期限，
+   * 这两个是「我们打算什么时候做／做到了什么时候」——跑道上一个画成区间，一个画成刻度。
+   */
+  const startAt = toTime(row.startAt);
+  const endAt = toTime(row.endAt);
   const staleAfterMs = Number(options.staleAfterMs) > 0 ? Number(options.staleAfterMs) : 0;
   return {
     ...row,
@@ -241,6 +464,9 @@ export function decorateRow(row = {}, trains = [], now = Date.now(), options = {
     overdue: state !== "ok" && Number.isFinite(wall) && wall < now,
     settled,
     lastSeenAt: Number.isFinite(lastSeenAt) ? new Date(lastSeenAt).toISOString() : "",
+    firstSeenAt: Number.isFinite(firstSeenAt) ? new Date(firstSeenAt).toISOString() : "",
+    startAt: Number.isFinite(startAt) ? new Date(startAt).toISOString() : "",
+    endAt: Number.isFinite(endAt) ? new Date(endAt).toISOString() : "",
     /**
      * 这一条多久没被写过了。
      *
@@ -297,11 +523,56 @@ function sortRows(rows) {
   });
 }
 
+/** 一个字典：把 key 映射成给人看的名字。值不是字符串的一律丢掉，它会直接进页面 */
+function labelMap(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const label = String(value ?? "").trim();
+    if (key && label) out[key] = label;
+  }
+  return out;
+}
+
+/**
+ * 大组：有 key 也有显示名。
+ *
+ * 只存 key 的话，页面上那一栏会写着 `android16` —— 而人想看的是「Android 16 适配」。
+ * 顺序也是数据：大组在页面上的先后就是这个数组的顺序，不是字典序。
+ */
+function normalizeThemes(raw) {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const item of raw) {
+    const key = String((typeof item === "string" ? item : item?.key) || "").trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, label: String((typeof item === "string" ? "" : item?.label) || key).trim() || key });
+  }
+  return out;
+}
+
 function defaultSpec(spec = {}) {
   const encode = spec.encode && typeof spec.encode === "object" ? spec.encode : {};
   return {
     view: String(spec.view || "runway"),
     views: Array.isArray(spec.views) && spec.views.length ? spec.views.map(String) : ["runway", "table"],
+    /**
+     * 这块板自己的词典。
+     *
+     * 状态怎么念、有哪几个大组、标签只能挑哪些、字段在详情里叫什么——
+     * 全是**业务**，不是内核。写死在代码里等于「所有板都得说合规的话」：
+     * 一块争议板上 ok 该念「已定论」，一块线上问题板该念「已恢复」。
+     *
+     * 建板的 AI 负责写它，流程读它（而不是在提示词里各抄一份），页面照它渲染。
+     */
+    states: labelMap(spec.states),
+    themes: normalizeThemes(spec.themes),
+    tags: Array.isArray(spec.tags)
+      ? [...new Set(spec.tags.map((tag) => String(tag ?? "").trim()).filter(Boolean))]
+      : [],
+    fields: labelMap(spec.fields),
     encode: {
       lane: encode.lane || "title",
       end: encode.end || "effectiveDue",
@@ -359,6 +630,9 @@ function loadBoard(board, now = Date.now()) {
       stale: Number.isFinite(updatedAt) ? now - updatedAt > staleAfterMs : true,
       fetchFailures: Number(file.fetchFailures) || 0,
       writtenBy: String(file.writtenBy || ""),
+      declaredOwns: Array.isArray(file.owns) ? file.owns.map(String) : [],
+      // 这一片回答哪些父项。缺席检测只认它
+      covers: Array.isArray(file.covers) ? file.covers.map(String) : [],
       rows: Array.isArray(file.rows) ? file.rows : [],
       trains: Array.isArray(file.trains) ? file.trains : [],
       spec: file.spec && typeof file.spec === "object" ? file.spec : null,
@@ -382,29 +656,80 @@ function loadBoard(board, now = Date.now()) {
     }
   }
 
+  // 流程写的 tag 先归一：agent 可能给逗号串，也可能给 YAML 数组
+  for (const [id, row] of byId.entries()) {
+    if (row.tags === undefined) continue;
+    byId.set(id, { ...row, tags: normalizeTags(row.tags) });
+  }
+
   const overrides = readJsonFile(overridesPath(board)) || {};
   for (const [id, row] of byId.entries()) {
     const override = overrides[id];
     if (!override || typeof override !== "object") continue;
     const observed = normalizeState(row.state);
-    const decided = normalizeState(override.state);
+    const hasState = String(override.state || "").trim() !== "";
+    const decided = hasState ? normalizeState(override.state) : observed;
+    // tag 是并集：流程发现的和人贴的都算。人显式删掉的记在 tagsRemoved 里，
+    // 否则流程下一轮又写回来，人会以为自己删了个寂寞
+    const removed = new Set(normalizeTags(override.tagsRemoved));
+    const tags = normalizeTags([...normalizeTags(row.tags), ...normalizeTags(override.tags)])
+      .filter((tag) => !removed.has(tag));
+    /**
+     * 人手填的字段直接盖住流程写的那个值，但**原值留在 override 里**，
+     * 面板要能说出「这是你改的、流程原本写的是 X」。
+     */
+    const edited = {};
+    const editedFrom = {};
+    for (const field of [...HUMAN_TEXT_FIELDS, ...HUMAN_DATE_FIELDS]) {
+      const value = String(override[field] ?? "").trim();
+      if (!value) continue;
+      edited[field] = value;
+      if (String(row[field] ?? "").trim()) editedFrom[field] = String(row[field]);
+    }
     byId.set(id, {
       ...row,
+      ...edited,
       // 观测值留着：人的判断优先，但**不能让它静默盖住观测**。
       // 一次点击就永久掩盖一次真实退化，是这套面板失去可信度的最短路径
       observedState: observed,
       state: decided,
       settled: override.settled === true || row.settled === true,
+      archived: override.archived === true,
+      // owner 只有人写，所以直接覆盖，没有并存一说
+      ...(override.owner === undefined ? {} : { owner: String(override.owner || "") }),
+      ...(tags.length ? { tags } : {}),
       override: {
-        state: decided,
+        ...edited,
+        ...(override.archived === true ? { archived: true } : {}),
+        ...(Object.keys(editedFrom).length ? { was: editedFrom } : {}),
+        ...(hasState ? { state: decided } : {}),
+        ...(override.owner === undefined ? {} : { owner: String(override.owner || "") }),
+        ...(normalizeTags(override.tags).length ? { tags: normalizeTags(override.tags) } : {}),
+        ...(removed.size ? { tagsRemoved: [...removed] } : {}),
         by: String(override.by || ""),
         at: String(override.at || ""),
         note: String(override.note || ""),
       },
-      // 人说完成、脚本说没完成——这个矛盾要摆在台面上，而不是二选一后闭嘴
-      overrideConflict: decided !== observed,
+      // 人说完成、脚本说没完成——这个矛盾要摆在台面上，而不是二选一后闭嘴。
+      // 只有人真的改过状态才算矛盾；光贴个 tag 不是
+      overrideConflict: hasState && decided !== observed,
     });
   }
+
+  /**
+   * 归档往下传：父行归档了，它的分面跟着走。
+   *
+   * 不给每个子行各写一条覆盖——那样父行一取消归档，九条子行的覆盖还得一条条撤回来，
+   * 中间任何一步失败就留下一堆孤儿状态。归档只记在父行上，子行在读取期算出来，
+   * 顺带带上 `archivedBy`，页面才说得出「它是被上面那条带走的」而不是「有人单独归档了它」。
+   */
+  cascadeArchive([...byId.values()]);
+
+  /**
+   * 分面推导放在覆盖层**之后**：子行上的人工判断要先生效，父行才是照着「人看完之后的事实」
+   * 汇总的。反过来先汇总再套覆盖，人在子行上点的那一下就不会反映到父行。
+   */
+  rollupFacets([...byId.values()], shards);
 
   return {
     board,
@@ -427,11 +752,104 @@ function loadBoard(board, now = Date.now()) {
 }
 
 /**
- * 人工改一条的状态。
+ * 人工改一条。**这是人的图层，不是分片。**
  *
  * 只动覆盖层，碰不到流程分片——所以流程下次跑照样写它的观测值，两边各说各的，
- * 由读的时候合并，并把矛盾标出来。传 `state` 为空表示撤销覆盖，让它回到脚本判定。
+ * 由读的时候合并，并把矛盾标出来。
+ *
+ * 为什么人不能直接改分片：分片是**整片覆盖**的，人改进去的字段下一轮就没了。
+ * 所以凡是人要改的东西，都必须活在这一层。
+ *
+ * 各字段的归属不一样：
+ * - `state` / `settled` / `due`：人和流程都会写 → 并存，读的时候标出矛盾
+ * - `owner`：**只有人**写。流程不该分派责任人，所以不存在冲突
+ * - `tags`：并集。人删掉流程加的那个，记进 `tagsRemoved`——直接不加的话，
+ *   流程下一轮又会把它写回来，人会以为自己删了个寂寞
+ *
+ * 传 `state` 为空表示撤销状态覆盖，让它回到脚本判定；整条覆盖都空了就删掉这条。
  */
+/** 人能直接改的字段。传空串是「清掉我改的，回到流程写的那个值」 */
+const HUMAN_TEXT_FIELDS = ["title"];
+const HUMAN_DATE_FIELDS = ["due", "startAt", "endAt"];
+
+export function setRadarItemOverride(board, itemId, {
+  state, by = "", note, settled, owner, addTags, removeTags, clearTags, archived, ...fields
+} = {}) {
+  if (!isValidBoardId(board)) return { ok: false, error: "board id 不合法" };
+  const id = String(itemId || "").trim();
+  if (!id) return { ok: false, error: "缺少条目 id" };
+  const next = readJsonFile(overridesPath(board)) || {};
+  const decided = String(state || "").trim();
+  if (decided && !RADAR_STATES.includes(decided)) return { ok: false, error: "state 取值不合法" };
+
+  const previous = next[id] && typeof next[id] === "object" ? next[id] : {};
+  const tags = new Set(normalizeTags(previous.tags));
+  const removed = new Set(normalizeTags(previous.tagsRemoved));
+  for (const tag of normalizeTags(addTags)) { tags.add(tag); removed.delete(tag); }
+  for (const tag of normalizeTags(removeTags)) { tags.delete(tag); removed.add(tag); }
+  if (clearTags === true) { tags.clear(); removed.clear(); }
+
+  /**
+   * 日期只收 `YYYY-MM-DD` 或空。放宽到「随便什么 Date 能解析的」的话，
+   * 「下周三」会静默变成 Invalid Date 再变成空，人以为改上了、板上什么都没变。
+   */
+  const edits = {};
+  for (const field of HUMAN_TEXT_FIELDS) {
+    if (fields[field] === undefined) continue;
+    const value = String(fields[field] ?? "").trim();
+    edits[field] = value || undefined;
+  }
+  for (const field of HUMAN_DATE_FIELDS) {
+    if (fields[field] === undefined) continue;
+    const value = String(fields[field] ?? "").trim();
+    if (value && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      return { ok: false, error: `${field} 要写成 2026-09-14 这样的日期` };
+    }
+    /**
+     * `Date.parse("2026-02-31")` 不报错，它会滚到 3 月 3 日。
+     * 光判 NaN 的话，人填了个不存在的日子，板上安静地显示成另一天。
+     */
+    if (value && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) {
+      return { ok: false, error: `${field} 不是一个真实存在的日期` };
+    }
+    edits[field] = value || undefined;
+  }
+  if (edits.startAt && edits.endAt && Date.parse(edits.startAt) > Date.parse(edits.endAt)) {
+    return { ok: false, error: "开始日期晚于结束日期" };
+  }
+
+  const merged = {
+    ...previous,
+    ...edits,
+    ...(state === undefined ? {} : decided ? { state: decided } : { state: undefined }),
+    ...(settled === undefined ? {} : { settled: settled === true }),
+    /**
+     * 归档和「不用再盯」是两件事：settled 是**留在板上但不出声**，
+     * archived 是**从板上拿走**。前者还要在跑道上看得见（政策改了要能重新亮），
+     * 后者是「这条已经翻篇了」，只在归档页里还找得到。
+     */
+    ...(archived === undefined ? {} : archived === true ? { archived: true } : { archived: undefined }),
+    ...(owner === undefined ? {} : { owner: String(owner || "").trim() }),
+    ...(tags.size ? { tags: [...tags] } : { tags: undefined }),
+    ...(removed.size ? { tagsRemoved: [...removed] } : { tagsRemoved: undefined }),
+    ...(note === undefined ? {} : { note: String(note ?? "") }),
+    by: String(by || previous.by || ""),
+    at: new Date().toISOString(),
+  };
+  for (const key of Object.keys(merged)) if (merged[key] === undefined) delete merged[key];
+
+  // 除了记账字段（by / at / note）之外什么都不剩，这条覆盖就没有存在的意义了
+  const meaningful = ["state", "settled", "archived", "owner", "tags", "tagsRemoved", ...HUMAN_TEXT_FIELDS, ...HUMAN_DATE_FIELDS]
+    .some((key) => merged[key] !== undefined);
+  if (!meaningful) delete next[id];
+  else next[id] = merged;
+
+  fs.mkdirSync(boardDir(board), { recursive: true });
+  writeJsonAtomic(overridesPath(board), next);
+  return { ok: true, board, itemId: id, override: next[id] || null };
+}
+
+/** 老入口，只改状态。保留是因为 API 和历史调用都走它 */
 export function setRadarItemState(board, itemId, { state, by = "", note = "", settled } = {}) {
   if (!isValidBoardId(board)) return { ok: false, error: "board id 不合法" };
   const id = String(itemId || "").trim();
@@ -470,6 +888,10 @@ function shardSummary(shard) {
     fetchFailures: shard.fetchFailures,
     // 它到底写了哪几条。协作视图要靠它看出「谁在管什么」和「谁没人管」
     owns: shard.rows.map((row) => String(row?.id || row?.title || "")).filter(Boolean),
+    // 上面那个 owns 是**写了什么**（描述），这个是**声明负责什么**（契约）。
+    // 两者对不上正是「该认领的没认领」，协作视图要能分开讲
+    declaredOwns: shard.declaredOwns,
+    covers: shard.covers,
     writtenBy: String(shard.writtenBy || ""),
   };
 }
@@ -575,8 +997,15 @@ export function boardsByFlow({ now = Date.now() } = {}) {
   return index;
 }
 
-/** 读一块板的完整内容，行已经补好算出来的字段并排好序 */
-export function readRadarBoard(board, { scope = "mine", username = "", userId = "", now = Date.now() } = {}) {
+/**
+ * 读一块板的完整内容，行已经补好算出来的字段并排好序。
+ *
+ * `archived` 决定看哪一摞：默认只回在架上的，传 `true` 只回归档的（归档页用）。
+ * 两边互补而不是包含关系——「全部」里混着已归档的，等于归档白做了。
+ */
+export function readRadarBoard(board, {
+  scope = "mine", username = "", userId = "", now = Date.now(), archived = false,
+} = {}) {
   const loaded = loadBoard(board, now);
   if (!loaded) return null;
   const shardStale = new Map(loaded.shards.map((shard) => [shard.flowId, shard.staleAfterMs]));
@@ -584,7 +1013,8 @@ export function readRadarBoard(board, { scope = "mine", username = "", userId = 
     // 预期更新间隔取自写这一条的那片流程：每周跑的流程，它的条目不该按日更去判陈旧
     staleAfterMs: shardStale.get(row.flowId) || 0,
   }));
-  const visible = sortRows(rowsForActor(decorated, { scope, username, userId }));
+  const onShelf = decorated.filter((row) => Boolean(row.archived) === Boolean(archived));
+  const visible = sortRows(rowsForActor(onShelf, { scope, username, userId }));
   const spec = defaultSpec(loaded.spec);
   return {
     board,
@@ -599,14 +1029,21 @@ export function readRadarBoard(board, { scope = "mine", username = "", userId = 
     fetchFailures: loaded.fetchFailures,
     spec,
     trains: loaded.trains
-      .map((train) => ({ version: String(train?.version || ""), cutoff: String(train?.cutoff || "") }))
+      .map((train) => ({
+        version: String(train?.version || ""),
+        cutoff: String(train?.cutoff || ""),
+        // scope 要一路带到页面：跑道上竖线按行画，页面得知道哪班车属于哪一片
+        ...(String(train?.scope || "").trim() ? { scope: String(train.scope).trim() } : {}),
+      }))
       .filter((train) => Number.isFinite(toTime(train.cutoff))),
     rows: visible,
     // 待审批要跟着板一起回：它是板的状态，页面上得有个角标，而不是等人想起来敲 CLI
     pending: readRadarPending(board),
     counts: boardCounts(visible),
     spareFields: spareFields(visible, spec.encode),
-    totalRows: decorated.length,
+    totalRows: onShelf.length,
+    // 归档了多少条。入口上要挂个数字，否则人不知道那一页里到底有没有东西
+    archivedCount: decorated.filter((row) => row.archived).length,
   };
 }
 
@@ -630,6 +1067,70 @@ export function readRadarEvents(board, { limit = EVENTS_DEFAULT_LIMIT } = {}) {
     }
   }
   return out.reverse();
+}
+
+/**
+ * 每条条目最近 N 天的状态，给状态页右边那串小方块用。
+ *
+ * 变更流只记**变化**，不记每次扫描，所以历史是倒着推出来的：从「现在是什么」开始，
+ * 遇到一条 state 事件就知道那一刻之前是 `from`。这样即使一条一个月没动过，
+ * 它的条也是完整的一段实色——而那正是要表达的：一直没变。
+ *
+ * 纯函数，不读盘，因为要能对着构造出来的事件测。
+ *
+ * @returns {Map<string, string[]>} id → 每天一格，最旧在前；`""` 表示那天它还不存在
+ */
+export function stateHistory(rows = [], events = [], { days = 14, now = Date.now() } = {}) {
+  const span = Math.max(1, Math.min(90, Number(days) || 14));
+  const midnight = new Date(now);
+  midnight.setHours(23, 59, 59, 999);
+  // 每一格记的是「那天结束时是什么状态」
+  const dayEnds = Array.from({ length: span }, (_, i) => midnight.getTime() - (span - 1 - i) * DAY_MS);
+
+  const byId = new Map();
+  for (const event of events) {
+    const id = String(event?.id || "");
+    if (!id) continue;
+    const list = byId.get(id) || [];
+    list.push(event);
+    byId.set(id, list);
+  }
+
+  const out = new Map();
+  for (const row of rows) {
+    const id = String(row?.id || "");
+    if (!id) continue;
+    const mine = (byId.get(id) || [])
+      .filter((event) => Number.isFinite(toTime(event.at)))
+      .sort((left, right) => toTime(right.at) - toTime(left.at));
+
+    const cells = new Array(span).fill("");
+    let cursor = span - 1;
+    let current = normalizeState(row.state);
+    for (const event of mine) {
+      const at = toTime(event.at);
+      while (cursor >= 0 && dayEnds[cursor] >= at) { cells[cursor] = current; cursor -= 1; }
+      if (cursor < 0) break;
+      // 倒着走：这条事件之前是什么样
+      if (event.kind === "state") current = normalizeState(event.from);
+      else if (event.kind === "added") current = "";       // 再往前它还不存在
+      else if (event.kind === "dropped") current = normalizeState(event.state || row.state);
+    }
+    while (cursor >= 0) { cells[cursor] = current; cursor -= 1; }
+    out.set(id, cells);
+  }
+
+  /**
+   * 前面**所有行都还不存在**的那几天一起砍掉。
+   *
+   * 一块昨天才建的板，14 天的窗口里 12 天是空的——条上只有最右两格有颜色，
+   * 看起来像渲染坏了，而它其实在诚实地说「这之前没有数据」。说这句话不需要 12 格。
+   * 整体砍而不是逐行砍：各行的窗口必须一样宽，不然两行的条没法横向对比。
+   */
+  let lead = 0;
+  while (lead < span && [...out.values()].every((cells) => !cells[lead])) lead += 1;
+  if (lead > 0) for (const [id, cells] of out) out.set(id, cells.slice(lead));
+  return out;
 }
 
 function writeJsonAtomic(filePath, body) {
@@ -685,6 +1186,13 @@ export function writeRadarShard(board, flowId, payload = {}) {
   if (!isValidBoardId(board)) return { ok: false, error: "board id 不合法" };
   if (!isValidShardId(flowId)) return { ok: false, error: "flowId 不合法" };
   const updatedAt = payload.updatedAt || new Date().toISOString();
+  // 上一版里这些条目的入库时间。整片覆盖写法下不读一次旧片，老条目的「什么时候进来的」
+  // 每次都会被重置成本次运行时间
+  const bornAt = new Map(
+    (readJsonFile(shardPath(board, flowId))?.rows || [])
+      .map((row) => [String(row?.id || ""), String(row?.firstSeenAt || row?.lastSeenAt || "")])
+      .filter(([id, at]) => id && at),
+  );
   const body = {
     flowId,
     ...(payload.flow && typeof payload.flow === "object" ? { flow: payload.flow } : {}),
@@ -694,11 +1202,19 @@ export function writeRadarShard(board, flowId, payload = {}) {
     // 谁写的这一片。没有它就无法分辨「我的流程在更新」和「别人的流程覆盖了我」
     ...(String(payload.writtenBy || "").trim() ? { writtenBy: String(payload.writtenBy).trim() } : {}),
     ...(Array.isArray(payload.trains) ? { trains: payload.trains } : {}),
+    // 这一片声明自己负责哪些 id。commitTrack 拿它拒收越界的行——
+    // 从「提示词里的一句话」变成运行时真的会失败的契约，就差这一个字段
+    ...(Array.isArray(payload.owns) && payload.owns.length ? { owns: payload.owns.map(String) } : {}),
+    // 这一片替哪些父项作答。声明了却没写，就是缺席
+    ...(Array.isArray(payload.covers) && payload.covers.length ? { covers: payload.covers.map(String) } : {}),
     ...(payload.spec && typeof payload.spec === "object" ? { spec: payload.spec } : {}),
     // 出现在本次输出里的条目盖上时间戳。没出现的不会被刷新，于是自然变陈旧并被点名——
     // 「条目从输出里消失」不等于「这条没了」，等于「没人再更新它了」
     rows: (Array.isArray(payload.rows) ? payload.rows : []).map((row) => ({
       ...row,
+      // 入库时间：这一条第一次出现在板上是什么时候。只认第一次，之后原样带着走——
+      // 每次都盖成 now 的话它就退化成第二个 lastSeenAt，「这条盯了多久」就再也答不出来
+      firstSeenAt: row?.firstSeenAt || bornAt.get(String(row?.id || "")) || row?.lastSeenAt || updatedAt,
       lastSeenAt: row?.lastSeenAt || updatedAt,
     })),
   };

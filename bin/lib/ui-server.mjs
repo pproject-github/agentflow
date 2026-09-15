@@ -103,16 +103,18 @@ import {
   listRadarBoards,
   readRadarBoard,
   readRadarEvents,
+  stateHistory,
   resolveRadarPending,
   setRadarBoardArchived,
-  setRadarItemState,
+  setRadarItemOverride,
 } from "./radar.mjs";
 import {
-  buildRadarPlanPrompt,
-  normalizeRadarPlan,
-  parseRadarPlan,
-} from "./radar-planner.mjs";
-import { startComposerAgent } from "./composer-agent.mjs";
+  PLAN_FLOW_ID,
+  PLAN_RUN_NODE_ID,
+  ensurePlanFlow,
+  readPlanResult,
+  withPlanInputs,
+} from "./radar-plan-flow.mjs";
 import { sweepAllRadarBoards } from "./radar-alert-sweep.mjs";
 import { listWorkspaceRunLogs } from "./workspace-run-logs.mjs";
 import { commitTrack } from "./radar-cli.mjs";
@@ -5917,10 +5919,23 @@ finishedAt: "${new Date().toISOString()}"
         return;
       }
       try {
-        const saved = setRadarItemState(boardId, payload?.itemId, {
-          state: payload?.state,
-          settled: payload?.settled,
-          note: payload?.note,
+        const saved = setRadarItemOverride(boardId, payload?.itemId, {
+          ...(payload?.state === undefined ? {} : { state: payload.state }),
+          ...(payload?.settled === undefined ? {} : { settled: payload.settled }),
+          ...(payload?.note === undefined ? {} : { note: payload.note }),
+          // owner 传空串是「取消认领」，和没传不是一回事，所以判 undefined 而不是真值
+          ...(payload?.owner === undefined ? {} : { owner: payload.owner }),
+          // 认领由服务端解析成登录名：客户端不该有机会替别人认领，也不该需要知道自己叫什么
+          ...(payload?.claim === true ? { owner: String(authUser?.username || userCtx?.userId || "") } : {}),
+          ...(payload?.addTags === undefined ? {} : { addTags: payload.addTags }),
+          ...(payload?.removeTags === undefined ? {} : { removeTags: payload.removeTags }),
+          // 人手填的字段：标题、截止、任务起止。空串是「撤销我改的」，所以同样判 undefined
+          ...(payload?.title === undefined ? {} : { title: payload.title }),
+          ...(payload?.due === undefined ? {} : { due: payload.due }),
+          ...(payload?.startAt === undefined ? {} : { startAt: payload.startAt }),
+          ...(payload?.endAt === undefined ? {} : { endAt: payload.endAt }),
+          // 归档：从板上拿走，不是删除。取消归档传 false，所以同样判 undefined
+          ...(payload?.archived === undefined ? {} : { archived: payload.archived === true }),
           by: String(authUser?.username || userCtx?.userId || ""),
         });
         json(res, saved.ok ? 200 : 400, saved);
@@ -5931,11 +5946,15 @@ finishedAt: "${new Date().toISOString()}"
     }
 
     /**
-     * 板级编排规划：读当前这块板，产出「该配几条定时、各管哪些条目、各自什么节奏」的计划。
+     * 规划一块板——**准备**，不是跑。
      *
-     * 只出计划，不动任何东西——建流程是人确认之后的另一步。模型给的东西不该直接落地。
+     * 跑的是 `radar-plan` 那条真流程，由面板去打 `/api/workspace/run`。这里只负责：
+     * 确保用户态有这条流程、把这次要问的话写进图、把图交出去。
+     *
+     * 不在这儿代跑：那样等于把运行台账、节点重试、执行面又重写一遍，
+     * 而这三样正是「让规划也走流程」要换来的东西。
      */
-    if (req.method === "POST" && url.pathname === "/api/radar/plan") {
+    if (req.method === "POST" && url.pathname === "/api/radar/plan/prepare") {
       let payload = {};
       try {
         payload = JSON.parse((await readBody(req)) || "{}");
@@ -5953,56 +5972,42 @@ finishedAt: "${new Date().toISOString()}"
         json(res, 400, { error: "说一下你想盯什么" });
         return;
       }
-      // 流式回：一次规划要跑几十秒到几分钟，等它跑完再一次性给结果，
-      // 人只能看着转圈，出错也只剩一行红字
-      res.writeHead(200, {
-        "Content-Type": "application/x-ndjson; charset=utf-8",
-        "Cache-Control": "no-store, max-age=0",
-        "X-Accel-Buffering": "no",
+      const userId = String(userCtx?.userId || "");
+      const ensured = ensurePlanFlow({
+        workspaceRoot: root,
+        userId,
+        deps: { createEmptyFlow, resolveFlowDirForWrite },
       });
-      const emit = (event) => {
-        try {
-          res.write(`${JSON.stringify(event)}\n`);
-        } catch {
-          // 客户端已经断了，后面的事件写不出去也不该把这次运行拖垮
-        }
-      };
-      try {
-        const board = boardId
-          ? readRadarBoard(boardId, {
-            scope: "all",
-            userId: String(userCtx?.userId || ""),
-            username: String(authUser?.username || ""),
-          })
-          : null;
-        emit({ type: "started", board: boardId, flows: (board?.flows || []).length, rows: (board?.rows || []).length });
-        const prompt = buildRadarPlanPrompt({ board, ask, boardId });
-        let result = "";
-        const segments = [];
-        const handle = startComposerAgent({
-          uiWorkspaceRoot: root,
-          prompt,
-          modelKey: String(payload?.modelKey || ""),
-          agentflowUserId: String(userCtx?.userId || ""),
-          onStreamEvent: (ev) => {
-            if (ev?.type !== "natural" || typeof ev.text !== "string") return;
-            const text = ev.text.trim();
-            if (!text) return;
-            if (ev.kind === "result") result = text;
-            else if (ev.kind === "assistant") { segments.push(text); emit({ type: "log", text }); }
-          },
-        });
-        await handle.finished;
-        const parsed = parseRadarPlan(result || segments.at(-1) || "");
-        if (!parsed.ok) {
-          emit({ type: "error", error: parsed.error, raw: (result || segments.at(-1) || "").slice(0, 2000) });
-        } else {
-          emit({ type: "plan", board: boardId, ...normalizeRadarPlan(parsed.plan, board) });
-        }
-      } catch (e) {
-        emit({ type: "error", error: (e && e.message) || String(e) });
+      if (!ensured.ok) {
+        json(res, 500, { error: `装不上规划流程：${ensured.error}` });
+        return;
       }
-      res.end();
+      let stored = null;
+      try {
+        stored = readWorkspaceGraph(ensured.flowDir, root).graph;
+      } catch (e) {
+        json(res, 500, { error: `读不出规划流程的图：${(e && e.message) || e}` });
+        return;
+      }
+      const prepared = withPlanInputs(stored, { ask, board: boardId });
+      if (!prepared.ok) {
+        json(res, 400, { error: prepared.error });
+        return;
+      }
+      json(res, 200, {
+        flowId: PLAN_FLOW_ID,
+        flowSource: "user",
+        runNodeId: PLAN_RUN_NODE_ID,
+        graph: prepared.graph,
+        installed: ensured.installed,
+      });
+      return;
+    }
+
+    /** 取这次跑出来的计划。校验节点按 runId 把它存进了雷达的数据目录 */
+    if (req.method === "GET" && url.pathname === "/api/radar/plan/result") {
+      const result = readPlanResult({ runId: String(url.searchParams.get("runId") || "").trim() });
+      json(res, result.ok ? 200 : 404, result);
       return;
     }
 
@@ -6015,6 +6020,23 @@ finishedAt: "${new Date().toISOString()}"
         username: String(authUser?.username || userCtx?.userId || ""),
       };
       try {
+        /**
+         * 能被指派的人。
+         *
+         * 只回 username，不回 authProvider / casUsername / 关联账号那些——
+         * 这个接口是给「把这条派给谁」用的，不是账号管理。
+         * 也因此它不要求管理员：派活是每个人都要做的事。
+         */
+        if (url.pathname === "/api/radar/people") {
+          const query = String(url.searchParams.get("q") || "").trim().toLowerCase();
+          const people = listAuthUsers()
+            .map((user) => String(user.username || "").trim())
+            .filter(Boolean)
+            .filter((name) => !query || name.toLowerCase().includes(query));
+          json(res, 200, { people });
+          return;
+        }
+
         if (url.pathname === "/api/radar/boards") {
           // 归档的板默认不列。要在页面上翻出来恢复，才显式带 archived=1
           const includeArchived = url.searchParams.get("archived") === "1";
@@ -6032,12 +6054,23 @@ finishedAt: "${new Date().toISOString()}"
             json(res, 400, { error: "board 参数不合法" });
             return;
           }
-          const found = readRadarBoard(board, actor);
+          // archived=1 是归档页：只回被拿走的那摞，和在架上的互补
+          const archived = url.searchParams.get("archived") === "1";
+          const found = readRadarBoard(board, { ...actor, archived });
           if (!found) {
             json(res, 404, { error: "板不存在" });
             return;
           }
-          json(res, 200, { ...found, scope, currentUser: actor.username });
+          /**
+           * 每条最近两周的状态，给状态页右边那串小方块用。
+           *
+           * 跟着板一起回，不另开一个接口：它和 rows 必须是同一时刻的快照，
+           * 两次请求之间流程跑了一轮的话，条和当前状态就对不上了。
+           */
+          const history = Object.fromEntries(
+            stateHistory(found.rows, readRadarEvents(board, { limit: 400 }), { days: 14 }),
+          );
+          json(res, 200, { ...found, history, scope, archivedView: archived, currentUser: actor.username });
           return;
         }
         /**

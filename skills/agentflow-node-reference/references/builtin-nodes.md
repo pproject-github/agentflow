@@ -98,6 +98,22 @@
 - Inputs: 0. `prev`:node; 1. `context`:context; 2. `state`:json = null; 3. `maxIterations`:text = 20; 4. `timeout`:text = 30m
 - Outputs: 0. `next`:node; 1. `result`:json; 2. `state`:json = null; 3. `decision`:text; 4. `iterations`:text = 0; 5. `summary`:text; 6. `history`:json = []; 7. `checkpointFingerprint`:text
 
+### radar_read_shard
+
+- Display: 读雷达分片
+- Description: 读同一块雷达板上**另一条流程**那一片的原始条目，作为本流程的输入。 子流程要基于父表做自己的状态梳理，就需要先拿到父表。跨片**只读**：这个节点 不写任何东西，也读不到板的合并视图——合并视图会把 `unknown` 归一成 `idle`， 再写回去就是把「没查出来」伪造成「没什么可报告的」。 依赖因此是图上的一条边，而不是藏在某个 tool_nodejs 的命令行里：谁读谁的产出 在画布上看得见，lint 查得到，人批准图的时候就批准了这条依赖。
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `board`:text; 2. `shard`:text
+- Outputs: 0. `next`:node; 1. `rows`:json
+
+### radar_read_spec
+
+- Display: 读雷达板词典
+- Description: 读一块雷达板的**词典**：状态怎么念、有哪几个大组、标签只能挑哪些、字段叫什么名字。 写板的流程需要知道这些，否则只能在自己的提示词里抄一份。抄一份的后果是： 改一个大组要去编辑流程源码，两条流程各抄一份就会拼出两个同名的组， 而板上真正生效的那份在 `_board.json` 里——三份真相，没人知道该信谁。 词典由建板的 AI 写进 `spec`，流程从这里读，页面照它渲染。三方看的是同一份。 只读：这个节点不写任何东西。
+- Runtime: local-only
+- Inputs: 0. `prev`:node; 1. `board`:text
+- Outputs: 0. `next`:node; 1. `vocab`:json
+
 ### workspace_run
 
 - Display: Run

@@ -21,7 +21,9 @@ test("Workflow reporting has a dedicated route reached from the Dashboard", asyn
   assert.match(app, /import WorkflowReportGuidePage from "\.\/pages\/WorkflowReportGuidePage\.jsx";/);
   assert.match(app, /if \(path === "\/workflow-report"\) return <WorkflowReportGuidePage \/>;/);
   assert.match(app, /const workflowReportStandalone = path === "\/workflow-report";/);
-  assert.match(app, /const fullBleed = pipelineFullBleed \|\| workflowReportStandalone;/);
+  // 断言的是「这条路由算 fullBleed」，不是那一行的字面量——
+  // 后来雷达的「一条一页」也进了同一个表达式，写死整行会让每加一个全幅路由都红一次
+  assert.match(app, /const fullBleed = [^;]*\bpipelineFullBleed\b[^;]*\bworkflowReportStandalone\b[^;]*;/);
   assert.match(app, /!fullBleed \? <Sidebar/);
   assert.doesNotMatch(sidebar, /to: "\/workflow-report"/);
   assert.match(page, /Workflow 接入文档/);

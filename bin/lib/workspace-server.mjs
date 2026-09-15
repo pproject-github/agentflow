@@ -6876,6 +6876,68 @@ export async function runWorkspaceGraph(root, scopedRoot, payload, userCtx = {},
       return "next";
     }
 
+    /**
+     * 读同一块板上另一条流程那一片。
+     *
+     * 跨片只读，而且**只能读分片、不能读板的合并视图**：合并视图是推导结果
+     * （`decorateRow` 把 unknown 归一成 idle 给页面用），把它写回文件再同步回来，
+     * 「没查出来」就变成了「没什么可报告的」——这套面板最在意的那个区别会在一次往返里丢掉。
+     */
+    if (defId === "radar_read_shard") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const board = String(inputValues.board ?? instance.board ?? "").trim();
+      const shard = String(inputValues.shard ?? instance.shard ?? "").trim();
+      if (!board || !shard) throw new Error(`radar.readShard ${nodeId} 需要 board 和 shard`);
+      const { readRadarShard, isValidBoardId, isValidShardId } = await import("./radar.mjs");
+      if (!isValidBoardId(board)) throw new Error(`radar.readShard ${nodeId}: board 不合法 ${board}`);
+      if (!isValidShardId(shard)) throw new Error(`radar.readShard ${nodeId}: shard 不合法 ${shard}`);
+      const raw = readRadarShard(board, shard);
+      // 读不到就失败，不要给下游一个空数组——下游会把「上游还没跑过」当成「上游说没有条目」
+      if (!raw) throw new Error(`radar.readShard ${nodeId}: ${board}/${shard} 还没有内容，上游可能一次都没跑过`);
+      const rows = Array.isArray(raw.rows) ? raw.rows : [];
+      const content = JSON.stringify({ board, shard, updatedAt: raw.updatedAt || "", rows }, null, 2);
+      graph.instances[nodeId] = workspaceSetOutputSlot(instance, "rows", content);
+      publishNodeOutput(nodeId, content, { emitGraph: true });
+      emit({ type: "status", nodeId, line: `读到 ${board}/${shard} 的 ${rows.length} 条` });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      return "next";
+    }
+
+    /**
+     * 读一块板的词典：状态怎么念、有哪几个大组、标签只能挑哪些。
+     *
+     * 写板的流程需要这些，否则只能在提示词里各抄一份——改一个大组要去编辑流程源码，
+     * 两条流程各抄一份就会拼出两个同名的组，而真正生效的那份在 _board.json 里。
+     * 三份真相，没人知道该信哪个。
+     */
+    if (defId === "radar_read_spec") {
+      const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
+      const board = String(inputValues.board ?? instance.board ?? "").trim();
+      if (!board) throw new Error(`radar.readSpec ${nodeId} 需要 board`);
+      const { readRadarBoard, isValidBoardId } = await import("./radar.mjs");
+      if (!isValidBoardId(board)) throw new Error(`radar.readSpec ${nodeId}: board 不合法 ${board}`);
+      const loaded = readRadarBoard(board, { scope: "all" });
+      if (!loaded) throw new Error(`radar.readSpec ${nodeId}: 没有这块板 ${board}`);
+      const spec = loaded.spec || {};
+      const vocab = {
+        board,
+        states: spec.states || {},
+        themes: spec.themes || [],
+        tags: spec.tags || [],
+        fields: spec.fields || {},
+      };
+      const content = JSON.stringify(vocab, null, 2);
+      graph.instances[nodeId] = workspaceSetOutputSlot(instance, "vocab", content);
+      publishNodeOutput(nodeId, content, { emitGraph: true });
+      emit({
+        type: "status",
+        nodeId,
+        line: `读到 ${board} 的词典：${vocab.themes.length} 个大组、${vocab.tags.length} 个标签`,
+      });
+      emit({ type: "node-done", nodeId, definitionId: defId });
+      return "next";
+    }
+
     if (defId === "control_while") {
       const inputValues = workspaceInputValues(graph, nodeId, outputs, scopedRoot);
       const loopContext = workspaceSemanticInputText(graph, nodeId, outputs, "context", scopedRoot);

@@ -79,7 +79,25 @@ export function renderTrackerDoc(item = {}) {
 export function setupBoard({ board, title, topic, plan = {}, dataRoot, createdBy = "" }, deps = {}) {
   const createBoard = deps.createRadarBoard;
   const workspacePath = boardWorkspacePath(dataRoot, board);
-  const created = createBoard(board, { title, createdBy });
+  /**
+   * 词典跟着计划一起落。
+   *
+   * 状态在这块板上怎么念、分几个大组、标签用哪几个——是**这块板的业务**，
+   * 规划的时候就该定下来。不落进 spec 的话它只能散进各条流程的提示词，
+   * 改一个大组要去编辑流程源码，两条流程各抄一份还会拼出两个同名的组。
+   */
+  const vocab = plan.vocab && typeof plan.vocab === "object" ? plan.vocab : {};
+  const spec = {
+    // 状态页是默认形态：这类板大多数条目没有截止日，跑道上是一片空
+    view: "status",
+    views: ["status", "runway", "table"],
+    ...(Array.isArray(vocab.themes) && vocab.themes.length ? { encode: { group: "theme" } } : {}),
+    ...(vocab.states ? { states: vocab.states } : {}),
+    ...(vocab.themes ? { themes: vocab.themes } : {}),
+    ...(vocab.tags ? { tags: vocab.tags } : {}),
+    ...(vocab.fields ? { fields: vocab.fields } : {}),
+  };
+  const created = createBoard(board, { title, createdBy, spec });
   if (!created.ok) return { ok: false, error: created.error };
 
   fs.mkdirSync(path.join(workspacePath, "trackers"), { recursive: true });

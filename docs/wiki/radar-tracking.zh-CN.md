@@ -85,6 +85,33 @@ agentflow track commit --board=compliance --flow=play-policy-watch --rows=${rows
 
 `id` 和 `title` 必填。`state` 取 `ok` / `warn` / `risk` / `idle` / `unknown`。
 
+### 层级：四层，两层在板上，两层靠 parent
+
+一条政策下面通常有多个端各自的结论，每个结论下面才是要做的事。板本身只有
+「行」这一种东西，层级由 `parent` 表达，深度不限：
+
+| 层 | `kind` | 谁写 | 例 |
+|---|---|---|---|
+| 大组 | —（`theme` 字段） | 建板时申明在 `spec.themes` | Android 16 适配 |
+| 政策 | 不填 | 盯政策那条流程 | Google 要求 target API 35+ 支持 16KB 内存页 |
+| 端结论 | `verdict` | 各端自己那条流程 | Likee 的 native 构建 16KB 页对齐 |
+| 任务 | `task` | 同上 | 盘点并升级未对齐的第三方 native SDK |
+
+**一个端对一条政策只能有一个 `verdict`**，满足与否是这一条说了算；`task` 一律挂在
+`verdict` 下面，不直接挂政策——否则「这个端到底行不行」没有唯一答案。
+
+父行的 `state` 由 `rollupFacets` 取最差子状态卷上来，并且**缺席按 `idle` 计入**：
+声明要答的端一个都不能少。一个端说满足、另一个端根本没查，父行显示绿色就是一张假的
+合格证——这正是 `covers` 存在的理由。父行同时带上 `coverage`：
+
+```json
+{ "coverage": { "expected": 2, "answered": 1, "ok": 1 } }
+```
+
+按**端**数，不是按行数：一个端写了三条任务不代表它答了三次。
+
+`firstSeenAt` 是入库时间，从上一份分片继承，不随每次写入漂移；`lastSeenAt` 才是最近写入。
+
 **拼错的 state 报错，不静默降级。** `normalizeState` 对任何不认识的值都给 `idle`，于是
 `"warning"` 这个拼写错误会变成「没什么可报告的」——正是一张假的合格证。`unknown` 是有意
 收的（确定性脚本匹配不到时的正确答案，落到 `idle`），拼错的一条都不写。
@@ -128,6 +155,13 @@ agentflow track commit --board=compliance --flow=play-policy-watch --rows=${rows
 
 ## 建板与归档
 
+条目也能归档（不是删除）：分片、变更记录全留着，取消归档完整回来。**父行归档会带走
+子行**，子行记下 `archivedBy`——它是被谁带走的，放回去得先动父行。已归档的条目走单独
+一页，入口在列表末尾：归档是冷入口，人翻到底、确认板上没有遗漏了才会想起去看它，
+摆在工具栏只会和每天要点的按钮抢位置。
+
+单条目还有自己的地址 `/radar/item?board=…&item=…`：不挂板的壳，可以直接发给别人。
+
 建板和归档都在面板里就地展开，不开弹框。
 
 - **建板不弹框**：人取名字时要照着已有的板看（别撞车、命名风格一致），弹框正好把它们盖住。
@@ -147,6 +181,26 @@ agentflow track commit --board=compliance --flow=play-policy-watch --rows=${rows
 
 跑道 / 看板 / 表格三视图由 `spec.encode` 描述视觉通道（lane / end / color / marker / value /
 group / badges）。加一个展示维度只要改 spec，不用动前端——AI 编排产出的板因此能自带形态。
+
+**默认视图是状态页，不是跑道。** 跑道回答「什么时候到期」，可大多数板上大多数条目根本
+没有截止日——一块 13 条的板只有 3 条有 `due`，十二个月的时间轴上就两个点。状态页回答的
+是「现在满足没有、谁还没答、还剩几件事」，这才是每天要看的那个问题。一条政策连同它下面
+的端和任务渲染成一张卡片，分区靠面和间距，不画分隔线。
+
+**词典写在 spec 里，流程不要自己抄一份。** `spec` 除 `encode` 外还带：
+
+```json
+{
+  "states": { "ok": "已满足", "warn": "进行中", "risk": "未开始", "idle": "无状态" },
+  "themes": [{ "key": "android16", "label": "Android 16 适配" }],
+  "tags": ["android16", "aep", "native"],
+  "fields": { "current": "现状", "evidence": "依据", "required": "要求" }
+}
+```
+
+由建板的 AI 写入，流程用内置节点 `radar_read_spec` 读，页面照它渲染。三方看同一份。
+抄进提示词的后果是：改一个大组要去编辑流程源码，两条流程各抄一份就会拼出两个同名的组，
+而板上真正生效的那份在 `_board.json` 里——三份真相，没人知道该信谁。
 
 **有效截止**是跑道上的关键推导：取最后一班不晚于政策截止日、且还没发车的版本车。赶不上
 任何一班和本来就没有车是两件事，页面要能分开讲；截止日晚于所有已知班次时退回截止日本身

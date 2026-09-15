@@ -49,7 +49,7 @@ agentflow track commit --board=compliance --flow=play-policy-watch --rows=${rows
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `id` | ✅ | 稳定、可读、跨次运行不变。**换了 id 就是换了一条**，旧的会被记成 dropped |
-| `title` | ✅ | 给人看的一句话 |
+| `title` | ✅ | **要盯的那件事，陈述句**。不要写成问句：「X 是否达标」的答案是 yes/no，而这一行旁边显示的是「进行中 / 已满足」，问句配进度读起来是矛盾的。结论归 `state` 和 `current` |
 | `state` | | `ok` / `warn` / `risk` / `idle` / `unknown`，缺省 `idle` |
 | `owner` | | AgentFlow 用户名。告警按它找人，空着就落到兜底账号 |
 | `due` | | 政策截止日。`YYYY-MM-DD` 按**当地**零点解释 |
@@ -57,9 +57,61 @@ agentflow track commit --board=compliance --flow=play-policy-watch --rows=${rows
 | `required` | | 要求是什么样 |
 | `evidence` | | 凭什么这么判：文件行号、接口返回、页面片段 |
 | `source` | | 依据的原始链接 |
+| `parent` | | 挂在哪一条下面。见下面「层级」 |
+| `kind` | | `verdict`（结论）/ `task`（要做的事）。见下面「层级」 |
+| `theme` | | 属于哪个大组。**取值来自板的词典，不要自造**，见下面「词典」 |
 
 **多余的字段留着，不会被剥掉。** 板的展示规格（`spec.encode`）没用到的字段会作为
 附加维度出现在条目详情里 —— 想加 `platform`、`政策链接`、`风险等级` 就直接加。
+
+## 层级：一条政策、各端的结论、各自的任务
+
+`parent` 指向另一条的 `id`，深度不限。典型是三层：
+
+```
+play-16kb-page-size-req              一条要求（谁都没答之前它就在）
+  play-16kb-page-size@likee          kind: verdict —— Likee 满足没有
+    …-ndk@likee                      kind: task    —— 要做的一件事
+    …-cmake@likee                    kind: task
+```
+
+**结论行和任务行必须分开，不能挤在同一层。** 满足时写一条、不满足时写 N 条的话，
+同一个层级上就有了两种语义——板上没人答得出「Likee 这条到底行不行」。
+而且任务要能单独认领、单独排期，挂在结论上的负责人和起止日期指给谁都不对。
+
+规矩：
+
+- **每个（父项 × 流程）恰好一条 `verdict`。** 多一条少一条都是错的。
+- `task` 的 `parent` 指**结论行**，不是父项。指错了它会跑到父项底下变成另一个结论。
+- 满足了就 **0 条 task**。
+- 父行的状态**不用你写**：它从子行汇总（取最坏），你写了也会被推导盖掉。
+
+## 归属：`owns` 和 `covers`
+
+```
+agentflow track sync --board=gp --flow=likee-compliance \
+  --owns='*@likee' --covers='play-*-req'
+```
+
+- **`owns`** = 我负责写哪些 id。写了范围外的 id，**整次拒收**，不是只丢那几条——
+  半写进去的一片比不写更难查。
+- **`covers`** = 我替哪些父项作答。声明了却没写 `verdict`，板上就标**缺席**。
+  这是「查过了，不满足」和「压根没人查」的唯一区别，而后者才是最该被看见的。
+
+父行因此**永远不会**在有端缺席时显示已满足——缺席按「无状态」参与汇总。
+
+## 词典：别在提示词里抄一份
+
+状态在这块板上怎么念、有哪几个大组、标签只能挑哪些——这些是**板的数据**，
+不是你提示词里的常量。用 `radar.readSpec` 节点读进来：
+
+```js
+const vocab = radar.readSpec("读板的词典", { board: "gp" });
+const work = agent.subAgent("…", { vocab: vocab.vocab }, `… 标签只能从输入 vocab.tags 里挑 …`);
+```
+
+抄一份的后果：改一个大组要去编辑流程源码；两条流程各抄一份就会拼出两个同名的组；
+而真正生效的那份在板里——三份真相，没人知道该信谁。
 
 ## 四条硬规矩
 

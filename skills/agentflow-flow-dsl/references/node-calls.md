@@ -34,6 +34,8 @@
 | `provide.json` | — | value:json |
 | `provide.password` | — | value:text |
 | `provide.str` | — | value:text |
+| `radar.readShard` | board:text, shard:text | rows:json |
+| `radar.readSpec` | board:text | vocab:json |
 | `tool.displayShareLink` | title:text, layout:text, nodeIds:text, baseUrl:text | url:text, shareId:text, expiresAt:text, reviewToken:text, reviewUrl:text |
 | `tool.gitCheckout` | repoUrl:text, branch:text, targetDir:text, pullIfExists:bool, includeSubmodules:bool, remote:text, workspaceContext:text | repoPath:file, branch:text, commit:text, changed:bool, workspaceContext:text, gitContext:text |
 | `tool.gitlabCreateMr` | repoPath:file, gitContext:text, workspaceContext:text, sourceBranch:text, targetBranch:text, title:text, description:text, draft:bool, labels:text, push:bool, remote:text, tokenEnv:text, gitlabApiBase:text, removeSourceBranch:bool, squash:bool | mrUrl:text, created:bool, mrIid:text, projectId:text, sourceBranch:text, targetBranch:text, title:text, message:text |
